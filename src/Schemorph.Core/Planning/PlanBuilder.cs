@@ -11,7 +11,10 @@ namespace Schemorph.Core.Planning;
 /// </summary>
 public static class PlanBuilder
 {
-    public static Plan Build(CompareResult compareResult, bool allowDestructive)
+    public static Plan Build(
+        CompareResult compareResult,
+        bool allowDestructive,
+        IReadOnlyList<ProgrammableObjectInfo>? pendingRedefines = null)
     {
         var actions = new List<PlanAction>();
         var messages = compareResult.Messages
@@ -24,6 +27,10 @@ public static class PlanBuilder
             if (LedgerObjects.IsLedgerObject(change.ObjectName))
             {
                 continue;   // Schemorph's own bookkeeping is invisible to plans.
+            }
+            if (RoutesToRedefine(change))
+            {
+                continue;   // Represented by checksum-driven Redefine actions instead.
             }
 
             var (operation, risk) = Classify(change);
@@ -39,16 +46,32 @@ public static class PlanBuilder
             actions.Add(new PlanAction(change.ObjectName, change.ObjectType, operation, risk));
         }
 
+        // Redefines execute after the declarative publish; the plan mirrors that order.
+        foreach (var pending in pendingRedefines ?? Array.Empty<ProgrammableObjectInfo>())
+        {
+            actions.Add(new PlanAction(pending.ObjectName, pending.ObjectType, PlanOperation.Redefine, RiskLevel.Safe));
+        }
+
         return new Plan(Plan.CurrentFormatVersion, actions, messages);
     }
 
-    /// <summary>Apply-time policy: exactly the changes a plan would contain.</summary>
+    /// <summary>Apply-time policy: exactly the declarative changes a plan would contain.</summary>
     public static bool ShouldInclude(RawChange change, bool allowDestructive)
     {
         if (LedgerObjects.IsLedgerObject(change.ObjectName)) return false;
+        if (RoutesToRedefine(change)) return false;
         var (_, risk) = Classify(change);
         return risk != RiskLevel.Destructive || allowDestructive;
     }
+
+    /// <summary>
+    /// ADR-0002 strategy routing: creating or altering a programmable object goes
+    /// through idempotent re-definition, never the declarative diff. Drops stay
+    /// declarative so deleting a file is still honored.
+    /// </summary>
+    public static bool RoutesToRedefine(RawChange change) =>
+        ProgrammableObjects.IsProgrammable(change.ObjectType)
+        && Classify(change).Operation is PlanOperation.Create or PlanOperation.Alter or PlanOperation.Redefine;
 
     public static (PlanOperation Operation, RiskLevel Risk) Classify(RawChange change)
     {

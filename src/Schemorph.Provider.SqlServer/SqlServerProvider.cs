@@ -32,6 +32,9 @@ public sealed class SqlServerProvider : IDatabaseProvider
     public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, bool> includeChange, CancellationToken cancellationToken = default)
         => Task.Run(() => Apply(request, includeChange, cancellationToken), cancellationToken);
 
+    public Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(string desiredStateDirectory, CancellationToken cancellationToken = default)
+        => Task.Run(() => AnalyzeProgrammables(desiredStateDirectory), cancellationToken);
+
     public async Task ExecuteScriptAsync(string connectionString, string script, CancellationToken cancellationToken = default)
     {
         await using var connection = new SqlConnection(connectionString);
@@ -139,6 +142,106 @@ public sealed class SqlServerProvider : IDatabaseProvider
         return new ApplyResult(publish.Success, applied, excluded, messages);
     }
 
+    // ------------------------------------------------------------------ programmables
+
+    private static readonly ModelTypeClass[] ProgrammableTypeClasses =
+    {
+        Procedure.TypeClass, View.TypeClass, ScalarFunction.TypeClass,
+        TableValuedFunction.TypeClass, DmlTrigger.TypeClass,
+    };
+
+    private static ProgrammableAnalysis AnalyzeProgrammables(string desiredStateDirectory)
+    {
+        // Built with per-batch source names so each object knows its defining file.
+        // The batch suffix exists because AddOrUpdateObjects REPLACES everything
+        // previously registered under the same source name.
+        using var model = new TSqlModel(ModelVersion, new TSqlModelOptions());
+        foreach (var file in Directory.GetFiles(desiredStateDirectory, "*.sql", SearchOption.AllDirectories)
+                     .OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+        {
+            var batchIndex = 0;
+            foreach (var batch in SqlBatchSplitter.Split(File.ReadAllText(file)))
+            {
+                model.AddOrUpdateObjects(NormalizeToCreate(batch), $"{file}::{batchIndex++}", new TSqlObjectOptions());
+            }
+        }
+
+        var messages = model.Validate()
+            .Where(m => m.MessageType == DacMessageType.Error)
+            .Select(m => new RawMessage("Error", $"{m.Prefix}{m.Number}", m.Message))
+            .ToList();
+        if (messages.Count > 0)
+        {
+            return new ProgrammableAnalysis(Array.Empty<ProgrammableObjectInfo>(), messages);
+        }
+
+        var programmables = model.GetObjects(DacQueryScopes.UserDefined, ProgrammableTypeClasses).ToList();
+        var names = programmables.Select(FullName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var objects = new List<ProgrammableObjectInfo>();
+        foreach (var obj in programmables)
+        {
+            var name = FullName(obj);
+            var file = SourceFileOf(obj);
+            if (file is null)
+            {
+                messages.Add(new RawMessage("Error", "SCHEMORPH003",
+                    $"Programmable object {name} has no source file in the desired state."));
+                continue;
+            }
+
+            var dependsOn = obj.GetReferenced(DacQueryScopes.UserDefined)
+                .Select(FullName)
+                .Where(r => names.Contains(r) && !r.Equals(name, StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(r => r, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            objects.Add(new ProgrammableObjectInfo(
+                name, obj.ObjectType.Name, file, RewriteToCreateOrAlter(File.ReadAllText(file)), dependsOn));
+        }
+
+        // ADR-0002: one programmable object per file, with a clear error otherwise —
+        // re-applying a shared file per object would redefine its siblings too.
+        foreach (var group in objects.GroupBy(o => o.FilePath, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
+        {
+            messages.Add(new RawMessage("Error", "SCHEMORPH004",
+                $"One programmable object per file: {group.Key} defines " +
+                string.Join(", ", group.Select(o => o.ObjectName).Order(StringComparer.OrdinalIgnoreCase)) + "."));
+        }
+
+        return new ProgrammableAnalysis(objects, messages);
+    }
+
+    /// <summary>
+    /// Idempotent-redefinition rewrite. "CREATE OR ALTER" never matches (OR follows
+    /// CREATE), so already-idempotent files pass through unchanged.
+    /// </summary>
+    private static string RewriteToCreateOrAlter(string sql) =>
+        System.Text.RegularExpressions.Regex.Replace(
+            sql, @"\bCREATE\s+(PROCEDURE|PROC|FUNCTION|VIEW|TRIGGER)\b",
+            "CREATE OR ALTER $1",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase, TimeSpan.FromSeconds(5));
+
+    /// <summary>
+    /// The TSqlModel only accepts plain CREATE syntax; users may still write
+    /// CREATE OR ALTER in desired-state files (it is what we execute anyway).
+    /// </summary>
+    private static string NormalizeToCreate(string sql) =>
+        System.Text.RegularExpressions.Regex.Replace(
+            sql, @"\bCREATE\s+OR\s+ALTER\b", "CREATE",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase, TimeSpan.FromSeconds(5));
+
+    private static string? SourceFileOf(TSqlObject obj)
+    {
+        var sourceName = obj.GetSourceInformation()?.SourceName;
+        if (sourceName is null) return null;
+        var suffix = sourceName.LastIndexOf("::", StringComparison.Ordinal);
+        return suffix < 0 ? sourceName : sourceName[..suffix];
+    }
+
+    private static string FullName(TSqlObject obj) => string.Join(".", obj.Name.Parts);
+
     // ------------------------------------------------------------------ inspect
 
     private static InspectResult Inspect(InspectRequest request, CancellationToken cancellationToken)
@@ -170,6 +273,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
             (Procedure.TypeClass, "procedures"),
             (ScalarFunction.TypeClass, "functions"),
             (TableValuedFunction.TypeClass, "functions"),
+            (DmlTrigger.TypeClass, "triggers"),
         };
 
         // Constraints and indexes are separate top-level elements in the DacFx
@@ -200,6 +304,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
                 if (!obj.TryGetScript(out var script)) continue;
 
                 var fullName = string.Join(".", obj.Name.Parts);
+                if (Schemorph.Core.Ledger.LedgerObjects.IsLedgerObject(fullName)) continue;   // self-exclusion
                 var content = new StringBuilder().AppendLine(script.Trim()).AppendLine("GO");
                 if (type == Table.TypeClass && attachments.TryGetValue(fullName, out var extras))
                 {
@@ -238,7 +343,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
                 // TODO(core): replace line-based GO splitting with ScriptDom batch parsing.
                 foreach (var batch in SqlBatchSplitter.Split(File.ReadAllText(file)))
                 {
-                    model.AddObjects(batch);
+                    model.AddObjects(NormalizeToCreate(batch));
                 }
             }
 

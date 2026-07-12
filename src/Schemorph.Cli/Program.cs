@@ -9,6 +9,7 @@ using Schemorph.Core.Ledger;
 using Schemorph.Core.Migrations;
 using Schemorph.Core.Planning;
 using Schemorph.Core.Providers;
+using Schemorph.Core.Redefine;
 using Schemorph.Provider.SqlServer;
 
 const int ExitNoChanges = 0;
@@ -77,6 +78,18 @@ async Task<int> RunApply(string[] args, string format)
     try
     {
         IDatabaseProvider provider = new SqlServerProvider();
+
+        // Strategy 2 analysis runs first so a misplaced file fails before any DB work.
+        var programmables = await provider.AnalyzeProgrammablesAsync(schemaDir);
+        if (programmables.Messages.Any(m => m.Severity == "Error"))
+        {
+            foreach (var m in programmables.Messages)
+            {
+                Console.Error.WriteLine($"[{m.Severity}] {m.Code}: {m.Text}");
+            }
+            return Fail(format, "invalid_desired_state", "Desired state is invalid.", "See messages above.");
+        }
+
         var result = await provider.ApplyAsync(
             new ApplyRequest(schemaDir, url),
             change => PlanBuilder.ShouldInclude(change, allowDestructive));
@@ -98,6 +111,13 @@ async Task<int> RunApply(string[] args, string format)
                 Succeeded: true, Detail: c.ObjectType))
             .ToList());
 
+        // Strategy 2: idempotent re-definitions run after the declarative publish
+        // (structural prerequisites first). Declarative drops leave a tombstone so
+        // re-adding an identical file later still re-creates the object.
+        var redefineRunner = new RedefineRunner(provider, ledger);
+        await redefineRunner.RecordDropsAsync(url, result.AppliedChanges);
+        var redefineRun = await redefineRunner.RunAsync(programmables, url);
+
         // Strategy 3: versioned migrations run after the declarative apply.
         MigrationRunResult? migrationRun = null;
         var migrationsDir = ParseOption(args, "--migrations");
@@ -111,8 +131,11 @@ async Task<int> RunApply(string[] args, string format)
             migrationRun = await new MigrationRunner(provider, ledger).RunAsync(migrationsDir, url);
         }
 
-        // Schemorph's own bookkeeping stays invisible in user-facing output.
-        var excludedVisible = result.ExcludedChanges.Where(c => !LedgerObjects.IsLedgerObject(c.ObjectName)).ToList();
+        // Schemorph's own bookkeeping stays invisible in user-facing output, and
+        // redefine-routed exclusions are not "excluded" — they show as redefinitions.
+        var excludedVisible = result.ExcludedChanges
+            .Where(c => !LedgerObjects.IsLedgerObject(c.ObjectName) && !PlanBuilder.RoutesToRedefine(c))
+            .ToList();
         var visibleMessages = result.Messages.Where(m => !LedgerObjects.IsLedgerObject(m.Text)).ToList();
 
         if (format == "json")
@@ -122,6 +145,11 @@ async Task<int> RunApply(string[] args, string format)
                 applied = result.AppliedChanges,
                 excluded = excludedVisible,
                 messages = visibleMessages,
+                redefines = new
+                {
+                    applied = redefineRun.Redefined,
+                    skipped = redefineRun.Skipped,
+                },
                 migrations = migrationRun is null ? null : new
                 {
                     applied = migrationRun.Applied,
@@ -136,6 +164,8 @@ async Task<int> RunApply(string[] args, string format)
             foreach (var c in result.AppliedChanges) Console.WriteLine($"  applied  {c.Operation,-8} {c.ObjectType,-12} {c.ObjectName}");
             foreach (var c in excludedVisible) Console.WriteLine($"  excluded {c.Operation,-8} {c.ObjectType,-12} {c.ObjectName}");
             foreach (var m in visibleMessages) Console.WriteLine($"  [{m.Severity}] {m.Code}: {m.Text}");
+            Console.WriteLine($"Redefined {redefineRun.Redefined.Count} programmable object(s); {redefineRun.Skipped} unchanged.");
+            foreach (var name in redefineRun.Redefined) Console.WriteLine($"  redefined {name}");
             if (migrationRun is not null)
             {
                 Console.WriteLine($"Migrations: {migrationRun.Applied.Count} applied, {migrationRun.Skipped} already applied.");
@@ -149,6 +179,11 @@ async Task<int> RunApply(string[] args, string format)
     {
         return Fail(format, "migration_failed", ex.Message,
             "Applied migrations are immutable; add a new V####__*.sql instead of editing old ones.");
+    }
+    catch (RedefineException ex)
+    {
+        return Fail(format, "redefine_failed", ex.Message,
+            "Break the cycle by extracting the shared logic into a separate object.");
     }
     catch (Exception ex)
     {
@@ -220,9 +255,28 @@ async Task<int> RunDiff(string[] args, string format)
             return Fail(format, "compare_failed", "Comparison reported errors.", "See messages above.");
         }
 
-        var plan = PlanBuilder.Build(compared, allowDestructive);
+        // Strategy 2: pending idempotent re-definitions join the plan (read-only —
+        // checksums against the ledger; a missing ledger table reads as no history).
+        var programmables = await provider.AnalyzeProgrammablesAsync(schemaDir);
+        if (programmables.Messages.Any(m => m.Severity == "Error"))
+        {
+            foreach (var m in programmables.Messages)
+            {
+                Console.Error.WriteLine($"[{m.Severity}] {m.Code}: {m.Text}");
+            }
+            return Fail(format, "invalid_desired_state", "Desired state is invalid.", "See messages above.");
+        }
+        var pendingRedefines = await new RedefineRunner(provider, new SqlServerLedgerStore())
+            .PlanAsync(programmables, url);
+
+        var plan = PlanBuilder.Build(compared, allowDestructive, pendingRedefines);
         Console.WriteLine(format == "json" ? PlanRenderer.ToJson(plan) : PlanRenderer.ToText(plan));
         return plan.HasChanges ? ExitChangesPending : ExitNoChanges;
+    }
+    catch (RedefineException ex)
+    {
+        return Fail(format, "redefine_failed", ex.Message,
+            "Break the cycle by extracting the shared logic into a separate object.");
     }
     catch (Exception ex)
     {

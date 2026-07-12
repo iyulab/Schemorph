@@ -11,7 +11,6 @@ public class PlanBuilderTests
     [Theory]
     [InlineData("Add", "Table", PlanOperation.Create, RiskLevel.Safe)]
     [InlineData("Change", "Table", PlanOperation.Alter, RiskLevel.Warning)]
-    [InlineData("Redefine", "Procedure", PlanOperation.Redefine, RiskLevel.Safe)]
     // Dropping a programmable object is recoverable from source — warning, not
     // destructive (design principle §4: destructive = data-holding DROP only).
     [InlineData("Delete", "Procedure", PlanOperation.Drop, RiskLevel.Warning)]
@@ -74,11 +73,62 @@ public class PlanBuilderTests
     [Theory]
     [InlineData("Delete", "Table", "dbo.Data", false, false)]     // destructive gated
     [InlineData("Delete", "Table", "dbo.Data", true, true)]       // destructive allowed
-    [InlineData("Delete", "View", "dbo.V", false, true)]          // programmable drop = warning
+    [InlineData("Delete", "View", "dbo.V", false, true)]          // programmable drop = warning, stays declarative
     [InlineData("Add", "Table", "dbo.__SchemorphHistory", true, false)]   // ledger self-exclusion
+    [InlineData("Add", "Procedure", "dbo.P", false, false)]       // routed to redefine strategy
+    [InlineData("Change", "View", "dbo.V", true, false)]          // routed to redefine strategy
     public void ShouldInclude_matches_plan_policy(string op, string type, string name, bool allowDestructive, bool expected)
     {
         Assert.Equal(expected, PlanBuilder.ShouldInclude(new RawChange(op, type, name), allowDestructive));
+    }
+
+    // ADR-0002 strategy routing: programmable-object creation/alteration never goes
+    // through the declarative diff — it is applied via checksum + CREATE OR ALTER.
+    // Drops stay declarative so that deleting a file is still honored.
+    [Theory]
+    [InlineData("Add", "Procedure", true)]
+    [InlineData("Change", "Procedure", true)]
+    [InlineData("Change", "View", true)]
+    [InlineData("Add", "ScalarFunction", true)]
+    [InlineData("Change", "TableValuedFunction", true)]
+    [InlineData("Add", "DmlTrigger", true)]
+    [InlineData("Delete", "Procedure", false)]
+    [InlineData("Change", "Table", false)]
+    [InlineData("Add", "Index", false)]
+    public void RoutesToRedefine_covers_programmable_create_and_alter_only(string op, string type, bool expected)
+    {
+        Assert.Equal(expected, PlanBuilder.RoutesToRedefine(new RawChange(op, type, "dbo.X")));
+    }
+
+    [Fact]
+    public void Programmable_create_and_alter_are_absent_from_declarative_actions()
+    {
+        var plan = PlanBuilder.Build(
+            Result(new RawChange("Add", "Procedure", "dbo.P"), new RawChange("Change", "View", "dbo.V")),
+            allowDestructive: false);
+
+        Assert.Empty(plan.Actions);
+        Assert.Empty(plan.Messages);
+    }
+
+    [Fact]
+    public void Pending_redefines_are_merged_as_safe_redefine_actions_after_declarative_ones()
+    {
+        var pending = new[]
+        {
+            new ProgrammableObjectInfo("dbo.P", "Procedure", "p.sql", "CREATE OR ALTER ...", Array.Empty<string>()),
+        };
+
+        var plan = PlanBuilder.Build(
+            Result(new RawChange("Add", "Table", "dbo.T")), allowDestructive: false, pending);
+
+        Assert.Equal(2, plan.Actions.Count);
+        Assert.Equal(PlanOperation.Create, plan.Actions[0].Operation);
+        var redefine = plan.Actions[1];
+        Assert.Equal(PlanOperation.Redefine, redefine.Operation);
+        Assert.Equal(RiskLevel.Safe, redefine.Risk);
+        Assert.Equal("dbo.P", redefine.ObjectName);
+        Assert.Equal("Procedure", redefine.ObjectType);
     }
 
     [Fact]

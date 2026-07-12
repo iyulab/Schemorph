@@ -6,9 +6,8 @@ Phases, not dates. Each phase should produce something usable end-to-end before 
 
 ## Phase 1 — MVP: SQL Server, CLI, the full loop (in progress)
 
-The core loop — `inspect` / `diff` / `apply` (+ history ledger) / versioned migrations — is implemented and verified end-to-end against LocalDB (see History). Remaining:
+The core loop — `inspect` / `diff` / `apply` (+ history ledger) / versioned migrations / idempotent programmable-object routing — is implemented and verified end-to-end against LocalDB (see History). Remaining:
 
-- [ ] **Idempotent programmable-object application with per-file checksums** — complete the strategy routing: exclude programmable objects (procedures/functions/views/triggers) from the DacFx declarative path (`ExcludeObjectTypes`) and route them through per-file checksums + `CREATE OR ALTER` + dependency ordering. Port source: `spikes/create-or-alter` (validated). Completes the ADR-0002 hybrid model.
 - [ ] **Failure-semantics ADR** — partial failure, resume, ledger crash-consistency: what state the ledger and database are in when apply fails mid-stream (connection loss, Nth statement failure, non-transactional DDL), and how a run resumes (re-run vs checkpoint). Precondition for the ledger's "single audit trail" promise.
 - [ ] **Rollback / down-migration ADR** — decide and document rollback semantics per strategy (declarative: reverse diff; idempotent: prior definition; versioned data: explicit down or unsupported). "Not supported" is an acceptable outcome, but it must be an explicit, reasoned decision.
 - [ ] **Credential handling policy** — environment-variable / credential-source support preferred over `--url`, plus secret redaction across every output channel (logs, plan text/JSON, error output). Agent-first positioning means outputs get re-propagated mechanically, making redaction load-bearing.
@@ -63,6 +62,7 @@ Deliberately last and deliberately unspecified ([ADR-0003](docs/adr/0003-postgre
 
 ## History
 
+- **2026-07-12** — **ADR-0002 strategy routing completed**: programmable objects (procedures/functions/views/triggers) are routed to per-file checksum + `CREATE OR ALTER` + dependency-ordered re-definition (ledger kind `redefine`); their create/alter never goes through the declarative diff, while file deletions still surface as declarative drops (with redefine tombstones so re-added identical files re-create). `inspect` now self-excludes the ledger table and emits triggers. Unit tests 51/51, LocalDB e2e (edit / drop / re-add / dependency-order scenarios).
 - **2026-07-12** — Backlog-discovery proposal (17 items) reviewed: Phase 1/2 scope above reflects the adopted items; positioning, policy-as-code, and declarative seed data deferred as noted.
 - **2026-07-12** — **Phase 0 (spike) complete**, stack confirmed: DacFx headless comparison works (`spikes/dacfx-headless`); Native AOT structurally incompatible → plan B proven (self-contained un-trimmed single-file + self-extract, 171 MB; [ADR-0001](docs/adr/0001-csharp-dacfx-foundation.md)); `CREATE OR ALTER` dependency ordering works (`spikes/create-or-alter`).
 - **2026-07-12** — **Phase 1 core loop shipped** (commit `8e81aa6`): `inspect` (round-trip verified) / `diff` (plan text + JSON) / `apply` + history ledger (`__SchemorphHistory`, self-excluding) / versioned migrations (normalized SHA-256, run-once, tamper fail-fast) / destructive gating (data-bearing DROPs only) / semantic exit codes (0/1/2). Unit tests 23/23, LocalDB e2e.

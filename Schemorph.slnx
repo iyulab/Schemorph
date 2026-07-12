@@ -6,5 +6,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Schemorph.Core.Tests/Schemorph.Core.Tests.csproj" />
+    <Project Path="tests/Schemorph.Provider.SqlServer.Tests/Schemorph.Provider.SqlServer.Tests.csproj" />
   </Folder>
 </Solution>

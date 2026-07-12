@@ -32,6 +32,14 @@ public interface IDatabaseProvider
     /// Runs all batches in one transaction where the database allows.
     /// </summary>
     Task ExecuteScriptAsync(string connectionString, string script, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Analyze the desired state's programmable objects (ADR-0002 strategy 2):
+    /// which objects exist, which file defines each, an idempotent apply script
+    /// (dialect knowledge: CREATE OR ALTER), and dependencies within the set.
+    /// Ordering and checksum policy stay in the core.
+    /// </summary>
+    Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(string desiredStateDirectory, CancellationToken cancellationToken = default);
 }
 
 public sealed record InspectRequest(string ConnectionString, string OutputDirectory);
@@ -49,6 +57,20 @@ public sealed record CompareResult(
 public sealed record RawChange(string Operation, string ObjectType, string ObjectName);
 
 public sealed record RawMessage(string Severity, string Code, string Text);
+
+/// <summary>One desired-state programmable object, in Schemorph terms.</summary>
+/// <param name="ApplyScript">Idempotent re-definition script (e.g. CREATE OR ALTER rewrite of the file).</param>
+/// <param name="DependsOn">Names of other programmable objects this one references.</param>
+public sealed record ProgrammableObjectInfo(
+    string ObjectName,
+    string ObjectType,
+    string FilePath,
+    string ApplyScript,
+    IReadOnlyList<string> DependsOn);
+
+public sealed record ProgrammableAnalysis(
+    IReadOnlyList<ProgrammableObjectInfo> Objects,
+    IReadOnlyList<RawMessage> Messages);
 
 public sealed record ApplyRequest(string DesiredStateDirectory, string ConnectionString);
 

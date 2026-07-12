@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Schemorph.Core.Migrations;
@@ -25,10 +23,6 @@ public sealed record MigrationScript(int Version, string FileName, string FilePa
         return true;
     }
 
-    /// <summary>
-    /// SHA-256 over line-ending-normalized content, so the same file checked out
-    /// on Windows (CRLF) and Linux (LF) yields the same checksum.
-    /// </summary>
-    public static string ComputeChecksum(string content) =>
-        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(content.Replace("\r\n", "\n"))));
+    /// <inheritdoc cref="ContentChecksum.Compute"/>
+    public static string ComputeChecksum(string content) => ContentChecksum.Compute(content);
 }
