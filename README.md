@@ -1,5 +1,11 @@
 # Schemorph
 
+[![NuGet](https://img.shields.io/nuget/v/Schemorph?logo=nuget)](https://www.nuget.org/packages/Schemorph)
+[![CI](https://github.com/iyulab/Schemorph/actions/workflows/ci.yml/badge.svg)](https://github.com/iyulab/Schemorph/actions/workflows/ci.yml)
+[![Release](https://github.com/iyulab/Schemorph/actions/workflows/release.yml/badge.svg)](https://github.com/iyulab/Schemorph/releases)
+[![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
+
 > Declarative, SQL-first schema management built for the AI-agent era.
 
 Schemorph is a CLI tool and library for managing database schemas as plain SQL files. You write the *desired state* of your database — tables, views, procedures — as ordinary `CREATE` statements. Schemorph computes what needs to change and applies it safely.
