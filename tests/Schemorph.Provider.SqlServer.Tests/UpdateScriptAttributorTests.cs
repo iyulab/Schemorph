@@ -134,6 +134,73 @@ public sealed class UpdateScriptAttributorTests
         Assert.Equal(expected, Assert.Single(result).AddsNotNullWithoutDefault);
     }
 
+    // The same NOT NULL-without-default hazard reaches the row-copy of a table
+    // rebuild: the new column lives in the rebuilt table but is absent from the
+    // INSERT that copies existing rows, so a row-holding table fails at apply —
+    // exactly SCHEMORPH101, reached via the rebuild path, not ALTER ADD.
+    [Fact]
+    public void Rebuild_row_copy_omitting_a_not_null_without_default_column_is_flagged()
+    {
+        var script = """
+            PRINT N'Starting rebuilding table [dbo].[T]...';
+            GO
+            BEGIN TRANSACTION;
+            CREATE TABLE [dbo].[tmp_ms_xx_T] ([Id] INT NOT NULL, [Slug] NVARCHAR (30) NOT NULL);
+            IF EXISTS (SELECT TOP 1 1 FROM [dbo].[T])
+                INSERT INTO [dbo].[tmp_ms_xx_T] ([Id]) SELECT [Id] FROM [dbo].[T];
+            DROP TABLE [dbo].[T];
+            EXECUTE sp_rename N'[dbo].[tmp_ms_xx_T]', N'T';
+            COMMIT TRANSACTION;
+            GO
+            """;
+
+        var result = UpdateScriptAttributor.Attribute(script,
+            new[] { new RawChange("Change", "Table", "dbo.T") });
+
+        Assert.True(Assert.Single(result).AddsNotNullWithoutDefault);
+    }
+
+    [Fact]
+    public void Rebuild_row_copy_carrying_the_column_is_not_flagged()
+    {
+        var script = """
+            PRINT N'Starting rebuilding table [dbo].[T]...';
+            GO
+            BEGIN TRANSACTION;
+            CREATE TABLE [dbo].[tmp_ms_xx_T] ([Id] INT NOT NULL, [Code] NVARCHAR (10) NOT NULL);
+            IF EXISTS (SELECT TOP 1 1 FROM [dbo].[T])
+                INSERT INTO [dbo].[tmp_ms_xx_T] ([Id], [Code]) SELECT [Id], [Code] FROM [dbo].[T];
+            DROP TABLE [dbo].[T];
+            EXECUTE sp_rename N'[dbo].[tmp_ms_xx_T]', N'T';
+            COMMIT TRANSACTION;
+            GO
+            """;
+
+        var result = UpdateScriptAttributor.Attribute(script,
+            new[] { new RawChange("Change", "Table", "dbo.T") });
+
+        Assert.False(Assert.Single(result).AddsNotNullWithoutDefault);
+    }
+
+    // A freshly created table (no row-copy) has no existing rows to fail — a
+    // NOT NULL column without a default is safe. The rebuild rule must not
+    // misfire on a CREATE TABLE that has no INSERT copying into it.
+    [Fact]
+    public void New_table_with_a_not_null_without_default_column_is_not_flagged()
+    {
+        var script = """
+            PRINT N'Creating Table [dbo].[T]...';
+            GO
+            CREATE TABLE [dbo].[T] ([Id] INT NOT NULL, [Slug] NVARCHAR (30) NOT NULL);
+            GO
+            """;
+
+        var result = UpdateScriptAttributor.Attribute(script,
+            new[] { new RawChange("Add", "Table", "dbo.T") });
+
+        Assert.False(Assert.Single(result).AddsNotNullWithoutDefault);
+    }
+
     [Fact]
     public void Unrecognized_script_shape_degrades_to_no_attribution()
     {

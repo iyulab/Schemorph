@@ -91,10 +91,13 @@ internal static partial class UpdateScriptAttributor
     }
 
     /// <summary>
-    /// Safety-lint dialect judgment: the slice ALTERs a NOT NULL column in with
-    /// no default (fails on any row-holding table). Proven from the AST only —
-    /// identity/computed columns provide their own values, and an unparseable
-    /// slice proves nothing.
+    /// Safety-lint dialect judgment: the slice adds a NOT NULL column with no
+    /// default, which fails on any table that already holds rows. Two shapes
+    /// prove it — an in-place <c>ALTER TABLE ... ADD</c>, and a table rebuild
+    /// whose row-copy <c>INSERT</c> omits the column newly declared NOT NULL in
+    /// the rebuilt table. Proven from the AST only — identity/computed columns
+    /// provide their own values, a CREATE with no row-copy has no rows to fail,
+    /// and an unparseable slice proves nothing.
     /// </summary>
     private static bool AddsNotNullWithoutDefault(string sql)
     {
@@ -111,24 +114,95 @@ internal static partial class UpdateScriptAttributor
         return visitor.Found;
     }
 
+    /// <summary>
+    /// Detects a NOT NULL-without-default addition on either DacFx shape: the
+    /// in-place ALTER ADD, or a rebuild where the new table declares the column
+    /// NOT NULL but the row-copy INSERT does not carry it. For the rebuild shape
+    /// it correlates each CREATE TABLE's hazardous columns with the column list
+    /// of an INSERT targeting that same table — a CREATE with no such INSERT
+    /// (a fresh table) copies no rows and cannot fail.
+    /// </summary>
     private sealed class NotNullAddVisitor : TSqlFragmentVisitor
     {
-        public bool Found { get; private set; }
+        // rebuilt/new table name -> its NOT NULL-without-default columns.
+        private readonly Dictionary<string, List<string>> _hazardousColumns = new(StringComparer.OrdinalIgnoreCase);
+        // table name -> columns its row-copy INSERT provides a value for.
+        private readonly Dictionary<string, HashSet<string>> _copiedColumns = new(StringComparer.OrdinalIgnoreCase);
+
+        public bool Found =>
+            // ALTER ADD proves it outright. The rebuild shape needs BOTH a
+            // row-copy INSERT into the table (proving existing rows are carried
+            // over — a fresh CREATE with none has no rows to fail) AND that copy
+            // omitting a column the rebuilt table declares NOT NULL.
+            _alterAddFound
+            || _hazardousColumns.Any(t =>
+                _copiedColumns.TryGetValue(t.Key, out var copied)
+                && t.Value.Any(col => !copied.Contains(col)));
+
+        private bool _alterAddFound;
 
         public override void Visit(AlterTableAddTableElementStatement node)
         {
             foreach (var column in node.Definition.ColumnDefinitions)
             {
-                var notNull = column.Constraints.OfType<NullableConstraintDefinition>().Any(c => !c.Nullable);
-                if (notNull
-                    && column.DefaultConstraint is null
-                    && column.IdentityOptions is null
-                    && column.ComputedColumnExpression is null)
+                if (IsHazardous(column))
                 {
-                    Found = true;
+                    _alterAddFound = true;
                 }
             }
         }
+
+        public override void Visit(CreateTableStatement node)
+        {
+            var table = Name(node.SchemaObjectName);
+            foreach (var column in node.Definition.ColumnDefinitions)
+            {
+                if (IsHazardous(column))
+                {
+                    (_hazardousColumns.TryGetValue(table, out var list)
+                        ? list
+                        : _hazardousColumns[table] = new List<string>())
+                        .Add(column.ColumnIdentifier.Value);
+                }
+            }
+        }
+
+        public override void Visit(InsertStatement node)
+        {
+            if (node.InsertSpecification.Target is not NamedTableReference target)
+            {
+                return;
+            }
+
+            // Only an explicit column list proves which columns get a value; a
+            // bare INSERT ... SELECT cannot prove the hazardous column is omitted.
+            var columns = node.InsertSpecification.Columns;
+            if (columns.Count == 0)
+            {
+                return;
+            }
+
+            var table = Name(target.SchemaObject);
+            var copied = _copiedColumns.TryGetValue(table, out var set)
+                ? set
+                : _copiedColumns[table] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var column in columns)
+            {
+                if (column.MultiPartIdentifier?.Identifiers is { Count: > 0 } parts)
+                {
+                    copied.Add(parts[^1].Value);
+                }
+            }
+        }
+
+        private static bool IsHazardous(ColumnDefinition column) =>
+            column.Constraints.OfType<NullableConstraintDefinition>().Any(c => !c.Nullable)
+            && column.DefaultConstraint is null
+            && column.IdentityOptions is null
+            && column.ComputedColumnExpression is null;
+
+        private static string Name(SchemaObjectName name) =>
+            string.Join('.', name.Identifiers.Select(i => i.Value));
     }
 
     /// <summary>The generator's transaction/error bookkeeping between segments.</summary>

@@ -71,6 +71,32 @@ public sealed class CoreLoopTests : IDisposable
         Assert.Empty(again.Changes);
     }
 
+    // The safety lint must survive DacFx's own scripting choices. Inserting a
+    // NOT NULL column WITHOUT a default mid-table makes DacFx rebuild the table
+    // rather than ALTER ADD — the row-copy then omits the new column, so the
+    // same "fails on a row-holding table" hazard is present. This drives the
+    // REAL generated rebuild through the plan+lint path (the hand-written
+    // attributor unit test cannot catch DacFx changing its rebuild shape), so
+    // SCHEMORPH101 must fire alongside the rebuild-cost SCHEMORPH102.
+    [SkippableFact]
+    public async Task Rebuild_that_adds_a_not_null_without_default_column_lints_SCHEMORPH101()
+    {
+        _db.Execute("CREATE TABLE dbo.Cat (Id INT NOT NULL PRIMARY KEY, Tail INT NOT NULL)");
+        _db.Execute("INSERT INTO dbo.Cat (Id, Tail) VALUES (1, 10)");   // a row to fail on
+        Write("schema/tables/dbo.Cat.sql",
+            "CREATE TABLE dbo.Cat (Id INT NOT NULL PRIMARY KEY, Middle NVARCHAR(30) NOT NULL, Tail INT NOT NULL);\nGO\n");
+
+        var compared = await _provider.CompareAsync(
+            new CompareRequest(await LoadAsync(Path.Combine(_dir, "schema")), _db.Url));
+        var plan = PlanBuilder.Build(compared, allowDestructive: false);
+
+        var change = Assert.Single(plan.Actions, a => a.ObjectName == "dbo.Cat");
+        Assert.NotNull(change.Sql);
+        Assert.Contains("tmp_ms_xx", change.Sql);   // confirms DacFx chose a rebuild
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH101");
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH102");
+    }
+
     [SkippableFact]
     public async Task Inspect_exports_the_conventional_layout_and_self_excludes_the_ledger()
     {
