@@ -29,7 +29,8 @@ public static class StatusOperation
     public sealed record MigrationsSummary(
         IReadOnlyList<string> PendingFiles,
         int AppliedCount,
-        IReadOnlyList<string> IgnoredFiles);
+        IReadOnlyList<string> IgnoredFiles,
+        IReadOnlyList<RawMessage> Warnings);
 
     public sealed record Status(
         Plan Plan,
@@ -82,7 +83,7 @@ public static class StatusOperation
         {
             var plan = await new MigrationRunner(provider, ledger).PlanAsync(dir, request.ConnectionString, cancellationToken);
             migrations = new MigrationsSummary(
-                plan.Pending.Select(s => s.FileName).ToList(), plan.AppliedCount, plan.IgnoredFiles);
+                plan.Pending.Select(s => s.FileName).ToList(), plan.AppliedCount, plan.IgnoredFiles, plan.Warnings);
         }
 
         return new StatusResult(

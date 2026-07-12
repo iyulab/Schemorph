@@ -77,3 +77,24 @@ Warnings never change the exit code.
 | `SCHEMORPH005` | Warning | File skipped: SQLCMD syntax marks it as a deploy script, not desired state |
 | `SCHEMORPH006` | Warning | File skipped: contains imperative statements (EXEC / DML) — not declarative DDL |
 | `SCHEMORPH007` | Error | A `.sql` file failed to parse (file, line, and column are named) |
+
+### Safety lint (`SCHEMORPH1xx`)
+
+Lint findings over the plan, in their own code band. Always warnings — they inform
+review and are machine-checkable (e.g. a CI policy failing on specific codes), but
+never change the exit code; execution gating stays with the destructive gate.
+Rules are deliberately conservative: they fire only on what is proven, so a
+missing warning is possible but a wrong one is not.
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `SCHEMORPH101` | Warning | A change adds a NOT NULL column without a default — fails on a table that already holds rows |
+| `SCHEMORPH102` | Warning | A change rebuilds the table (new table, rows copied, old dropped, renamed) — cost grows with the data |
+| `SCHEMORPH103` | Warning | A destructive change is included in the plan (`--allow-destructive`) — applying it loses the data it holds |
+| `SCHEMORPH104` | Warning | A pending migration TRUNCATEs a table — removes every row, not selectively recoverable |
+| `SCHEMORPH105` | Warning | A pending migration UPDATEs or DELETEs without a WHERE clause — touches every row |
+| `SCHEMORPH106` | Warning | A pending migration changes permissions (GRANT/REVOKE/DENY) |
+
+Plan-side findings (`101`–`103`) ride the plan's `messages`; migration-side findings
+(`104`–`106`) ride the `migrations.warnings` list on `status` and `apply` output
+(text mode renders both under their section).

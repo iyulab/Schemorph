@@ -108,7 +108,7 @@ internal static class CliManifest
             new
             {
                 name = "mcp",
-                summary = "Run as an MCP server over stdio. Read-only/plan-only tools (schemorph_diff, schemorph_inspect); apply is deliberately not exposed yet. SCHEMORPH_URL must be set in the server's environment — credentials never flow through the conversation.",
+                summary = "Run as an MCP server over stdio. Tools: schemorph_diff, schemorph_inspect, schemorph_status (read-only) and schemorph_apply (gated: requires the reviewed plan's expectedPlanHash). Resources: schemorph://schema, schemorph://schema/{kind}/{name}, schemorph://plan (needs SCHEMORPH_SCHEMA_DIR). SCHEMORPH_URL must be set in the server's environment — credentials never flow through the conversation.",
                 options = Array.Empty<object>(),
                 exitCodes = new[] { 0 },
             },

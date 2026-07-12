@@ -74,7 +74,7 @@ public static class ApplyOperation
                 {
                     plan = PlanBuilder.Build(
                         new CompareResult(changes, Array.Empty<RawMessage>(), UpdateScript: null),
-                        request.AllowDestructive, redefinePlan.Pending);
+                        request.AllowDestructive, redefinePlan.Pending.Select(p => p.ToPlanAction()).ToList());
                     if (request.ExpectedPlanHash is { } expected)
                     {
                         var actual = PlanFingerprint.Compute(plan);

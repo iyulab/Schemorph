@@ -18,7 +18,7 @@ public class PlanRendererTests
     {
         var json = PlanRenderer.ToJson(Sample);
 
-        Assert.Contains("\"formatVersion\": \"1.1\"", json);
+        Assert.Contains("\"formatVersion\": \"1.2\"", json);
         Assert.Contains("\"hasChanges\": true", json);
         Assert.Contains("\"hasDestructiveChanges\": true", json);
         Assert.Contains("\"changes\"", json);
@@ -93,7 +93,7 @@ public class PlanRendererTests
         var json = PlanRenderer.ToJson(Sample);
 
         using var doc = System.Text.Json.JsonDocument.Parse(json);
-        Assert.Equal("1.1", doc.RootElement.GetProperty("formatVersion").GetString());
+        Assert.Equal("1.2", doc.RootElement.GetProperty("formatVersion").GetString());
         Assert.Equal(PlanFingerprint.Compute(Sample), doc.RootElement.GetProperty("planHash").GetString());
     }
 

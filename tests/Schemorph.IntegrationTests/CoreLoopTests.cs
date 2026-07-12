@@ -1,5 +1,6 @@
 using Schemorph.Core.Ledger;
 using Schemorph.Core.Migrations;
+using Schemorph.Core.Operations;
 using Schemorph.Core.Planning;
 using Schemorph.Core.Providers;
 using Schemorph.Core.Redefine;
@@ -65,7 +66,7 @@ public sealed class CoreLoopTests : IDisposable
         _db.Execute("CREATE PROCEDURE dbo.P AS SELECT 1");
         await _ledger.EnsureInitializedAsync(_db.Url);
 
-        var result = await _provider.InspectAsync(new InspectRequest(_db.Url, Path.Combine(_dir, "out")));
+        var result = await InspectOperation.RunAsync(_provider, _db.Url, Path.Combine(_dir, "out"));
 
         var names = result.WrittenFiles.Select(Path.GetFileName).ToList();
         Assert.Contains("dbo.T.sql", names);
@@ -173,7 +174,7 @@ public sealed class CoreLoopTests : IDisposable
             "CREATE VIEW dbo.Existing AS SELECT 2 AS Two;\nGO\n");
         var edited = await _provider.AnalyzeProgrammablesAsync(Path.Combine(_dir, "schema"));
         var afterEdit = await runner.PlanAsync(edited, _db.Url);
-        Assert.Equal(new[] { "dbo.Existing" }, afterEdit.Pending.Select(o => o.ObjectName));
+        Assert.Equal(new[] { "dbo.Existing" }, afterEdit.Pending.Select(o => o.Object.ObjectName));
     }
 
     [SkippableFact]
@@ -188,7 +189,7 @@ public sealed class CoreLoopTests : IDisposable
 
         var plan = await runner.PlanAsync(analysis, _db.Url);
 
-        Assert.Equal(new[] { "dbo.Drifted" }, plan.Pending.Select(o => o.ObjectName));
+        Assert.Equal(new[] { "dbo.Drifted" }, plan.Pending.Select(o => o.Object.ObjectName));
         Assert.Empty(plan.Reconcilable);
     }
 

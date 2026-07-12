@@ -42,6 +42,8 @@ public static class DiffOperation
         var redefinePlan = await new RedefineRunner(provider, ledger)
             .PlanAsync(programmables, connectionString, cancellationToken);
 
-        return new DiffResult(PlanBuilder.Build(compared, allowDestructive, redefinePlan.Pending), Array.Empty<RawMessage>());
+        return new DiffResult(
+            PlanBuilder.Build(compared, allowDestructive, redefinePlan.Pending.Select(p => p.ToPlanAction()).ToList()),
+            Array.Empty<RawMessage>());
     }
 }

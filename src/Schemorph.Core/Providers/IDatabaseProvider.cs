@@ -13,7 +13,11 @@ public interface IDatabaseProvider
     /// <summary>Stable provider id, e.g. "sqlserver".</summary>
     string Name { get; }
 
-    /// <summary>Read a live database into desired-state SQL files.</summary>
+    /// <summary>
+    /// Read a live database into rendered desired-state files (relative path +
+    /// content, conventional kind layout). Rendering only — the caller chooses
+    /// the sink (disk via InspectOperation, MCP resource, ...).
+    /// </summary>
     Task<InspectResult> InspectAsync(InspectRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>Compare desired state against a live database → raw structural changes.</summary>
@@ -66,11 +70,36 @@ public interface IDatabaseProvider
     /// </summary>
     Task<IReadOnlyList<ProgrammableObjectInfo>> FilterMatchingLiveDefinitionsAsync(
         string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Safety-lint dialect judgment on a migration script: which risky
+    /// constructs it provably contains. Conservative by contract — a script
+    /// that cannot be parsed yields no signals (a missing warning is honest,
+    /// a wrong one is not). Policy (codes, messages, gating) stays in the core.
+    /// </summary>
+    Task<IReadOnlyList<MigrationLintSignal>> LintMigrationScriptAsync(
+        string scriptText, CancellationToken cancellationToken = default);
 }
 
-public sealed record InspectRequest(string ConnectionString, string OutputDirectory);
+/// <summary>Provably-present risky constructs in a migration script (dialect judgment).</summary>
+public enum MigrationLintSignal
+{
+    /// <summary>TRUNCATE TABLE — bulk, minimally-logged, not row-recoverable.</summary>
+    Truncate,
+    /// <summary>UPDATE without a WHERE clause — rewrites every row.</summary>
+    UnfilteredUpdate,
+    /// <summary>DELETE without a WHERE clause — removes every row.</summary>
+    UnfilteredDelete,
+    /// <summary>GRANT / REVOKE / DENY — permission changes riding a migration.</summary>
+    PermissionChange,
+}
 
-public sealed record InspectResult(IReadOnlyList<string> WrittenFiles);
+public sealed record InspectRequest(string ConnectionString);
+
+/// <summary>One rendered desired-state file, e.g. ("tables/dbo.Orders.sql", "CREATE TABLE ...").</summary>
+public sealed record DesiredStateFile(string RelativePath, string Content);
+
+public sealed record InspectResult(IReadOnlyList<DesiredStateFile> Files);
 
 public sealed record CompareRequest(string DesiredStateDirectory, string ConnectionString);
 
@@ -78,7 +107,21 @@ public sealed record CompareRequest(string DesiredStateDirectory, string Connect
 public sealed record CompareResult(
     IReadOnlyList<RawChange> Changes,
     IReadOnlyList<RawMessage> Messages,
-    string? UpdateScript);
+    string? UpdateScript,
+    IReadOnlyList<ChangeScript>? ChangeScripts = null);
+
+/// <summary>
+/// The slice of the update script attributable to one change (plan explanations):
+/// descriptive only — what executes is always the whole update script. Absent
+/// whenever attribution is not certain; a missing slice is honest, a wrong one
+/// is not. <paramref name="Rebuild"/>: the engine cannot alter in place and
+/// rebuilds the object (new table, rows copied, old dropped, renamed).
+/// <paramref name="AddsNotNullWithoutDefault"/>: the slice adds a NOT NULL
+/// column with no default — fails on any table that already holds rows
+/// (dialect judgment; false whenever it cannot be proven).
+/// </summary>
+public sealed record ChangeScript(
+    string ObjectName, string Sql, bool Rebuild, bool AddsNotNullWithoutDefault = false);
 
 public sealed record RawChange(string Operation, string ObjectType, string ObjectName);
 

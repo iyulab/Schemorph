@@ -47,7 +47,10 @@ switch (verb)
         Console.WriteLine($"schemorph {InformationalVersion()}");
         return ExitNoChanges;
     default:
-        Console.Error.WriteLine("""
+        // Requested help (bare invocation, help, --help) is the primary output
+        // and belongs on stdout; only usage-on-error goes to stderr.
+        var requested = verb is null or "help" or "--help";
+        (requested ? Console.Out : Console.Error).WriteLine("""
             schemorph — declarative, SQL-first schema management
 
             usage: schemorph <verb> [options]
@@ -57,9 +60,11 @@ switch (verb)
               diff      compute the change plan (never applies anything)
               apply     execute the change plan and record it in the history ledger
               schema    print a JSON manifest of this CLI (verbs, options, exit codes)
-              mcp       run as an MCP server over stdio (set SCHEMORPH_URL in the
-                        server environment)
+              mcp       run as an MCP server over stdio: tools + schema/plan
+                        resources (set SCHEMORPH_URL — and SCHEMORPH_SCHEMA_DIR
+                        for the plan resource — in the server environment)
               status    show drift, ledger summary, and pending migrations
+              version   print the tool version
 
             status options:
               --url <connection-string>   target database (required)
@@ -97,12 +102,12 @@ switch (verb)
             Exit codes: 0 = success / no changes, 1 = error, 2 = diff found pending changes.
             Errors are a typed envelope on stderr (docs/errors.md).
             """);
-        return verb is null or "help" or "--help" ? ExitNoChanges : ExitError;
+        return requested ? ExitNoChanges : ExitError;
 }
 
-// MCP server over stdio (ROADMAP Phase 2): read-only/plan-only tools for now —
-// apply arrives behind an explicit gate. stdout is the protocol channel, so all
-// logging is forced to stderr.
+// MCP server over stdio (ROADMAP Phase 2): read-only/plan-only tools, apply
+// behind the plan-fingerprint gate, and schema/plan state as resources.
+// stdout is the protocol channel, so all logging is forced to stderr.
 async Task<int> RunMcp()
 {
     var builder = Host.CreateApplicationBuilder();
@@ -113,7 +118,8 @@ async Task<int> RunMcp()
             Version = InformationalVersion(),   // one version string everywhere (CLI --version parity)
         })
         .WithStdioServerTransport()
-        .WithTools<SchemorphTools>();
+        .WithTools<SchemorphTools>()
+        .WithResources<SchemorphResources>();
     await builder.Build().RunAsync();
     return ExitNoChanges;
 }
@@ -195,6 +201,7 @@ async Task<int> RunApply(string[] args, string format)
                     applied = migrationRun.Applied,
                     skipped = migrationRun.Skipped,
                     ignoredFiles = migrationRun.IgnoredFiles,
+                    warnings = migrationRun.Warnings,
                 },
             }, new JsonSerializerOptions
             {
@@ -221,6 +228,7 @@ async Task<int> RunApply(string[] args, string format)
                 Console.WriteLine($"Migrations: {migrationRun.Applied.Count} applied, {migrationRun.Skipped} already applied.");
                 foreach (var name in migrationRun.Applied) Console.WriteLine($"  migrated {name}");
                 foreach (var name in migrationRun.IgnoredFiles) Console.WriteLine($"  ignored  {name} (name does not match V####__description.sql)");
+                foreach (var w in migrationRun.Warnings) Console.WriteLine($"  [{w.Severity}] {w.Code}: {w.Text}");
             }
         }
         return ExitNoChanges;
@@ -296,6 +304,7 @@ async Task<int> RunStatus(string[] args, string format)
                     pending = status.Migrations.PendingFiles,
                     applied = status.Migrations.AppliedCount,
                     ignoredFiles = status.Migrations.IgnoredFiles,
+                    warnings = status.Migrations.Warnings,
                 },
             }, new JsonSerializerOptions
             {
@@ -318,6 +327,7 @@ async Task<int> RunStatus(string[] args, string format)
                 Console.WriteLine($"Migrations: {m.PendingFiles.Count} pending, {m.AppliedCount} applied.");
                 foreach (var name in m.PendingFiles) Console.WriteLine($"  pending  {name}");
                 foreach (var name in m.IgnoredFiles) Console.WriteLine($"  ignored  {name} (name does not match V####__description.sql)");
+                foreach (var w in m.Warnings) Console.WriteLine($"  [{w.Severity}] {w.Code}: {w.Text}");
             }
         }
         // Same convention as diff: pending work = exit 2, so scripts/agents can branch.
@@ -352,8 +362,7 @@ async Task<int> RunInspect(string[] args, string format)
 
     try
     {
-        IDatabaseProvider provider = new SqlServerProvider();
-        var result = await provider.InspectAsync(new InspectRequest(url, outDir));
+        var result = await InspectOperation.RunAsync(new SqlServerProvider(), url, outDir);
 
         if (format == "json")
         {

@@ -18,18 +18,19 @@ independent of the product version:
 - **Major** increments are breaking changes to existing properties. These are
   rare and deliberate.
 
-Current version: **`1.1`**.
+Current version: **`1.2`**.
 
 | Version | Change |
 |---|---|
 | `1.0` | Initial stable shape: `changes[]` with per-change `actions` lists |
 | `1.1` | Added `planHash` (additive) — the apply-gate fingerprint |
+| `1.2` | `explanation` populated on every change; `sql` populated on `redefine` changes (the exact idempotent script) and on declarative changes whose slice of the update script is attributable (additive — both fields were reserved as `null` since 1.0 and stay excluded from `planHash`) |
 
 ## Shape
 
 ```json
 {
-  "formatVersion": "1.1",
+  "formatVersion": "1.2",
   "planHash": "bd270dd7f6ba…(64 hex)",
   "hasChanges": true,
   "hasDestructiveChanges": false,
@@ -39,16 +40,16 @@ Current version: **`1.1`**.
       "objectType": "Table",
       "actions": ["alter"],
       "risk": "warning",
-      "sql": null,
-      "explanation": null
+      "sql": "ALTER TABLE [dbo].[Category]\n    ADD [Slug] NVARCHAR (100) NULL;",
+      "explanation": "The live definition differs from the desired state; altered in place by the declarative publish."
     },
     {
       "objectName": "dbo.CategoryFullView",
       "objectType": "View",
       "actions": ["redefine"],
       "risk": "safe",
-      "sql": null,
-      "explanation": null
+      "sql": "CREATE OR ALTER VIEW dbo.CategoryFullView AS …",
+      "explanation": "The file's checksum differs from the last applied definition; re-defined idempotently (CREATE OR ALTER)."
     }
   ],
   "messages": [
@@ -70,8 +71,8 @@ Current version: **`1.1`**.
 | `changes[].objectType` | string | Provider-raw object type (`Table`, `View`, `Procedure`, ...) |
 | `changes[].actions` | string[] | What will be done, in order. Today always one verb; composite operations (e.g. a rebuild = `["drop", "create"]`) become expressible without a breaking change |
 | `changes[].risk` | string | `safe` \| `warning` \| `destructive` (design principle §4: destructive = a DROP of anything holding data) |
-| `changes[].sql` | string? | Reserved: per-change SQL (Phase 2 plan explanations); `null` until populated |
-| `changes[].explanation` | string? | Reserved: human-readable rationale; `null` until populated |
+| `changes[].sql` | string? | The SQL this change will execute. On `redefine` changes: the exact idempotent script, verbatim. On declarative changes: this change's slice of the DacFx update script, attributed from the generator's own per-object markers; `null` whenever attribution is not certain — a missing slice is honest, a wrong one is not. (What executes on the declarative path is always the whole publish, not these slices.) Descriptive only: excluded from `planHash` |
+| `changes[].explanation` | string? | Deterministic rationale for the change: why it is planned and how it will be performed (e.g. checksum-difference reasoning on redefines, data-loss statement on destructive drops). Descriptive only: excluded from `planHash` |
 | `messages` | array | Diagnostics attached to the plan (gated-out destructive changes, skipped non-model files, engine warnings) — see [errors.md § Provider messages](errors.md#provider-messages) |
 
 ## Action verbs

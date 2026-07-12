@@ -27,8 +27,8 @@ internal sealed class SchemorphTools
 
     [McpServerTool(Name = "schemorph_diff", ReadOnly = true, Idempotent = true)]
     [Description("Compute the schema change plan: desired-state SQL files vs the live database. " +
-                 "Never applies anything. Returns the versioned plan JSON (formatVersion 1.0): " +
-                 "changes[{objectName, objectType, actions[], risk}], messages[]. " +
+                 "Never applies anything. Returns the versioned plan JSON (docs/plan-format.md): " +
+                 "changes[{objectName, objectType, actions[], risk, sql, explanation}], messages[], planHash. " +
                  "The target database comes from SCHEMORPH_URL in the server environment.")]
     public static async Task<string> Diff(
         [Description("Directory holding desired-state .sql files (non-model files are skipped with a warning)")] string schemaDir,
@@ -71,7 +71,7 @@ internal sealed class SchemorphTools
             return MissingUrl();
         }
 
-        var result = await new SqlServerProvider().InspectAsync(new InspectRequest(url, outDir), cancellationToken);
+        var result = await InspectOperation.RunAsync(new SqlServerProvider(), url, outDir, cancellationToken);
         return JsonSerializer.Serialize(new { files = result.WrittenFiles }, ErrorJson);
     }
 
@@ -129,6 +129,7 @@ internal sealed class SchemorphTools
                     pending = status.Migrations.PendingFiles,
                     applied = status.Migrations.AppliedCount,
                     ignoredFiles = status.Migrations.IgnoredFiles,
+                    warnings = status.Migrations.Warnings,
                 },
             }, ResultJson);
         }
@@ -212,6 +213,7 @@ internal sealed class SchemorphTools
                     applied = outcome.Migrations.Applied,
                     skipped = outcome.Migrations.Skipped,
                     ignoredFiles = outcome.Migrations.IgnoredFiles,
+                    warnings = outcome.Migrations.Warnings,
                 },
             }, ResultJson);
         }

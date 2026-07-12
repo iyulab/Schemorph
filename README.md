@@ -23,7 +23,7 @@ schemorph status --url "..." --schema ./schema --migrations ./migrations
 schemorph mcp
 ```
 
-**Status: early (0.x), under active development.** Released on [NuGet](https://www.nuget.org/packages/Schemorph) and [GitHub releases](https://github.com/iyulab/Schemorph/releases). Working today against SQL Server: the full loop (`inspect` / `diff` / `apply` / `status`) with destructive-change gating and semantic exit codes; programmable-object routing via `CREATE OR ALTER`; checksummed run-once migrations; a history ledger; brownfield adoption (existing databases and SSDT trees are consumed as-is — matching objects reconcile instead of re-applying); a versioned machine-readable [plan format](./docs/plan-format.md) with an apply gate (`--expect-plan`); and an MCP server (`schemorph mcp`). The documents in [`docs/`](./docs) define the project's anchors — see [Design Principles](./docs/design-principles.md) for what is fixed and what is open.
+**Status: early (0.x), under active development.** Released on [NuGet](https://www.nuget.org/packages/Schemorph) and [GitHub releases](https://github.com/iyulab/Schemorph/releases). Working today against SQL Server: the full loop (`inspect` / `diff` / `apply` / `status`) with destructive-change gating and semantic exit codes; programmable-object routing via `CREATE OR ALTER`; checksummed run-once migrations; a history ledger; brownfield adoption (existing databases and SSDT trees are consumed as-is — matching objects reconcile instead of re-applying); a versioned machine-readable [plan format](./docs/plan-format.md) with per-change SQL and explanations, an apply gate (`--expect-plan`) and [safety-lint warnings](./docs/errors.md); and an MCP server (`schemorph mcp`) with schema/plan resources. The documents in [`docs/`](./docs) define the project's anchors — see [Design Principles](./docs/design-principles.md) for what is fixed and what is open.
 
 ---
 
@@ -78,8 +78,10 @@ Every command supports structured output and safe-by-default semantics:
 - `diff` is always a dry run; destructive operations require an explicit flag
 - Exit codes distinguish "no changes", "changes pending", and "error", and failures carry a typed `{kind, code, message, hint}` envelope — see [Errors and exit codes](./docs/errors.md)
 - `schemorph schema` prints a JSON manifest of the whole CLI surface (verbs, options, exit codes) so agents discover it without parsing help text
-- Credentials come from the `SCHEMORPH_URL` environment variable (preferred over `--url`), and password material is redacted from every output channel — safe to pipe into logs and PR comments
+- Credentials come from the `SCHEMORPH_URL` environment variable (preferred over `--url`), and password material is redacted from every output channel — safe to pipe into logs and PR comments (there is a [ready-made GitHub Actions recipe](./docs/recipes/github-actions-plan-comment.md) that posts the plan on every schema PR)
 - **`schemorph mcp`** runs the same operations as an MCP server over stdio — read-only tools (`schemorph_diff`, `schemorph_inspect`, `schemorph_status`) plus `schemorph_apply` gated behind a required plan fingerprint; the connection string stays in the server's environment, never in the conversation
+- **Schema as context** — the MCP server also exposes *resources*: `schemorph://schema` (the live database as desired-state SQL, or one object via `schemorph://schema/{kind}/{name}`) and `schemorph://plan` (the current plan with its `planHash`, ready for the apply gate; set `SCHEMORPH_SCHEMA_DIR` in the server environment), so hosts attach schema state directly instead of round-tripping tool calls
+- **Agent Skill** — [`skills/schemorph/SKILL.md`](./skills/schemorph/SKILL.md) packages the procedural knowledge (the edit → diff → review → gated apply → converge loop, error-contract branching, migration immutability) in the [Agent Skills](https://agentskills.io) format; drop it into your agent's skills directory
 
 An AI agent manages a schema change end-to-end — inspect, plan, review, apply — without screen-scraping human-oriented output.
 
@@ -102,7 +104,8 @@ Standalone self-contained binaries (win-x64, linux-x64, osx-arm64) are attached 
 - [Design Principles](./docs/design-principles.md) — the project's anchors; read this first
 - [Architecture](./docs/architecture.md) — the three-strategy model, ledger, provider boundary
 - [The plan format](./docs/plan-format.md) — the machine-readable plan contract and its versioning
-- [Errors and exit codes](./docs/errors.md) — the typed error envelope agents branch on
+- [Errors and exit codes](./docs/errors.md) — the typed error envelope agents branch on, and the safety-lint warning band
+- [Recipes](./docs/recipes/) — ready-made integrations (GitHub Actions plan-on-PR comment)
 - [Architecture Decision Records](./docs/adr/) — why the foundational choices were made
 
 ## Contributing

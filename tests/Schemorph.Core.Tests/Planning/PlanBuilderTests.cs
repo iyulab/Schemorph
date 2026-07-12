@@ -1,5 +1,6 @@
 using Schemorph.Core.Planning;
 using Schemorph.Core.Providers;
+using Schemorph.Core.Redefine;
 
 namespace Schemorph.Core.Tests.Planning;
 
@@ -116,7 +117,9 @@ public class PlanBuilderTests
     {
         var pending = new[]
         {
-            new ProgrammableObjectInfo("dbo.P", "Procedure", "p.sql", "CREATE OR ALTER ...", Array.Empty<string>()),
+            new PendingRedefine(
+                new ProgrammableObjectInfo("dbo.P", "Procedure", "p.sql", "CREATE OR ALTER ...", Array.Empty<string>()),
+                RedefineReason.ChecksumChanged).ToPlanAction(),
         };
 
         var plan = PlanBuilder.Build(
@@ -129,6 +132,85 @@ public class PlanBuilderTests
         Assert.Equal(RiskLevel.Safe, redefine.Risk);
         Assert.Equal("dbo.P", redefine.ObjectName);
         Assert.Equal("Procedure", redefine.ObjectType);
+        // Plan explanations: the redefine carries its exact script and rationale.
+        Assert.Equal("CREATE OR ALTER ...", redefine.Sql);
+        Assert.Contains("checksum", redefine.Explanation);
+    }
+
+    [Fact]
+    public void Every_change_carries_a_deterministic_explanation()
+    {
+        var plan = PlanBuilder.Build(
+            Result(
+                new RawChange("Add", "Table", "dbo.New"),
+                new RawChange("Change", "Table", "dbo.Edited"),
+                new RawChange("Delete", "Table", "dbo.Gone")),
+            allowDestructive: true);
+
+        Assert.All(plan.Actions, a => Assert.False(string.IsNullOrWhiteSpace(a.Explanation)));
+        var drop = plan.Actions.Single(a => a.Operation == PlanOperation.Drop);
+        Assert.Contains("rows are lost", drop.Explanation);
+        // Declarative SQL decomposition is not implemented yet — sql stays null here.
+        Assert.All(plan.Actions, a => Assert.Null(a.Sql));
+    }
+
+    [Fact]
+    public void Change_scripts_join_per_change_sql_and_sharpen_rebuild_explanations()
+    {
+        var result = new CompareResult(
+            new[]
+            {
+                new RawChange("Change", "Table", "dbo.Rebuilt"),
+                new RawChange("Change", "Table", "dbo.Plain"),
+            },
+            Array.Empty<RawMessage>(), UpdateScript: "(whole script)",
+            ChangeScripts: new[] { new ChangeScript("dbo.Rebuilt", "CREATE TABLE [dbo].[tmp_ms_xx_Rebuilt] ...", Rebuild: true) });
+
+        var plan = PlanBuilder.Build(result, allowDestructive: false);
+
+        var rebuilt = plan.Actions.Single(a => a.ObjectName == "dbo.Rebuilt");
+        Assert.Contains("tmp_ms_xx_Rebuilt", rebuilt.Sql);
+        Assert.Contains("rebuilt", rebuilt.Explanation);
+        // Unattributed changes stay honestly silent on sql, generic on explanation.
+        var plain = plan.Actions.Single(a => a.ObjectName == "dbo.Plain");
+        Assert.Null(plain.Sql);
+        Assert.Contains("altered in place", plain.Explanation);
+    }
+
+    [Fact]
+    public void Safety_lint_warnings_ride_the_plan_messages()
+    {
+        var result = new CompareResult(
+            new[]
+            {
+                new RawChange("Change", "Table", "dbo.Strict"),
+                new RawChange("Change", "Table", "dbo.Rebuilt"),
+                new RawChange("Delete", "Table", "dbo.Gone"),
+            },
+            Array.Empty<RawMessage>(), UpdateScript: "(whole)",
+            ChangeScripts: new[]
+            {
+                new ChangeScript("dbo.Strict", "ALTER TABLE ...", Rebuild: false, AddsNotNullWithoutDefault: true),
+                new ChangeScript("dbo.Rebuilt", "(rebuild sql)", Rebuild: true),
+            });
+
+        var plan = PlanBuilder.Build(result, allowDestructive: true);
+
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH101" && m.Text.Contains("dbo.Strict"));
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH102" && m.Text.Contains("dbo.Rebuilt"));
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH103" && m.Text.Contains("dbo.Gone"));
+        // Lint never escalates: warnings only, and the plan itself is untouched.
+        Assert.All(plan.Messages, m => Assert.Equal("Warning", m.Severity));
+        Assert.Equal(3, plan.Actions.Count);
+    }
+
+    [Fact]
+    public void A_clean_plan_lints_clean()
+    {
+        var plan = PlanBuilder.Build(
+            Result(new RawChange("Add", "Table", "dbo.Fresh")), allowDestructive: false);
+
+        Assert.Empty(plan.Messages);
     }
 
     [Fact]

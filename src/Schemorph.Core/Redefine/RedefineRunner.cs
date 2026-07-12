@@ -51,7 +51,11 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
         var reconcilableNames = reconcilable.Select(o => o.ObjectName).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         return new RedefinePlan(
-            candidates.Where(o => !reconcilableNames.Contains(o.ObjectName)).ToList(),
+            candidates.Where(o => !reconcilableNames.Contains(o.ObjectName))
+                .Select(o => new PendingRedefine(o, lastChecksum.ContainsKey(o.ObjectName)
+                    ? RedefineReason.ChecksumChanged
+                    : RedefineReason.NoHistory))
+                .ToList(),
             candidates.Where(o => reconcilableNames.Contains(o.ObjectName)).ToList());
     }
 
@@ -84,7 +88,7 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
         }
 
         var redefined = new List<string>();
-        foreach (var obj in plan.Pending)
+        foreach (var obj in plan.Pending.Select(p => p.Object))
         {
             // Ledger row commits in the same transaction as the script (ADR-0004).
             var entry = new LedgerEntry(LedgerKind, obj.ObjectName, "Redefine", ChecksumOf(obj),
@@ -158,9 +162,37 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
     }
 }
 
+/// <summary>Why a programmable object is pending re-definition.</summary>
+public enum RedefineReason
+{
+    /// <summary>No ledger history and the live definition does not match the file.</summary>
+    NoHistory,
+    /// <summary>The file's checksum differs from the last successfully applied one.</summary>
+    ChecksumChanged,
+}
+
+/// <summary>
+/// One pending re-definition and why. The strategy renders its own plan action
+/// (plan explanations): the SQL is the exact idempotent script that will run,
+/// the explanation states the checksum judgment behind the decision.
+/// </summary>
+public sealed record PendingRedefine(ProgrammableObjectInfo Object, RedefineReason Reason)
+{
+    public PlanAction ToPlanAction() => new(
+        Object.ObjectName, Object.ObjectType, PlanOperation.Redefine, RiskLevel.Safe,
+        Sql: Object.ApplyScript,
+        Explanation: Reason switch
+        {
+            RedefineReason.ChecksumChanged =>
+                "The file's checksum differs from the last applied definition; re-defined idempotently (CREATE OR ALTER).",
+            _ =>
+                "No history in the ledger and the live definition does not match the file; defined idempotently (CREATE OR ALTER) and recorded.",
+        });
+}
+
 /// <summary>The runner's read-only judgment: what to re-apply, what to merely record.</summary>
 public sealed record RedefinePlan(
-    IReadOnlyList<ProgrammableObjectInfo> Pending,
+    IReadOnlyList<PendingRedefine> Pending,
     IReadOnlyList<ProgrammableObjectInfo> Reconcilable);
 
 public sealed record RedefineRunResult(

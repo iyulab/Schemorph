@@ -33,6 +33,12 @@ internal sealed class FakeProvider : IDatabaseProvider
         return Task.CompletedTask;
     }
 
+    /// <summary>Lint signals returned for every script (default: none).</summary>
+    public List<MigrationLintSignal> LintSignals { get; } = new();
+
+    public Task<IReadOnlyList<MigrationLintSignal>> LintMigrationScriptAsync(string scriptText, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<MigrationLintSignal>>(LintSignals);
+
     public Task<InspectResult> InspectAsync(InspectRequest request, CancellationToken ct = default)
         => throw new NotSupportedException();
 

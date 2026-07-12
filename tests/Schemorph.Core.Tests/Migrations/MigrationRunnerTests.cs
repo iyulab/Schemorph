@@ -38,6 +38,24 @@ public sealed class MigrationRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task Pending_migrations_carry_lint_warnings_applied_ones_stay_silent()
+    {
+        var applied = WriteMigration("V1__old.sql", "TRUNCATE TABLE dbo.Log;");
+        WriteMigration("V2__risky.sql", "TRUNCATE TABLE dbo.Log;");
+        _ledger.Entries.Add(new LedgerEntry(MigrationRunner.LedgerKind, "V1__old.sql", "Run",
+            MigrationScript.ComputeChecksum(File.ReadAllText(applied)), true, null));
+        _provider.LintSignals.Add(MigrationLintSignal.Truncate);
+
+        var plan = await Runner.PlanAsync(_dir, "conn");
+
+        // Only the pending script warns — history is history.
+        var warning = Assert.Single(plan.Warnings);
+        Assert.Equal("SCHEMORPH104", warning.Code);
+        Assert.Contains("V2__risky.sql", warning.Text);
+        Assert.Equal("Warning", warning.Severity);
+    }
+
+    [Fact]
     public async Task Already_applied_migrations_are_skipped()
     {
         var path = WriteMigration("V1__seed.sql", "INSERT A;");

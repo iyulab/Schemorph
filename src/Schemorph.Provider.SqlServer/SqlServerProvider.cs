@@ -66,6 +66,10 @@ public sealed class SqlServerProvider : IDatabaseProvider
             .ToList();
     }
 
+    public Task<IReadOnlyList<MigrationLintSignal>> LintMigrationScriptAsync(
+        string scriptText, CancellationToken cancellationToken = default)
+        => Task.FromResult(MigrationScriptLinter.Lint(scriptText));
+
     public Task ExecuteScriptAsync(string connectionString, string script, CancellationToken cancellationToken = default)
         => ExecuteScriptAsync(connectionString, script, Array.Empty<Schemorph.Core.Ledger.LedgerEntry>(), cancellationToken);
 
@@ -132,7 +136,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
             }
         }
 
-        return new CompareResult(changes, messages, script);
+        return new CompareResult(changes, messages, script,
+            script is null ? null : UpdateScriptAttributor.Attribute(script, changes));
     }
 
     // ------------------------------------------------------------------ apply
@@ -309,7 +314,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
                 cancellationToken: cancellationToken);
 
             using var model = new TSqlModel(dacpacPath, DacSchemaModelStorageType.Memory);
-            return new InspectResult(WriteDesiredState(model, request.OutputDirectory));
+            return new InspectResult(RenderDesiredState(model));
         }
         finally
         {
@@ -317,7 +322,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
         }
     }
 
-    private static IReadOnlyList<string> WriteDesiredState(TSqlModel model, string outputDirectory)
+    private static IReadOnlyList<DesiredStateFile> RenderDesiredState(TSqlModel model)
     {
         // Conventional layout (architecture.md): one file per object, grouped by kind.
         var kinds = new (ModelTypeClass Type, string Directory)[]
@@ -350,7 +355,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
             (attachments.TryGetValue(key, out var list) ? list : attachments[key] = new List<string>()).Add(script);
         }
 
-        var written = new List<string>();
+        var rendered = new List<DesiredStateFile>();
         foreach (var (type, directory) in kinds)
         {
             foreach (var obj in model.GetObjects(DacQueryScopes.UserDefined, type))
@@ -368,15 +373,11 @@ public sealed class SqlServerProvider : IDatabaseProvider
                     }
                 }
 
-                var dir = Path.Combine(outputDirectory, directory);
-                Directory.CreateDirectory(dir);
-                var path = Path.Combine(dir, $"{fullName}.sql");
-                File.WriteAllText(path, content.ToString());
-                written.Add(path);
+                rendered.Add(new DesiredStateFile($"{directory}/{fullName}.sql", content.ToString()));
             }
         }
 
-        return written;
+        return rendered;
     }
 
     // ------------------------------------------------------------------ shared
@@ -402,7 +403,6 @@ public sealed class SqlServerProvider : IDatabaseProvider
             using var model = new TSqlModel(ModelVersion, new TSqlModelOptions());
             foreach (var file in loaded.ModelFiles)
             {
-                // TODO(core): replace line-based GO splitting with ScriptDom batch parsing.
                 foreach (var batch in SqlBatchSplitter.Split(file.Text))
                 {
                     model.AddObjects(NormalizeToCreate(batch));

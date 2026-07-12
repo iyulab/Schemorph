@@ -28,14 +28,18 @@ public sealed class AgentSurfaceTests : IDisposable
     /// <summary>The CLI assembly rides along via the project reference; `dotnet exec` runs it unbuffered.</summary>
     private static string CliDll => Path.Combine(AppContext.BaseDirectory, "schemorph.dll");
 
-    private async Task<McpClient> ConnectAsync()
+    private async Task<McpClient> ConnectAsync(string? schemaDirEnv = null)
     {
         var transport = new StdioClientTransport(new StdioClientTransportOptions
         {
             Name = "schemorph",
             Command = "dotnet",
             Arguments = new[] { CliDll, "mcp" },
-            EnvironmentVariables = new Dictionary<string, string?> { ["SCHEMORPH_URL"] = _db.Url },
+            EnvironmentVariables = new Dictionary<string, string?>
+            {
+                ["SCHEMORPH_URL"] = _db.Url,
+                ["SCHEMORPH_SCHEMA_DIR"] = schemaDirEnv,
+            },
         });
         return await McpClient.CreateAsync(transport);
     }
@@ -82,6 +86,15 @@ public sealed class AgentSurfaceTests : IDisposable
         Assert.Contains(("dbo.Customers", "alter"), changed!);
         Assert.Contains(("dbo.CustomerNames", "redefine"), changed!);
 
+        // Plan explanations (format 1.2): the alter carries its attributed SQL
+        // slice, the redefine its exact idempotent script; both explain themselves.
+        var byName = plan.GetProperty("changes").EnumerateArray()
+            .ToDictionary(c => c.GetProperty("objectName").GetString()!);
+        Assert.Contains("ALTER TABLE", byName["dbo.Customers"].GetProperty("sql").GetString());
+        Assert.Contains("CREATE OR ALTER", byName["dbo.CustomerNames"].GetProperty("sql").GetString());
+        Assert.All(byName.Values, c =>
+            Assert.False(string.IsNullOrWhiteSpace(c.GetProperty("explanation").GetString())));
+
         // 3. A stale fingerprint is refused, and nothing has executed.
         var refused = Parse(await client.CallToolAsync("schemorph_apply",
             new Dictionary<string, object?> { ["schemaDir"] = SchemaDir, ["expectedPlanHash"] = new string('0', 64) }));
@@ -105,6 +118,57 @@ public sealed class AgentSurfaceTests : IDisposable
             new Dictionary<string, object?> { ["schemaDir"] = SchemaDir }));
         Assert.False(status.GetProperty("hasPendingWork").GetBoolean());
         Assert.False(status.GetProperty("plan").GetProperty("hasChanges").GetBoolean());
+    }
+
+    [SkippableFact]
+    public async Task Schema_and_plan_are_readable_as_mcp_resources()
+    {
+        // Deployed state + a desired-state edit waiting to be applied.
+        _db.Execute("CREATE TABLE dbo.Customers (Id INT NOT NULL PRIMARY KEY, Name NVARCHAR(100) NOT NULL)");
+        Write("schema/tables/dbo.Customers.sql",
+            "CREATE TABLE dbo.Customers (Id INT NOT NULL PRIMARY KEY, Name NVARCHAR(100) NOT NULL, Email NVARCHAR(200) NULL);\nGO\n");
+
+        await using var client = await ConnectAsync(schemaDirEnv: SchemaDir);
+
+        // Discovery: fixed resources and the per-object template are announced.
+        var resources = await client.ListResourcesAsync();
+        Assert.Equal(new[] { "schemorph://plan", "schemorph://schema" },
+            resources.Select(r => r.Uri).OrderBy(u => u).ToArray());
+        var templates = await client.ListResourceTemplatesAsync();
+        Assert.Contains("schemorph://schema/{kind}/{name}", templates.Select(t => t.UriTemplate));
+
+        // schemorph://schema — the live database as desired-state SQL (no Email yet).
+        var schema = Assert.IsType<ModelContextProtocol.Protocol.TextResourceContents>(
+            Assert.Single((await client.ReadResourceAsync("schemorph://schema")).Contents));
+        Assert.Contains("-- tables/dbo.Customers.sql", schema.Text);
+        Assert.Contains("CREATE TABLE", schema.Text);
+        Assert.DoesNotContain("Email", schema.Text);
+
+        // schemorph://schema/{kind}/{name} — one object.
+        var table = Assert.IsType<ModelContextProtocol.Protocol.TextResourceContents>(
+            Assert.Single((await client.ReadResourceAsync("schemorph://schema/tables/dbo.Customers")).Contents));
+        Assert.Contains("CREATE TABLE", table.Text);
+
+        // schemorph://plan — the same plan (and planHash) schemorph_diff computes.
+        var planText = Assert.IsType<ModelContextProtocol.Protocol.TextResourceContents>(
+            Assert.Single((await client.ReadResourceAsync("schemorph://plan")).Contents));
+        var plan = JsonDocument.Parse(planText.Text).RootElement;
+        Assert.True(plan.GetProperty("hasChanges").GetBoolean());
+        var diff = Parse(await client.CallToolAsync("schemorph_diff",
+            new Dictionary<string, object?> { ["schemaDir"] = SchemaDir }));
+        Assert.Equal(diff.GetProperty("planHash").GetString(), plan.GetProperty("planHash").GetString());
+    }
+
+    [SkippableFact]
+    public async Task Plan_resource_without_schema_dir_is_a_usage_error_not_a_crash()
+    {
+        await using var client = await ConnectAsync();
+
+        // The server's McpException surfaces to the client as a protocol error.
+        var error = await Assert.ThrowsAsync<ModelContextProtocol.McpProtocolException>(
+            async () => await client.ReadResourceAsync("schemorph://plan"));
+
+        Assert.Contains("SCHEMORPH_SCHEMA_DIR", error.Message);
     }
 
     [SkippableFact]

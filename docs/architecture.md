@@ -90,7 +90,7 @@ A `dotnet tool` plus standalone native binaries. Verb-oriented (`inspect`, `diff
 
 ### MCP Server
 
-Exposes the same operations as MCP tools so AI agents can plan and apply schema changes as first-class tool calls. The MCP surface and the CLI are two renderings of the same core API — neither is a wrapper around the other's text output.
+Exposes the same operations as MCP tools so AI agents can plan and apply schema changes as first-class tool calls, and the current schema state / plan as MCP resources (`schemorph://schema`, `schemorph://schema/{kind}/{name}`, `schemorph://plan`) so hosts can attach them as context. The MCP surface and the CLI are two renderings of the same core API — neither is a wrapper around the other's text output.
 
 ## Repository Layout (user's project)
 

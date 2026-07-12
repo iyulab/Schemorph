@@ -45,7 +45,7 @@ public sealed record Plan(
     /// additions (consumers must ignore unknown properties); the major version
     /// increments for breaking changes. Independent of the product version.
     /// </summary>
-    public const string CurrentFormatVersion = "1.1";   // 1.1: added planHash (additive)
+    public const string CurrentFormatVersion = "1.2";   // 1.2: sql/explanation populated (additive; reserved since 1.0)
 
     public bool HasChanges => Actions.Count > 0;
 

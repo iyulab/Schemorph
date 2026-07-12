@@ -55,11 +55,38 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
             }
         }
 
+        var pending = scripts.Where(s => !appliedEntries.ContainsKey(s.FileName)).ToList();
+
+        // 3. Safety lint over what would run (SCHEMORPH1xx band, like the plan
+        //    lint): dialect judgment from the provider, codes/wording here.
+        //    Applied migrations are history — only pending ones are worth a warning.
+        var warnings = new List<RawMessage>();
+        foreach (var script in pending)
+        {
+            var signals = await provider.LintMigrationScriptAsync(
+                File.ReadAllText(script.FilePath), cancellationToken);
+            warnings.AddRange(signals.Select(signal => Warn(script.FileName, signal)));
+        }
+
         return new MigrationPlan(
-            scripts.Where(s => !appliedEntries.ContainsKey(s.FileName)).ToList(),
+            pending,
             scripts.Count(s => appliedEntries.ContainsKey(s.FileName)),
-            ignored);
+            ignored,
+            warnings);
     }
+
+    private static RawMessage Warn(string fileName, MigrationLintSignal signal) => signal switch
+    {
+        MigrationLintSignal.Truncate => new RawMessage("Warning", "SCHEMORPH104",
+            $"{fileName}: TRUNCATE TABLE — removes every row, minimally logged and not selectively recoverable."),
+        MigrationLintSignal.UnfilteredUpdate => new RawMessage("Warning", "SCHEMORPH105",
+            $"{fileName}: UPDATE without a WHERE clause rewrites every row. Add a filter, or a guard proving the intent."),
+        MigrationLintSignal.UnfilteredDelete => new RawMessage("Warning", "SCHEMORPH105",
+            $"{fileName}: DELETE without a WHERE clause removes every row. Add a filter, or a guard proving the intent."),
+        MigrationLintSignal.PermissionChange => new RawMessage("Warning", "SCHEMORPH106",
+            $"{fileName}: GRANT/REVOKE/DENY — permission changes riding a migration; consider managing security separately."),
+        _ => new RawMessage("Warning", "SCHEMORPH106", $"{fileName}: {signal}"),
+    };
 
     public async Task<MigrationRunResult> RunAsync(
         string migrationsDirectory, string connectionString, CancellationToken cancellationToken = default)
@@ -87,19 +114,21 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
             applied.Add(script.FileName);
         }
 
-        return new MigrationRunResult(applied, plan.AppliedCount, plan.IgnoredFiles);
+        return new MigrationRunResult(applied, plan.AppliedCount, plan.IgnoredFiles, plan.Warnings);
     }
 }
 
-/// <summary>Read-only judgment: pending scripts (in run order), applied count, ignored files.</summary>
+/// <summary>Read-only judgment: pending scripts (in run order), applied count, ignored files, lint warnings on pending scripts.</summary>
 public sealed record MigrationPlan(
     IReadOnlyList<MigrationScript> Pending,
     int AppliedCount,
-    IReadOnlyList<string> IgnoredFiles);
+    IReadOnlyList<string> IgnoredFiles,
+    IReadOnlyList<RawMessage> Warnings);
 
 public sealed record MigrationRunResult(
     IReadOnlyList<string> Applied,
     int Skipped,
-    IReadOnlyList<string> IgnoredFiles);
+    IReadOnlyList<string> IgnoredFiles,
+    IReadOnlyList<RawMessage> Warnings);
 
 public sealed class MigrationException(string message) : Exception(message);

@@ -14,13 +14,15 @@ public static class PlanBuilder
     public static Plan Build(
         CompareResult compareResult,
         bool allowDestructive,
-        IReadOnlyList<ProgrammableObjectInfo>? pendingRedefines = null)
+        IReadOnlyList<PlanAction>? redefineActions = null)
     {
         var actions = new List<PlanAction>();
         var messages = compareResult.Messages
             .Where(m => !LedgerObjects.IsLedgerObject(m.Text))   // engine chatter about our own bookkeeping
             .Select(m => new PlanMessage(m.Severity, m.Code, m.Text))
             .ToList();
+        var scripts = (compareResult.ChangeScripts ?? Array.Empty<ChangeScript>())
+            .ToDictionary(s => s.ObjectName, StringComparer.OrdinalIgnoreCase);
 
         foreach (var change in compareResult.Changes)
         {
@@ -43,17 +45,37 @@ public static class PlanBuilder
                 continue;
             }
 
-            actions.Add(new PlanAction(change.ObjectName, change.ObjectType, operation, risk));
+            var script = scripts.GetValueOrDefault(change.ObjectName);
+            actions.Add(new PlanAction(change.ObjectName, change.ObjectType, operation, risk,
+                Sql: script?.Sql,
+                Explanation: Explain(operation, risk, script?.Rebuild == true)));
         }
 
-        // Redefines execute after the declarative publish; the plan mirrors that order.
-        foreach (var pending in pendingRedefines ?? Array.Empty<ProgrammableObjectInfo>())
-        {
-            actions.Add(new PlanAction(pending.ObjectName, pending.ObjectType, PlanOperation.Redefine, RiskLevel.Safe));
-        }
+        // Redefines execute after the declarative publish; the plan mirrors that
+        // order. The redefine strategy renders its own actions (it owns the "why").
+        actions.AddRange(redefineActions ?? Array.Empty<PlanAction>());
+
+        messages.AddRange(PlanLinter.Lint(actions, scripts));
 
         return new Plan(Plan.CurrentFormatVersion, actions, messages);
     }
+
+    /// <summary>
+    /// Plan explanations for the declarative path: deterministic rationale from
+    /// the classification, sharpened by the provider's script attribution when
+    /// it detected a rebuild (redefines carry their own explanation).
+    /// </summary>
+    private static string Explain(PlanOperation operation, RiskLevel risk, bool rebuild) => operation switch
+    {
+        PlanOperation.Alter when rebuild =>
+            "The change cannot be applied in place: the table is rebuilt — a new table is created, rows are copied over, the old table is dropped and the new one renamed. Expect time and log proportional to the data.",
+        PlanOperation.Create => "Missing from the database; created by the declarative publish.",
+        PlanOperation.Alter => "The live definition differs from the desired state; altered in place by the declarative publish.",
+        PlanOperation.Drop when risk == RiskLevel.Destructive =>
+            "Drops an object that holds data — its rows are lost. In this plan only because destructive changes were explicitly allowed.",
+        PlanOperation.Drop => "Its desired-state file was removed; dropped by the declarative publish (no data is stored in it).",
+        _ => "Planned by the declarative publish.",
+    };
 
     /// <summary>Apply-time policy: exactly the declarative changes a plan would contain.</summary>
     public static bool ShouldInclude(RawChange change, bool allowDestructive)

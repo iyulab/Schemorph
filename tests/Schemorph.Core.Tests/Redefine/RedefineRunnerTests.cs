@@ -36,7 +36,7 @@ public sealed class RedefineRunnerTests : IDisposable
 
         var plan = await Runner.PlanAsync(analysis, "conn");
 
-        Assert.Equal(new[] { "dbo.ZZZ", "dbo.AAA" }, plan.Pending.Select(p => p.ObjectName));
+        Assert.Equal(new[] { "dbo.ZZZ", "dbo.AAA" }, plan.Pending.Select(p => p.Object.ObjectName));
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public sealed class RedefineRunnerTests : IDisposable
 
         var plan = await Runner.PlanAsync(Analysis(unchanged, changed), "conn");
 
-        Assert.Equal(new[] { "dbo.Edited" }, plan.Pending.Select(p => p.ObjectName));
+        Assert.Equal(new[] { "dbo.Edited" }, plan.Pending.Select(p => p.Object.ObjectName));
     }
 
     [Fact]
@@ -67,7 +67,23 @@ public sealed class RedefineRunnerTests : IDisposable
 
         var plan = await Runner.PlanAsync(Analysis(obj), "conn");
 
-        Assert.Equal(new[] { "dbo.Back" }, plan.Pending.Select(p => p.ObjectName));
+        Assert.Equal(new[] { "dbo.Back" }, plan.Pending.Select(p => p.Object.ObjectName));
+    }
+
+    [Fact]
+    public async Task Pending_reason_distinguishes_no_history_from_changed_checksum()
+    {
+        var fresh = Obj("dbo.Fresh", "Procedure", "BODY");
+        var edited = Obj("dbo.Edited", "Procedure", "BODY v2");
+        _ledger.Entries.Add(new LedgerEntry(RedefineRunner.LedgerKind, "dbo.Edited", "Redefine",
+            ContentChecksum.Compute("BODY v1"), true, null));
+
+        var plan = await Runner.PlanAsync(Analysis(fresh, edited), "conn");
+
+        Assert.Equal(RedefineReason.NoHistory,
+            plan.Pending.Single(p => p.Object.ObjectName == "dbo.Fresh").Reason);
+        Assert.Equal(RedefineReason.ChecksumChanged,
+            plan.Pending.Single(p => p.Object.ObjectName == "dbo.Edited").Reason);
     }
 
     [Fact]
@@ -92,7 +108,7 @@ public sealed class RedefineRunnerTests : IDisposable
 
         var plan = await Runner.PlanAsync(analysis, "conn");
 
-        Assert.Equal(new[] { "dbo.V" }, plan.Pending.Select(p => p.ObjectName));
+        Assert.Equal(new[] { "dbo.V" }, plan.Pending.Select(p => p.Object.ObjectName));
     }
 
     [Fact]
@@ -191,7 +207,7 @@ public sealed class RedefineRunnerTests : IDisposable
 
         var plan = await Runner.PlanAsync(Analysis(matching, missing), "conn");
 
-        Assert.Equal(new[] { "dbo.New" }, plan.Pending.Select(p => p.ObjectName));
+        Assert.Equal(new[] { "dbo.New" }, plan.Pending.Select(p => p.Object.ObjectName));
         Assert.Equal(new[] { "dbo.Existing" }, plan.Reconcilable.Select(p => p.ObjectName));
     }
 
@@ -208,7 +224,7 @@ public sealed class RedefineRunnerTests : IDisposable
 
         var plan = await Runner.PlanAsync(Analysis(edited), "conn");
 
-        Assert.Equal(new[] { "dbo.Edited" }, plan.Pending.Select(p => p.ObjectName));
+        Assert.Equal(new[] { "dbo.Edited" }, plan.Pending.Select(p => p.Object.ObjectName));
         Assert.Empty(plan.Reconcilable);
         Assert.Empty(_provider.LiveMatchQueries);   // no unknown objects → no lookup
     }
