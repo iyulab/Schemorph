@@ -1,6 +1,6 @@
 # ADR-0005: Rollback semantics per strategy
 
-- **Status:** Proposed (support-scope decision below needs a human call)
+- **Status:** Accepted (2026-07-12; both decision points resolved as recommended)
 - **Date:** 2026-07
 
 ## Context
@@ -69,17 +69,16 @@ Undoing a *failed* apply is ADR-0004's job (per-unit transactions + convergent r
 and requires no user action beyond re-running. This ADR's scope is exclusively
 successful changes the user has decided to withdraw.
 
-## Decision points for a human
+## Decision points (resolved 2026-07-12)
 
-1. **Accept "no down migrations" as the documented contract** *(recommended)* vs.
-   supporting optional `U####__*.sql` undo scripts (Flyway-style). Undo scripts would
-   need their own ledger semantics (what does history mean after an undo?), their own
-   testing story, and contradict the events-not-state anchor. Recommendation: not
-   supported, revisit only on concrete dogfooding demand with a real incident scenario.
-2. **No dedicated rollback verb** *(recommended)* vs. `apply --to <git-ref>` sugar.
-   Recommendation: none in Phase 1; the git-revert workflow is documented instead. If
-   agent-surface work (Phase 2) shows agents fumbling the two-step git dance, that is
-   the demand signal to revisit.
+1. **"No down migrations" is the documented contract** — *accepted* over optional
+   `U####__*.sql` undo scripts (Flyway-style). Undo scripts would need their own ledger
+   semantics (what does history mean after an undo?), their own testing story, and
+   contradict the events-not-state anchor. Revisit only on concrete dogfooding demand
+   with a real incident scenario.
+2. **No dedicated rollback verb** — *accepted* over `apply --to <git-ref>` sugar; the
+   git-revert workflow is documented instead. If agent-surface work (Phase 2) shows
+   agents fumbling the two-step git dance, that is the demand signal to revisit.
 
 ## Consequences
 

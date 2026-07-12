@@ -1,6 +1,6 @@
 # ADR-0004: Failure semantics, resume, and ledger crash-consistency
 
-- **Status:** Proposed (decision points below need a human call)
+- **Status:** Accepted (2026-07-12; both decision points resolved as recommended)
 - **Date:** 2026-07
 
 ## Context
@@ -106,18 +106,18 @@ documentation and a clear error hint suggesting the two-step apply (add the func
 first, then the table). See "Decision points" — the alternatives are recorded there
 because this is a product-behavior trade-off.
 
-## Decision points for a human
+## Decision points (resolved 2026-07-12)
 
-1. **Resume = convergent re-run** (recommended, decision 1) vs. checkpoint/repair
-   tooling. Re-run keeps zero extra state; checkpointing only pays off if stages stop
-   being convergent, which nothing on the roadmap implies.
-2. **Cross-strategy ordering** (decision 6): (a) document + error hint *(recommended —
-   smallest correct behavior, honest about the boundary)*, (b) pre-create new
-   programmables before the declarative publish (fails the mirrored case: new function
-   referencing a new table), (c) bounded convergence loop — declarative → redefine →
-   retry declarative once (resolves one-level cycles but makes stage failure part of the
-   normal path and can mask real errors). Recommendation: (a) now; promote to (c) only
-   on real dogfooding demand.
+1. **Resume = convergent re-run** — *accepted* over checkpoint/repair tooling. Re-run
+   keeps zero extra state; checkpointing only pays off if stages stop being
+   convergent, which nothing on the roadmap implies.
+2. **Cross-strategy ordering = (a) document + error hint** — *accepted* as the
+   smallest correct behavior, honest about the boundary. Alternatives kept on record:
+   (b) pre-create new programmables before the declarative publish (fails the mirrored
+   case: new function referencing a new table), (c) bounded convergence loop —
+   declarative → redefine → retry declarative once (resolves one-level cycles but makes
+   stage failure part of the normal path and can mask real errors). Revisit (c) only on
+   real dogfooding demand.
 
 ## Consequences
 
