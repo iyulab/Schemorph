@@ -29,7 +29,7 @@ schemorph mcp
 
 ## Why Schemorph
 
-Existing tools each solve part of the problem:
+On SQL Server, one combination of properties does not exist today as free, offline, login-free tooling: a **declarative diff engine** that treats **procedures and functions as first-class**, plus a **versioned data-migration ledger**, plus **output an AI agent can act on safely**. Every existing tool gives you some of these; none gives you all of them:
 
 | | Declarative diff | Procedures / functions as first-class | Versioned data migrations | CLI-first, no login | AI-agent-native output |
 |---|---|---|---|---|---|
@@ -41,9 +41,12 @@ Existing tools each solve part of the problem:
 | sqldef | ✅ | ⚠️ views/triggers only — no procedures/functions | ❌ | ✅ | ❌ |
 | **Schemorph** | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-Schemorph's position: combine the **declarative diff model** (SSDT, Atlas, sqldef) with the **versioned migration ledger** (Flyway, Liquibase) in one coherent tool, and treat **AI coding agents as a primary user** rather than an afterthought.
+<sup>Competitive claims as of 2026-07; re-verified periodically as these tools evolve.</sup>
 
-On SQL Server specifically, that combination does not exist today as free, offline, login-free tooling: Atlas gates its SQL Server driver behind a paid plan, Bytebase's declarative workflow is PostgreSQL-only, Flyway's schema model requires commercial editions, and sqldef cannot manage procedures or functions. That gap is where Schemorph lives.
+- Atlas gates its SQL Server driver behind a paid plan; Bytebase's declarative workflow is PostgreSQL-only; Flyway's schema model requires commercial editions; sqldef cannot manage procedures or functions; SSDT is bound to the Visual Studio project system.
+- "AI-agent-native" here is not a roadmap bullet: plans are a versioned machine contract ([plan-format.md](./docs/plan-format.md)), `apply` executes only a reviewed plan fingerprint or refuses, and the same operations run as gated MCP tools — verified by an end-to-end agent harness on every integration run.
+
+Schemorph is that combination: the **declarative diff model** (SSDT, Atlas, sqldef) and the **versioned migration ledger** (Flyway, Liquibase) in one coherent tool, with **AI coding agents as a primary user** rather than an afterthought.
 
 ## Core Model
 

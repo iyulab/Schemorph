@@ -40,7 +40,7 @@ Exit criterion: an AI coding agent completes a schema change end-to-end (edit SQ
 - [x] Brownfield onboarding, part 1: existing databases and SSDT trees are consumed as-is — non-model files (SQLCMD deploy scripts, seed DML) are classified out with per-file warnings, and history-less programmable objects matching their live definitions **reconcile** (recorded, nothing executed) instead of phantom-redefining (ADR-0002 addendum)
 - [ ] Baseline/onboarding flow, part 2: absorbing existing migration *history* from other tools (Flyway/Liquibase tables)
 - [ ] Multi-environment configuration (dev/staging/prod targets, per-target safety policy) — design should leave the door open to policy-as-code (machine-evaluable policies failing CI on violating plans) without pre-building it
-- [ ] Documentation site, examples, comparison guides — positioning around the empirically open combination: SQL Server declarative diff + programmable objects first-class + versioned data ledger + free/no-login/offline (final wording is a human decision)
+- [ ] Documentation site, examples, comparison guides — README positioning lead settled (2026-07-12, human-approved: combination-first structure around the empirically open combination — SQL Server declarative diff + programmable objects first-class + versioned data ledger + free/no-login/offline, with agent-native claims backed by shipped behavior); remaining scope is the site/examples/guides themselves, and periodic re-verification of competitive claims
 
 ## Phase 4 — PostgreSQL provider
 
