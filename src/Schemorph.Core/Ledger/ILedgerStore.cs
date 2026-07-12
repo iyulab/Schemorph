@@ -46,13 +46,15 @@ public static class LedgerStoreExtensions
 
 /// <summary>One applied change, as recorded in the ledger.</summary>
 /// <param name="Kind">declarative | redefine | migration</param>
+/// <param name="AppliedAtUtc">Set by the store on read (the database stamps it on insert); null on entries being written.</param>
 public sealed record LedgerEntry(
     string Kind,
     string ObjectName,
     string Operation,
     string? Checksum,
     bool Succeeded,
-    string? Detail);
+    string? Detail,
+    DateTime? AppliedAtUtc = null);
 
 /// <summary>Names of Schemorph's own database objects, excluded from comparison.</summary>
 public static class LedgerObjects

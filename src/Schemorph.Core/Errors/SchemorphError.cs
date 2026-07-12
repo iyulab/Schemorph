@@ -32,7 +32,9 @@ public sealed record SchemorphError(string Kind, string Code, string Message, st
             => "unsupported",
         // The desired state (or its relationship to recorded history) is wrong;
         // the fix is editing files, not retrying.
-        "invalid_desired_state" or "migration_failed" or "redefine_failed"
+        // plan_mismatch: reality moved since the diff was reviewed — re-run diff,
+        // review again, pass the new hash.
+        "invalid_desired_state" or "migration_failed" or "redefine_failed" or "plan_mismatch"
             => "invalid_state",
         // The operation itself failed against the database; retrying may help.
         "compare_failed" or "apply_failed" or "inspect_failed"

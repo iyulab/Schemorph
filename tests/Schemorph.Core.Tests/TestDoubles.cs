@@ -44,6 +44,20 @@ internal sealed class FakeProvider : IDatabaseProvider
 
     public Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(string desiredStateDirectory, CancellationToken ct = default)
         => throw new NotSupportedException();
+
+    /// <summary>Object names whose live definition "matches" the file (brownfield reconciliation).</summary>
+    public HashSet<string> MatchingLiveObjects { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Every object set the runner asked to match, for asserting when live lookups happen.</summary>
+    public List<IReadOnlyList<string>> LiveMatchQueries { get; } = new();
+
+    public Task<IReadOnlyList<ProgrammableObjectInfo>> FilterMatchingLiveDefinitionsAsync(
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken ct = default)
+    {
+        LiveMatchQueries.Add(objects.Select(o => o.ObjectName).ToList());
+        return Task.FromResult<IReadOnlyList<ProgrammableObjectInfo>>(
+            objects.Where(o => MatchingLiveObjects.Contains(o.ObjectName)).ToList());
+    }
 }
 
 /// <summary>In-memory ledger; entry order stands in for the persisted insertion order.</summary>

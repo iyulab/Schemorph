@@ -40,3 +40,24 @@ All three record into the same ledger, so a single audit trail covers the databa
 
 - **Diff everything, including procedure bodies** (SSDT's approach): rejected as the primary mechanism because body-diff fragility is a core pain this project exists to remove; DacFx's body handling remains available as a fallback where `CREATE OR ALTER` is unavailable.
 - **Version everything** (Flyway-only): rejected; loses the declarative readability of the current schema and reintroduces hand-written ALTERs.
+
+## Addendum — brownfield reconciliation (2026-07-12)
+
+Dogfooding a real SSDT-deployed database surfaced a gap in strategy 2's judgment:
+"no ledger history" was treated as "pending re-definition", so adopting a database
+Schemorph did not build reported every programmable object as a phantom redefine
+(22 of 22 views on the first real target), and the first `apply` executed that many
+unnecessary `CREATE OR ALTER`s just to seed the ledger.
+
+**Refinement**: a history-less object whose live definition already matches its file
+is *reconciled*, not redefined — `apply` records the file checksum in the ledger
+(operation `Reconcile`) without executing anything, and `diff` reports no change.
+Matching is a provider capability (`FilterMatchingLiveDefinitionsAsync`; on SQL Server,
+`sys.sql_modules` preserves deployed batch text verbatim) and is deliberately strict:
+only line endings, outer whitespace, a trailing batch semicolon, and
+`CREATE OR ALTER` ↔ `CREATE` are equivalent. A false match would silently adopt a
+differing object; a false mismatch merely costs one idempotent redefinition — so
+all doubt resolves to "no match". Objects *with* history never consult the live
+definition: a recorded-but-different checksum means the files moved on, and edits
+always win. The anchor is unchanged — this makes strategy 2's answer to "what needs
+applying?" state-honest, the same standard strategy 1 already met.

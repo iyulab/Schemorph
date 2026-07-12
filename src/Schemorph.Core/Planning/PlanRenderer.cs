@@ -18,14 +18,33 @@ public static class PlanRenderer
         WriteIndented = true,
     };
 
-    public static string ToJson(Plan plan) => JsonSerializer.Serialize(new
+    /// <summary>
+    /// The single serializable shape of a plan (format 1.0, docs/plan-format.md) —
+    /// every surface that embeds a plan (diff output, apply envelope) serializes
+    /// THIS model, so the contract cannot drift between commands. Each change
+    /// carries an <c>actions</c> *list* (Terraform's convention): today every list
+    /// has one verb, but composite operations (e.g. a rebuild = drop + create)
+    /// become expressible without a breaking change.
+    /// </summary>
+    public static object ToJsonModel(Plan plan) => new
     {
         plan.FormatVersion,
+        PlanHash = PlanFingerprint.Compute(plan),   // pass to apply --expect-plan / MCP apply
         plan.HasChanges,
         plan.HasDestructiveChanges,
-        plan.Actions,
+        Changes = plan.Actions.Select(a => new
+        {
+            a.ObjectName,
+            a.ObjectType,
+            Actions = new[] { a.Operation },
+            a.Risk,
+            a.Sql,
+            a.Explanation,
+        }).ToList(),
         plan.Messages,
-    }, JsonOptions);
+    };
+
+    public static string ToJson(Plan plan) => JsonSerializer.Serialize(ToJsonModel(plan), JsonOptions);
 
     public static string ToText(Plan plan)
     {
@@ -44,6 +63,8 @@ public static class PlanRenderer
             {
                 sb.AppendLine($"  {Marker(action.Risk)} {action.Operation,-8} {action.ObjectType,-12} {action.ObjectName}");
             }
+            // The gate token: apply exactly this reviewed plan or refuse.
+            sb.AppendLine($"  (apply this exact plan with --expect-plan {PlanFingerprint.Compute(plan)})");
         }
 
         foreach (var message in plan.Messages)

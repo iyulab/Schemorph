@@ -15,8 +15,15 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
 {
     public const string LedgerKind = "redefine";
 
-    /// <summary>Objects whose current file differs from the last applied state, in dependency order.</summary>
-    public async Task<IReadOnlyList<ProgrammableObjectInfo>> PlanAsync(
+    /// <summary>
+    /// Splits the desired state into pending re-definitions and brownfield
+    /// reconciliations, in dependency order. An object with no ledger history is
+    /// not assumed pending: if its live definition already matches the file
+    /// (provider judgment), it is *reconcilable* — apply records its checksum
+    /// without executing anything, so adopting an existing database never
+    /// redefines what already matches (ADR-0002 addendum). Read-only.
+    /// </summary>
+    public async Task<RedefinePlan> PlanAsync(
         ProgrammableAnalysis analysis, string connectionString, CancellationToken cancellationToken = default)
     {
         var ordered = TopologicalOrder(analysis.Objects);
@@ -29,19 +36,55 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
             if (entry.Succeeded) lastChecksum[entry.ObjectName] = entry.Checksum;
         }
 
-        return ordered
+        var candidates = ordered
             .Where(o => !lastChecksum.TryGetValue(o.ObjectName, out var recorded)
                         || !string.Equals(recorded, ChecksumOf(o), StringComparison.OrdinalIgnoreCase))
             .ToList();
+
+        // Only history-less objects can reconcile; a recorded-but-different
+        // checksum means the *files* moved on and must be re-applied. The live
+        // lookup is skipped entirely when everything has history (steady state).
+        var unknown = candidates.Where(o => !lastChecksum.ContainsKey(o.ObjectName)).ToList();
+        var reconcilable = unknown.Count == 0
+            ? Array.Empty<ProgrammableObjectInfo>()
+            : await provider.FilterMatchingLiveDefinitionsAsync(connectionString, unknown, cancellationToken);
+        var reconcilableNames = reconcilable.Select(o => o.ObjectName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return new RedefinePlan(
+            candidates.Where(o => !reconcilableNames.Contains(o.ObjectName)).ToList(),
+            candidates.Where(o => reconcilableNames.Contains(o.ObjectName)).ToList());
     }
 
-    /// <summary>Apply every pending re-definition and record each in the ledger.</summary>
+    /// <summary>
+    /// Record reconciliations, then apply every pending re-definition — each
+    /// recorded in the ledger.
+    /// </summary>
     public async Task<RedefineRunResult> RunAsync(
         ProgrammableAnalysis analysis, string connectionString, CancellationToken cancellationToken = default)
+        => await RunAsync(analysis,
+            await PlanAsync(analysis, connectionString, cancellationToken), connectionString, cancellationToken);
+
+    /// <summary>
+    /// Execute a plan already computed by <see cref="PlanAsync"/> — the apply
+    /// gate depends on this: what was shown (and fingerprinted) is exactly what
+    /// runs, never a silent re-plan.
+    /// </summary>
+    public async Task<RedefineRunResult> RunAsync(
+        ProgrammableAnalysis analysis, RedefinePlan plan, string connectionString, CancellationToken cancellationToken = default)
     {
-        var pending = await PlanAsync(analysis, connectionString, cancellationToken);
+
+        // Reconciliation is bookkeeping, not change: the checksum lands in the
+        // ledger so the object has history from here on, but nothing executes.
+        if (plan.Reconcilable.Count > 0)
+        {
+            await ledger.AppendAsync(connectionString, plan.Reconcilable
+                .Select(o => new LedgerEntry(LedgerKind, o.ObjectName, "Reconcile", ChecksumOf(o),
+                    Succeeded: true, Detail: o.ObjectType))
+                .ToList(), cancellationToken);
+        }
+
         var redefined = new List<string>();
-        foreach (var obj in pending)
+        foreach (var obj in plan.Pending)
         {
             // Ledger row commits in the same transaction as the script (ADR-0004).
             var entry = new LedgerEntry(LedgerKind, obj.ObjectName, "Redefine", ChecksumOf(obj),
@@ -59,7 +102,8 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
             redefined.Add(obj.ObjectName);
         }
 
-        return new RedefineRunResult(redefined, analysis.Objects.Count - redefined.Count);
+        var reconciled = plan.Reconcilable.Select(o => o.ObjectName).ToList();
+        return new RedefineRunResult(redefined, analysis.Objects.Count - redefined.Count - reconciled.Count, reconciled);
     }
 
     /// <summary>
@@ -114,6 +158,12 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
     }
 }
 
-public sealed record RedefineRunResult(IReadOnlyList<string> Redefined, int Skipped);
+/// <summary>The runner's read-only judgment: what to re-apply, what to merely record.</summary>
+public sealed record RedefinePlan(
+    IReadOnlyList<ProgrammableObjectInfo> Pending,
+    IReadOnlyList<ProgrammableObjectInfo> Reconcilable);
+
+public sealed record RedefineRunResult(
+    IReadOnlyList<string> Redefined, int Skipped, IReadOnlyList<string> Reconciled);
 
 public sealed class RedefineException(string message) : Exception(message);

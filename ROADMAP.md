@@ -4,9 +4,9 @@ Phases, not dates. Each phase should produce something usable end-to-end before 
 
 > Canonical roadmap. Session handoff and working logs live in `claudedocs/` (untracked, maintainer-local).
 
-## Phase 1 — MVP: SQL Server, CLI, the full loop (in progress)
+## Phase 1 — MVP: SQL Server, CLI, the full loop (complete)
 
-The core loop — `inspect` / `diff` / `apply` (+ history ledger) / versioned migrations / idempotent programmable-object routing — is implemented and verified end-to-end against LocalDB (see History). Remaining:
+The core loop — `inspect` / `diff` / `apply` (+ history ledger) / versioned migrations / idempotent programmable-object routing — is implemented and verified end-to-end against LocalDB (see History).
 
 - [x] **Failure-semantics ADR** — [ADR-0004](docs/adr/0004-failure-semantics-and-resume.md) (Accepted): convergent re-run, migration/redefine script+ledger in one transaction, transactional declarative publish, failure rows; cross-strategy ordering documented as a limitation. Crash-consistency decisions implemented and e2e-verified.
 - [x] **Rollback / down-migration ADR** — [ADR-0005](docs/adr/0005-rollback-semantics.md) (Accepted): rollback = apply the previous git state (no dedicated verb); down migrations not supported — roll forward.
@@ -16,26 +16,29 @@ The core loop — `inspect` / `diff` / `apply` (+ history ledger) / versioned mi
 - [x] **DacFx version policy** — exact pin, upgrades via dedicated PR gated on golden-corpus verification; documented in CONTRIBUTING ("DacFx version policy").
 - [x] **Release engineering** — tag-triggered workflow (`release.yml`): `dotnet tool` package + win-x64 / linux-x64 / osx-arm64 self-contained single-file binaries attached straight to the GitHub Release (no workflow artifacts); NuGet push gated on the `NUGET_API_KEY` secret. First actual release = a human pushes a `v0.x.y` tag.
 
-Exit criterion: a real project (dogfooding target: an internal SQL Server product schema) manages its schema exclusively through Schemorph.
+Exit criterion — *a real project manages its schema exclusively through Schemorph* — **met in mechanism** (2026-07-12): a real 41-table/22-view SSDT-managed MES/OMS schema completed the full loop (see History), and the two adoption blockers it surfaced (deploy-script parsing, brownfield phantom redefines) are fixed. Continuous dogfooding continues alongside Phase 2+.
 
 ## Phase 2 — Agent-native surface
 
-- [ ] Stabilize and version the JSON plan schema, aligned with Terraform/OpenTofu machine-readable-plan conventions (`format_version`, per-change object + action list, JSONL streaming for long-running commands)
-- [ ] Agent-first CLI conventions: JSON default on non-TTY stdout, self-describing `schema` subcommand (subcommands / flags / output formats / exit codes as a JSON manifest), `next_actions` hints in responses
-- [ ] MCP server exposing inspect / diff / apply / status as tools — safety model: read-only/plan-only by default, explicit apply gate, single-statement enforcement
+- [x] Stabilize and version the JSON plan schema, aligned with Terraform/OpenTofu machine-readable-plan conventions — format 1.0 (`changes[]` with per-change action lists), 1.1 (`planHash`); [docs/plan-format.md](docs/plan-format.md)
+- [ ] JSONL streaming for long-running commands — deferred until a long-running consumer exists (design would be speculative before the agent-usability harness)
+- [x] Agent-first CLI conventions: JSON default on non-TTY stdout, self-describing `schema` subcommand (verbs / flags / output formats / exit codes as a JSON manifest)
+- [ ] `next_actions` hints in responses — deferred with MCP response design (additive)
+- [x] MCP server (`schemorph mcp`, stdio) exposing inspect / diff / apply / status as tools — safety model realized: read-only/plan-only tools by default, apply gated behind a **required plan fingerprint** (`expectedPlanHash` / CLI `--expect-plan`, error `plan_mismatch`), connection string confined to the server environment
 - [ ] Schema-as-context: expose current schema state and plans as MCP *resources*, not just tools
-- [ ] Plan explanations ("this change forces a table rebuild because...") — per-action SQL/Explanation linkage
+- [ ] Plan explanations ("this change forces a table rebuild because...") — per-action SQL/Explanation linkage (`sql` / `explanation` fields are reserved in the plan format)
 - [ ] Safety lint rules operating on the plan (destructive drops, non-nullable additions without defaults, type changes with rebuild cost) — extended to static checks on versioned migration files (unguarded mass UPDATE/DELETE, TRUNCATE, GRANT), depth vs false-positive trade-off to be decided
-- [ ] Agent-usability verification harness — a reproducible end-to-end scenario (edit SQL → diff → review plan → apply) driven by an actual coding agent, making the exit criterion below measurable
+- [x] Agent-usability verification harness — `AgentSurfaceTests` (integration suite): the exit-criterion scenario (edit SQL → diff → review plan → stale-hash refusal → gated apply → converged status) driven over the real MCP stdio surface with the official MCP client, parsing only machine contracts. Runs wherever the integration tests run (env-gated, CI service container)
 - [ ] Agent Skill packaging (`SKILL.md`) alongside MCP (late Phase 2, once CLI/MCP surfaces stabilize)
 - [ ] GitHub Actions recipe: post the plan as a PR comment
 
-Exit criterion: an AI coding agent completes a schema change end-to-end (edit SQL file → review plan → apply to dev database) without human-oriented output parsing.
+Exit criterion: an AI coding agent completes a schema change end-to-end (edit SQL file → review plan → apply to dev database) without human-oriented output parsing. *(Demonstrated 2026-07-12 and fixed as a regression check — `AgentSurfaceTests` runs the scenario over the real MCP surface on every integration run.)*
 
 ## Phase 3 — Hardening & ecosystem
 
-- [ ] Drift detection (`status`: has the database diverged from the last applied state?)
-- [ ] Baseline/onboarding flow for brownfield databases with existing migration history from other tools
+- [x] Drift detection — `status` verb + MCP `schemorph_status`: the plan a diff would produce now (drift), ledger summary (by kind, failures, last activity), pending migrations; exit 2 on pending work
+- [x] Brownfield onboarding, part 1: existing databases and SSDT trees are consumed as-is — non-model files (SQLCMD deploy scripts, seed DML) are classified out with per-file warnings, and history-less programmable objects matching their live definitions **reconcile** (recorded, nothing executed) instead of phantom-redefining (ADR-0002 addendum)
+- [ ] Baseline/onboarding flow, part 2: absorbing existing migration *history* from other tools (Flyway/Liquibase tables)
 - [ ] Multi-environment configuration (dev/staging/prod targets, per-target safety policy) — design should leave the door open to policy-as-code (machine-evaluable policies failing CI on violating plans) without pre-building it
 - [ ] Documentation site, examples, comparison guides — positioning around the empirically open combination: SQL Server declarative diff + programmable objects first-class + versioned data ledger + free/no-login/offline (final wording is a human decision)
 
@@ -62,6 +65,7 @@ Deliberately last and deliberately unspecified ([ADR-0003](docs/adr/0003-postgre
 
 ## History
 
+- **2026-07-12** — **Dogfooding + agent-surface run (cycles 21–29)**: Phase 1 exit exercised against a real 41-table/22-view SSDT MES/OMS schema with the released v0.1.0 — all three strategies verified end-to-end (declarative alter, checksum-discriminated redefines, run-once/tamper-checked migrations, dependent-view auto-refresh, ledger audit). The two adoption blockers it surfaced were fixed at the root: `DesiredStateLoader` (parse-based classification — deploy scripts/seed DML skipped loudly, SSDT trees consumed as-is, parse errors file-attributed) and brownfield reconciliation (ADR-0002 addendum: history-less objects matching live definitions are recorded, not re-applied — 22 phantom redefines → 0). Phase 2 then landed: plan format 1.0/1.1 (`changes[].actions` lists, `planHash`; docs/plan-format.md), agent-first CLI (JSON on non-TTY, `schema` manifest), MCP server (`schemorph mcp`: read-only tools + fingerprint-gated `schemorph_apply` — diff-apply race resolved via `--expect-plan`), and `status` (drift/ledger/pending-migrations, Phase 3 item pulled forward). Core orchestration extracted to `Diff/Apply/StatusOperation` so CLI and MCP render one API. Tests 78 core + 28 provider + 13 integration.
 - **2026-07-12** — **v0.1.0 released**: first public release — NuGet (`dotnet tool install -g Schemorph`) + win-x64 / linux-x64 / osx-arm64 binaries on the GitHub release. ADR-0004/0005 accepted (all decision points resolved as recommended). CI verified green on the real pipeline (build/unit + service-container integration, 10/10). Phase 1 checklist complete; exit criterion (dogfooding a real schema) remains.
 - **2026-07-12** — **Phase 1 hardening run (cycles 11–20)**: ADR-0004 (failure semantics: convergent re-run, script+ledger single-transaction commits, transactional publish, failure rows — defect-class parts implemented and verified) and ADR-0005 (rollback: previous-state re-apply; no down migrations) drafted as Proposed; typed error envelope + exit-code enum ([docs/errors.md](docs/errors.md)); `SCHEMORPH_URL` + password redaction at all sinks; CI (build/test + mssql service-container integration job); integration tests + self-bootstrapping golden corpus; DacFx version policy (CONTRIBUTING); tag-triggered release pipeline (dotnet tool + 3-RID binaries); apply now previews its plan from the same comparison session it executes. Tests 85/85 (68 core + 7 provider + 10 integration).
 - **2026-07-12** — **ADR-0002 strategy routing completed**: programmable objects (procedures/functions/views/triggers) are routed to per-file checksum + `CREATE OR ALTER` + dependency-ordered re-definition (ledger kind `redefine`); their create/alter never goes through the declarative diff, while file deletions still surface as declarative drops (with redefine tombstones so re-added identical files re-create). `inspect` now self-excludes the ledger table and emits triggers. Unit tests 51/51, LocalDB e2e (edit / drop / re-add / dependency-order scenarios).

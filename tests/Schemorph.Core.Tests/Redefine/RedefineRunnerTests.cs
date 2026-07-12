@@ -34,9 +34,9 @@ public sealed class RedefineRunnerTests : IDisposable
             Obj("dbo.AAA", "View", "SELECT * FROM dbo.ZZZ", "dbo.ZZZ"),
             Obj("dbo.ZZZ", "View", "SELECT 1 AS One"));
 
-        var pending = await Runner.PlanAsync(analysis, "conn");
+        var plan = await Runner.PlanAsync(analysis, "conn");
 
-        Assert.Equal(new[] { "dbo.ZZZ", "dbo.AAA" }, pending.Select(p => p.ObjectName));
+        Assert.Equal(new[] { "dbo.ZZZ", "dbo.AAA" }, plan.Pending.Select(p => p.ObjectName));
     }
 
     [Fact]
@@ -49,9 +49,9 @@ public sealed class RedefineRunnerTests : IDisposable
         _ledger.Entries.Add(new LedgerEntry(RedefineRunner.LedgerKind, "dbo.Edited", "Redefine",
             ContentChecksum.Compute("BODY B v1"), true, null));
 
-        var pending = await Runner.PlanAsync(Analysis(unchanged, changed), "conn");
+        var plan = await Runner.PlanAsync(Analysis(unchanged, changed), "conn");
 
-        Assert.Equal(new[] { "dbo.Edited" }, pending.Select(p => p.ObjectName));
+        Assert.Equal(new[] { "dbo.Edited" }, plan.Pending.Select(p => p.ObjectName));
     }
 
     [Fact]
@@ -65,9 +65,9 @@ public sealed class RedefineRunnerTests : IDisposable
         _ledger.Entries.Add(new LedgerEntry(RedefineRunner.LedgerKind, "dbo.Back", "Drop",
             Checksum: null, true, null));
 
-        var pending = await Runner.PlanAsync(Analysis(obj), "conn");
+        var plan = await Runner.PlanAsync(Analysis(obj), "conn");
 
-        Assert.Equal(new[] { "dbo.Back" }, pending.Select(p => p.ObjectName));
+        Assert.Equal(new[] { "dbo.Back" }, plan.Pending.Select(p => p.ObjectName));
     }
 
     [Fact]
@@ -90,9 +90,9 @@ public sealed class RedefineRunnerTests : IDisposable
         // must not block ordering.
         var analysis = Analysis(Obj("dbo.V", "View", "SELECT * FROM dbo.SomeTable", "dbo.SomeTable"));
 
-        var pending = await Runner.PlanAsync(analysis, "conn");
+        var plan = await Runner.PlanAsync(analysis, "conn");
 
-        Assert.Equal(new[] { "dbo.V" }, pending.Select(p => p.ObjectName));
+        Assert.Equal(new[] { "dbo.V" }, plan.Pending.Select(p => p.ObjectName));
     }
 
     [Fact]
@@ -175,6 +175,90 @@ public sealed class RedefineRunnerTests : IDisposable
         var failure = Assert.Single(_ledger.Entries, e => !e.Succeeded);
         Assert.Equal("dbo.ZZZ", failure.ObjectName);
         Assert.Contains("boom", failure.Detail);
+    }
+
+    // ---------------------------------------------------------- reconciliation
+    // ADR-0002 addendum: an object with no ledger history whose live definition
+    // already matches its file is reconciled (checksum recorded, nothing runs) —
+    // adopting an existing database must not phantom-redefine everything.
+
+    [Fact]
+    public async Task History_less_objects_matching_live_are_reconcilable_not_pending()
+    {
+        var matching = Obj("dbo.Existing", "View", "SELECT 1 AS One");
+        var missing = Obj("dbo.New", "View", "SELECT 2 AS Two");
+        _provider.MatchingLiveObjects.Add("dbo.Existing");
+
+        var plan = await Runner.PlanAsync(Analysis(matching, missing), "conn");
+
+        Assert.Equal(new[] { "dbo.New" }, plan.Pending.Select(p => p.ObjectName));
+        Assert.Equal(new[] { "dbo.Existing" }, plan.Reconcilable.Select(p => p.ObjectName));
+    }
+
+    [Fact]
+    public async Task Objects_with_history_never_trigger_a_live_lookup()
+    {
+        // A recorded-but-different checksum means the *files* moved on — live
+        // matching must not undercut an explicit edit. And in steady state
+        // (everything recorded) the extra database roundtrip must not happen.
+        var edited = Obj("dbo.Edited", "Procedure", "BODY v2");
+        _ledger.Entries.Add(new LedgerEntry(RedefineRunner.LedgerKind, "dbo.Edited", "Redefine",
+            ContentChecksum.Compute("BODY v1"), true, null));
+        _provider.MatchingLiveObjects.Add("dbo.Edited");   // live happens to match — must be ignored
+
+        var plan = await Runner.PlanAsync(Analysis(edited), "conn");
+
+        Assert.Equal(new[] { "dbo.Edited" }, plan.Pending.Select(p => p.ObjectName));
+        Assert.Empty(plan.Reconcilable);
+        Assert.Empty(_provider.LiveMatchQueries);   // no unknown objects → no lookup
+    }
+
+    [Fact]
+    public async Task Run_records_reconciliations_without_executing_anything()
+    {
+        var existing = Obj("dbo.Existing", "View", "SELECT 1 AS One");
+        _provider.MatchingLiveObjects.Add("dbo.Existing");
+
+        var result = await Runner.RunAsync(Analysis(existing), "conn");
+
+        Assert.Empty(result.Redefined);
+        Assert.Equal(new[] { "dbo.Existing" }, result.Reconciled);
+        Assert.Equal(0, result.Skipped);
+        Assert.Empty(_provider.ExecutedScripts);
+
+        var entry = Assert.Single(_ledger.Entries);
+        Assert.Equal("Reconcile", entry.Operation);
+        Assert.Equal(ContentChecksum.Compute("SELECT 1 AS One"), entry.Checksum);
+        Assert.True(entry.Succeeded);
+    }
+
+    [Fact]
+    public async Task Reconciled_objects_have_history_and_stay_clean_afterwards()
+    {
+        var existing = Obj("dbo.Existing", "View", "SELECT 1 AS One");
+        _provider.MatchingLiveObjects.Add("dbo.Existing");
+        await Runner.RunAsync(Analysis(existing), "conn");
+        _provider.LiveMatchQueries.Clear();
+
+        var plan = await Runner.PlanAsync(Analysis(existing), "conn");
+
+        Assert.Empty(plan.Pending);
+        Assert.Empty(plan.Reconcilable);
+        Assert.Empty(_provider.LiveMatchQueries);   // checksum recorded — steady state
+    }
+
+    [Fact]
+    public async Task History_less_object_not_matching_live_stays_pending()
+    {
+        // The safe fallback: no match evidence → exactly the old behavior,
+        // one idempotent redefinition.
+        var obj = Obj("dbo.Different", "View", "SELECT 1 AS One");
+
+        var result = await Runner.RunAsync(Analysis(obj), "conn");
+
+        Assert.Equal(new[] { "dbo.Different" }, result.Redefined);
+        Assert.Empty(result.Reconciled);
+        Assert.Single(_provider.ExecutedScripts);
     }
 
     [Fact]

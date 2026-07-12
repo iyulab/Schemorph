@@ -56,7 +56,24 @@ In text mode the same information renders as `error[<code>]: <message> (<hint>)`
 | `invalid_desired_state` | `invalid_state` | Desired-state files fail model validation (e.g. `SCHEMORPH003/004`) |
 | `migration_failed` | `invalid_state` | Duplicate versions, or an applied migration was edited (tamper detection) |
 | `redefine_failed` | `invalid_state` | Dependency cycle among programmable objects |
+| `plan_mismatch` | `invalid_state` | `apply --expect-plan` (or MCP `expectedPlanHash`): the plan computed at apply time differs from the reviewed fingerprint — nothing was applied; re-run `diff`, review, retry with the new hash |
 | `compare_failed` | `execution` | `diff` could not compare (connection, engine error) |
 | `apply_failed` | `execution` | `apply` failed (publish errors, script failure, connection) |
 | `inspect_failed` | `execution` | `inspect` failed |
 | `not_implemented` | `unsupported` | The verb exists but is not implemented yet |
+
+## Provider messages
+
+Distinct from the error envelope: providers attach `SCHEMORPH###`-coded messages to
+plans and results (rendered under the plan in text mode, in `messages` in JSON).
+Warnings never change the exit code.
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `SCHEMORPH001` | Warning | Destructive change excluded from the plan (pass `--allow-destructive` to include) |
+| `SCHEMORPH002` | Warning | Update-script generation failed (plan is still valid) |
+| `SCHEMORPH003` | Error | A programmable object has no source file in the desired state |
+| `SCHEMORPH004` | Error | One file defines more than one programmable object (ADR-0002: one per file) |
+| `SCHEMORPH005` | Warning | File skipped: SQLCMD syntax marks it as a deploy script, not desired state |
+| `SCHEMORPH006` | Warning | File skipped: contains imperative statements (EXEC / DML) — not declarative DDL |
+| `SCHEMORPH007` | Error | A `.sql` file failed to parse (file, line, and column are named) |

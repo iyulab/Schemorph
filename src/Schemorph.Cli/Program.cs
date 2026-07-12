@@ -5,10 +5,15 @@
 // a parser library is an open decision deferred until flags force the question.
 
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Schemorph.Cli;
 using Schemorph.Core;
 using Schemorph.Core.Errors;
 using Schemorph.Core.Ledger;
 using Schemorph.Core.Migrations;
+using Schemorph.Core.Operations;
 using Schemorph.Core.Planning;
 using Schemorph.Core.Providers;
 using Schemorph.Core.Redefine;
@@ -19,7 +24,9 @@ const int ExitError = (int)ExitCode.Error;
 const int ExitChangesPending = (int)ExitCode.ChangesPending;
 
 var verb = args.Length > 0 ? args[0].ToLowerInvariant() : null;
-var format = ParseOption(args, "--format") ?? "text";
+// Agent-first default: a redirected stdout is a machine consumer, so JSON is the
+// default there; a terminal gets text. --format always wins over the heuristic.
+var format = ParseOption(args, "--format") ?? (Console.IsOutputRedirected ? "json" : "text");
 
 switch (verb)
 {
@@ -29,9 +36,13 @@ switch (verb)
         return await RunInspect(args, format);
     case "apply":
         return await RunApply(args, format);
+    case "schema":
+        Console.WriteLine(CliManifest.ToJson(InformationalVersion()));
+        return ExitNoChanges;
+    case "mcp":
+        return await RunMcp();
     case "status":
-        return Fail(format, "not_implemented", $"'{verb}' is not implemented yet.",
-            "Phase 1 in progress — see the roadmap.");
+        return await RunStatus(args, format);
     case "--version" or "version":
         Console.WriteLine($"schemorph {InformationalVersion()}");
         return ExitNoChanges;
@@ -45,7 +56,17 @@ switch (verb)
               inspect   read a live database into desired-state SQL files
               diff      compute the change plan (never applies anything)
               apply     execute the change plan and record it in the history ledger
-              status    show drift and ledger state
+              schema    print a JSON manifest of this CLI (verbs, options, exit codes)
+              mcp       run as an MCP server over stdio (set SCHEMORPH_URL in the
+                        server environment)
+              status    show drift, ledger summary, and pending migrations
+
+            status options:
+              --url <connection-string>   target database (required)
+              --schema <dir>              desired-state SQL directory (required)
+              --migrations <dir>          also report pending migration scripts
+              --format json|text          output form (default: text on a terminal,
+                                          json when stdout is redirected)
 
             inspect options:
               --url <connection-string>   source database (required)
@@ -55,14 +76,18 @@ switch (verb)
               --url <connection-string>   target database (required)
               --schema <dir>              desired-state SQL directory (required)
               --allow-destructive         include destructive changes in the plan
-              --format json|text          output form (default: text)
+              --format json|text          output form (default: text on a terminal,
+                                          json when stdout is redirected)
 
             apply options:
               --url <connection-string>   target database (required)
               --schema <dir>              desired-state SQL directory (required)
               --migrations <dir>          versioned migration scripts (V####__description.sql)
               --allow-destructive         apply destructive changes too
-              --format json|text          output form (default: text)
+              --expect-plan <hash>        apply only if the computed plan matches this
+                                          fingerprint (printed by diff); mismatch = abort
+              --format json|text          output form (default: text on a terminal,
+                                          json when stdout is redirected)
 
             connection:
               --url can be omitted when the SCHEMORPH_URL environment variable is set
@@ -73,6 +98,24 @@ switch (verb)
             Errors are a typed envelope on stderr (docs/errors.md).
             """);
         return verb is null or "help" or "--help" ? ExitNoChanges : ExitError;
+}
+
+// MCP server over stdio (ROADMAP Phase 2): read-only/plan-only tools for now —
+// apply arrives behind an explicit gate. stdout is the protocol channel, so all
+// logging is forced to stderr.
+async Task<int> RunMcp()
+{
+    var builder = Host.CreateApplicationBuilder();
+    builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
+    builder.Services.AddMcpServer(o => o.ServerInfo = new ModelContextProtocol.Protocol.Implementation
+        {
+            Name = "schemorph",
+            Version = InformationalVersion(),   // one version string everywhere (CLI --version parity)
+        })
+        .WithStdioServerTransport()
+        .WithTools<SchemorphTools>();
+    await builder.Build().RunAsync();
+    return ExitNoChanges;
 }
 
 async Task<int> RunApply(string[] args, string format)
@@ -92,37 +135,23 @@ async Task<int> RunApply(string[] args, string format)
             "Pass the directory that holds the desired-state .sql files.");
     }
 
+    var migrationsDir = ParseOption(args, "--migrations");
+    if (migrationsDir is not null && !Directory.Exists(migrationsDir))
+    {
+        return Fail(format, "migrations_dir_not_found", $"Migrations directory not found: {migrationsDir}",
+            "Pass the directory that holds V####__description.sql files.");
+    }
+
     try
     {
-        IDatabaseProvider provider = new SqlServerProvider();
-
-        // Strategy 2 analysis runs first so a misplaced file fails before any DB work.
-        var programmables = await provider.AnalyzeProgrammablesAsync(schemaDir);
-        if (programmables.Messages.Any(m => m.Severity == "Error"))
-        {
-            foreach (var m in programmables.Messages) EchoMessage(m);
-            return Fail(format, "invalid_desired_state", "Desired state is invalid.", "See messages above.");
-        }
-
-        // The ledger exists before anything runs, so failures are recordable too
-        // (ADR-0004). The table is self-excluded from comparison, so creating it
-        // here never perturbs the plan.
-        ILedgerStore ledger = new SqlServerLedgerStore();
-        await ledger.EnsureInitializedAsync(url);
-
-        // The plan is announced from the SAME comparison session that applies
-        // (provider hook), so what is shown is exactly what runs — no re-compare race.
-        var redefineRunner = new RedefineRunner(provider, ledger);
-        var pendingRedefines = await redefineRunner.PlanAsync(programmables, url);
-        Plan? plan = null;
-        var result = await provider.ApplyAsync(
-            new ApplyRequest(schemaDir, url),
-            change => PlanBuilder.ShouldInclude(change, allowDestructive),
-            changes =>
+        // The apply itself lives in the core (ApplyOperation) — the CLI and the
+        // MCP surface render the same operation; this method renders and maps errors.
+        var outcome = await ApplyOperation.RunAsync(
+            new SqlServerProvider(), new SqlServerLedgerStore(),
+            new ApplyOperation.Request(schemaDir, url, allowDestructive, migrationsDir,
+                ParseOption(args, "--expect-plan")),
+            onPlan: plan =>
             {
-                plan = PlanBuilder.Build(
-                    new CompareResult(changes, Array.Empty<RawMessage>(), UpdateScript: null),
-                    allowDestructive, pendingRedefines);
                 if (format != "json")
                 {
                     Console.Write(PlanRenderer.ToText(plan));
@@ -130,71 +159,36 @@ async Task<int> RunApply(string[] args, string format)
                 }
             });
 
-        if (!result.Success)
+        if (!outcome.Success)
         {
-            foreach (var m in result.Messages) EchoMessage(m);
-            var errorText = string.Join("; ", result.Messages
-                .Where(m => m.Severity == "Error").Select(m => $"{m.Code}: {m.Text}"));
-            await ledger.AppendFailureBestEffortAsync(url, new LedgerEntry(
-                "declarative", "(publish)", "Publish", Checksum: null,
-                Succeeded: false, Detail: errorText));
-            return Fail(format, "apply_failed", "Apply reported errors.", "See messages above.");
-        }
-
-        // Every applied change is recorded in the history ledger — the audit trail.
-        await ledger.AppendAsync(url, result.AppliedChanges
-            .Select(c => new LedgerEntry("declarative", c.ObjectName, c.Operation, Checksum: null,
-                Succeeded: true, Detail: c.ObjectType))
-            .ToList());
-
-        // Strategy 2: idempotent re-definitions run after the declarative publish
-        // (structural prerequisites first). Declarative drops leave a tombstone so
-        // re-adding an identical file later still re-creates the object.
-        await redefineRunner.RecordDropsAsync(url, result.AppliedChanges);
-        var redefineRun = await redefineRunner.RunAsync(programmables, url);
-
-        // Strategy 3: versioned migrations run after the declarative apply.
-        MigrationRunResult? migrationRun = null;
-        var migrationsDir = ParseOption(args, "--migrations");
-        if (migrationsDir is not null)
-        {
-            if (!Directory.Exists(migrationsDir))
+            foreach (var m in outcome.Errors) EchoMessage(m);
+            return outcome.Stage switch
             {
-                return Fail(format, "migrations_dir_not_found", $"Migrations directory not found: {migrationsDir}",
-                    "Pass the directory that holds V####__description.sql files.");
-            }
-            migrationRun = await new MigrationRunner(provider, ledger).RunAsync(migrationsDir, url);
+                ApplyOperation.FailureStage.DesiredState =>
+                    Fail(format, "invalid_desired_state", "Desired state is invalid.", "See messages above."),
+                ApplyOperation.FailureStage.PlanMismatch =>
+                    Fail(format, "plan_mismatch", outcome.Errors[0].Text,
+                        "Re-run diff, review the new plan, and pass its hash with --expect-plan."),
+                _ => Fail(format, "apply_failed", "Apply reported errors.", "See messages above."),
+            };
         }
 
-        // Schemorph's own bookkeeping stays invisible in user-facing output, and
-        // redefine-routed exclusions are not "excluded" — they show as redefinitions.
-        var excludedVisible = result.ExcludedChanges
-            .Where(c => !LedgerObjects.IsLedgerObject(c.ObjectName) && !PlanBuilder.RoutesToRedefine(c))
-            .ToList();
-        var visibleMessages = result.Messages
-            .Where(m => !LedgerObjects.IsLedgerObject(m.Text))
-            .Select(m => m with { Text = Redaction.Redact(m.Text) })
-            .ToList();
-
+        var redefineRun = outcome.Redefines!;
+        var migrationRun = outcome.Migrations;
         if (format == "json")
         {
             Console.WriteLine(JsonSerializer.Serialize(new
             {
-                plan = plan is null ? null : new
-                {
-                    plan.FormatVersion,
-                    plan.HasChanges,
-                    plan.HasDestructiveChanges,
-                    plan.Actions,
-                    plan.Messages,
-                },
-                applied = result.AppliedChanges,
-                excluded = excludedVisible,
-                messages = visibleMessages,
+                // One serialization of the plan contract everywhere (docs/plan-format.md).
+                plan = outcome.Plan is null ? null : PlanRenderer.ToJsonModel(outcome.Plan),
+                applied = outcome.Applied,
+                excluded = outcome.ExcludedVisible,
+                messages = outcome.VisibleMessages,
                 redefines = new
                 {
                     applied = redefineRun.Redefined,
                     skipped = redefineRun.Skipped,
+                    reconciled = redefineRun.Reconciled,
                 },
                 migrations = migrationRun is null ? null : new
                 {
@@ -211,12 +205,17 @@ async Task<int> RunApply(string[] args, string format)
         }
         else
         {
-            Console.WriteLine($"Applied {result.AppliedChanges.Count} change(s); excluded {excludedVisible.Count}.");
-            foreach (var c in result.AppliedChanges) Console.WriteLine($"  applied  {c.Operation,-8} {c.ObjectType,-12} {c.ObjectName}");
-            foreach (var c in excludedVisible) Console.WriteLine($"  excluded {c.Operation,-8} {c.ObjectType,-12} {c.ObjectName}");
-            foreach (var m in visibleMessages) EchoMessage(m, toError: false);
+            Console.WriteLine($"Applied {outcome.Applied.Count} change(s); excluded {outcome.ExcludedVisible.Count}.");
+            foreach (var c in outcome.Applied) Console.WriteLine($"  applied  {c.Operation,-8} {c.ObjectType,-12} {c.ObjectName}");
+            foreach (var c in outcome.ExcludedVisible) Console.WriteLine($"  excluded {c.Operation,-8} {c.ObjectType,-12} {c.ObjectName}");
+            foreach (var m in outcome.VisibleMessages) EchoMessage(m, toError: false);
             Console.WriteLine($"Redefined {redefineRun.Redefined.Count} programmable object(s); {redefineRun.Skipped} unchanged.");
             foreach (var name in redefineRun.Redefined) Console.WriteLine($"  redefined {name}");
+            if (redefineRun.Reconciled.Count > 0)
+            {
+                Console.WriteLine($"Reconciled {redefineRun.Reconciled.Count} existing object(s) already matching their files (recorded, nothing executed).");
+                foreach (var name in redefineRun.Reconciled) Console.WriteLine($"  reconciled {name}");
+            }
             if (migrationRun is not null)
             {
                 Console.WriteLine($"Migrations: {migrationRun.Applied.Count} applied, {migrationRun.Skipped} already applied.");
@@ -239,6 +238,104 @@ async Task<int> RunApply(string[] args, string format)
     catch (Exception ex)
     {
         return Fail(format, "apply_failed", ex.Message, "Verify the connection string and schema directory.");
+    }
+}
+
+async Task<int> RunStatus(string[] args, string format)
+{
+    var url = ResolveUrl(args);
+    var schemaDir = ParseOption(args, "--schema");
+
+    if (url is null || schemaDir is null)
+    {
+        return Fail(format, "invalid_arguments", "status requires --url (or SCHEMORPH_URL) and --schema.",
+            "schemorph status --url \"<connection-string>\" --schema ./schema [--migrations ./migrations]");
+    }
+    if (!Directory.Exists(schemaDir))
+    {
+        return Fail(format, "schema_dir_not_found", $"Schema directory not found: {schemaDir}",
+            "Pass the directory that holds the desired-state .sql files.");
+    }
+    var migrationsDir = ParseOption(args, "--migrations");
+    if (migrationsDir is not null && !Directory.Exists(migrationsDir))
+    {
+        return Fail(format, "migrations_dir_not_found", $"Migrations directory not found: {migrationsDir}",
+            "Pass the directory that holds V####__description.sql files.");
+    }
+
+    try
+    {
+        var result = await StatusOperation.RunAsync(
+            new SqlServerProvider(), new SqlServerLedgerStore(),
+            new StatusOperation.Request(schemaDir, url, migrationsDir));
+
+        if (!result.Success)
+        {
+            foreach (var m in result.Errors) EchoMessage(m);
+            return result.Stage == DiffOperation.FailureStage.DesiredState
+                ? Fail(format, "invalid_desired_state", "Desired state is invalid.", "See messages above.")
+                : Fail(format, "compare_failed", "Comparison reported errors.", "See messages above.");
+        }
+
+        var status = result.Status!;
+        if (format == "json")
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                hasPendingWork = status.HasPendingWork,
+                plan = PlanRenderer.ToJsonModel(status.Plan),
+                ledger = new
+                {
+                    totalEntries = status.Ledger.TotalEntries,
+                    failures = status.Ledger.Failures,
+                    byKind = status.Ledger.ByKind,
+                    lastActivityUtc = status.Ledger.LastActivityUtc,
+                },
+                migrations = status.Migrations is null ? null : new
+                {
+                    pending = status.Migrations.PendingFiles,
+                    applied = status.Migrations.AppliedCount,
+                    ignoredFiles = status.Migrations.IgnoredFiles,
+                },
+            }, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+                WriteIndented = true,
+            }));
+        }
+        else
+        {
+            Console.WriteLine(status.Plan.HasChanges
+                ? $"Drift: {status.Plan.Actions.Count} pending change(s)."
+                : "No drift. Database matches the desired state.");
+            Console.Write(PlanRenderer.ToText(status.Plan));
+            var kinds = string.Join(", ", status.Ledger.ByKind.Select(kv => $"{kv.Key} {kv.Value}"));
+            var lastActivity = status.Ledger.LastActivityUtc is { } at ? $"{at:yyyy-MM-dd HH:mm:ss}Z" : "never";
+            Console.WriteLine($"Ledger: {status.Ledger.TotalEntries} entr(ies) ({kinds}); {status.Ledger.Failures} failure(s); last activity {lastActivity}.");
+            if (status.Migrations is { } m)
+            {
+                Console.WriteLine($"Migrations: {m.PendingFiles.Count} pending, {m.AppliedCount} applied.");
+                foreach (var name in m.PendingFiles) Console.WriteLine($"  pending  {name}");
+                foreach (var name in m.IgnoredFiles) Console.WriteLine($"  ignored  {name} (name does not match V####__description.sql)");
+            }
+        }
+        // Same convention as diff: pending work = exit 2, so scripts/agents can branch.
+        return status.HasPendingWork ? ExitChangesPending : ExitNoChanges;
+    }
+    catch (MigrationException ex)
+    {
+        return Fail(format, "migration_failed", ex.Message,
+            "Applied migrations are immutable; add a new V####__*.sql instead of editing old ones.");
+    }
+    catch (RedefineException ex)
+    {
+        return Fail(format, "redefine_failed", ex.Message,
+            "Break the cycle by extracting the shared logic into a separate object.");
+    }
+    catch (Exception ex)
+    {
+        return Fail(format, "compare_failed", ex.Message, "Verify the connection string and schema directory.");
     }
 }
 
@@ -294,27 +391,20 @@ async Task<int> RunDiff(string[] args, string format)
 
     try
     {
-        IDatabaseProvider provider = new SqlServerProvider();
-        var compared = await provider.CompareAsync(new CompareRequest(schemaDir, url));
+        // The diff itself lives in the core (DiffOperation) so the CLI and the MCP
+        // surface render the same operation; this method only renders and maps errors.
+        var result = await DiffOperation.RunAsync(
+            new SqlServerProvider(), new SqlServerLedgerStore(), schemaDir, url, allowDestructive);
 
-        if (compared.Messages.Any(m => m.Severity == "Error"))
+        if (!result.Success)
         {
-            foreach (var m in compared.Messages) EchoMessage(m);
-            return Fail(format, "compare_failed", "Comparison reported errors.", "See messages above.");
+            foreach (var m in result.Errors) EchoMessage(m);
+            return result.Stage == DiffOperation.FailureStage.DesiredState
+                ? Fail(format, "invalid_desired_state", "Desired state is invalid.", "See messages above.")
+                : Fail(format, "compare_failed", "Comparison reported errors.", "See messages above.");
         }
 
-        // Strategy 2: pending idempotent re-definitions join the plan (read-only —
-        // checksums against the ledger; a missing ledger table reads as no history).
-        var programmables = await provider.AnalyzeProgrammablesAsync(schemaDir);
-        if (programmables.Messages.Any(m => m.Severity == "Error"))
-        {
-            foreach (var m in programmables.Messages) EchoMessage(m);
-            return Fail(format, "invalid_desired_state", "Desired state is invalid.", "See messages above.");
-        }
-        var pendingRedefines = await new RedefineRunner(provider, new SqlServerLedgerStore())
-            .PlanAsync(programmables, url);
-
-        var plan = PlanBuilder.Build(compared, allowDestructive, pendingRedefines);
+        var plan = result.Plan!;
         Console.WriteLine(format == "json" ? PlanRenderer.ToJson(plan) : PlanRenderer.ToText(plan));
         return plan.HasChanges ? ExitChangesPending : ExitNoChanges;
     }

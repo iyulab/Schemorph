@@ -107,6 +107,8 @@ schemorph.json     project configuration (target, paths, safety policy)
 
 The layout above is the default convention. Schemorph reads configuration to locate things; it does not hard-code the tree.
 
+What *is* enforced is content, not layout: the schema directory is classified file-by-file, and only declarative DDL enters the model. Deploy scripts living alongside model files (SQLCMD `:r`/`:setvar`/`$(var)`, EXEC-only touch-ups, seed DML) are skipped with a per-file warning instead of poisoning the comparison — so an existing SSDT project tree can be pointed at as-is. A file that fails to parse *without* SQLCMD evidence is a hard, file-attributed error, never a silent skip (a false skip would surface as a phantom DROP).
+
 ## Non-Goals
 
 - Not an ORM, query builder, or application framework.

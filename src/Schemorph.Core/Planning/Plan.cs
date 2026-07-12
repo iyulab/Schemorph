@@ -39,7 +39,13 @@ public sealed record Plan(
     IReadOnlyList<PlanAction> Actions,
     IReadOnlyList<PlanMessage> Messages)
 {
-    public const string CurrentFormatVersion = "0.1";
+    /// <summary>
+    /// Version of the machine-readable plan format (docs/plan-format.md), following
+    /// Terraform's convention: the minor version increments for backward-compatible
+    /// additions (consumers must ignore unknown properties); the major version
+    /// increments for breaking changes. Independent of the product version.
+    /// </summary>
+    public const string CurrentFormatVersion = "1.1";   // 1.1: added planHash (additive)
 
     public bool HasChanges => Actions.Count > 0;
 

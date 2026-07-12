@@ -21,6 +21,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Schemorph.Provider.SqlServer\Schemorph.Provider.SqlServer.csproj" />
+    <!-- The agent-surface harness drives the REAL CLI as an MCP stdio child process. -->
+    <ProjectReference Include="..\..\src\Schemorph.Cli\Schemorph.Cli.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" Version="1.4.0" />
   </ItemGroup>
 
 </Project>

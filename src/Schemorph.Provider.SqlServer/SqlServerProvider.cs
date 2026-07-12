@@ -35,6 +35,37 @@ public sealed class SqlServerProvider : IDatabaseProvider
     public Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(string desiredStateDirectory, CancellationToken cancellationToken = default)
         => Task.Run(() => AnalyzeProgrammables(desiredStateDirectory), cancellationToken);
 
+    public async Task<IReadOnlyList<ProgrammableObjectInfo>> FilterMatchingLiveDefinitionsAsync(
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default)
+    {
+        if (objects.Count == 0) return Array.Empty<ProgrammableObjectInfo>();
+
+        // sys.sql_modules stores the deployed batch text verbatim for every
+        // programmable kind (views, procedures, functions, triggers).
+        var live = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        await using (var connection = new SqlConnection(connectionString))
+        {
+            await connection.OpenAsync(cancellationToken);
+            await using var command = new SqlCommand("""
+                SELECT s.name + '.' + o.name, m.definition
+                FROM sys.sql_modules m
+                JOIN sys.objects o ON o.object_id = m.object_id
+                JOIN sys.schemas s ON s.schema_id = o.schema_id
+                WHERE m.definition IS NOT NULL
+                """, connection);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                live[reader.GetString(0)] = reader.GetString(1);
+            }
+        }
+
+        return objects
+            .Where(o => live.TryGetValue(o.ObjectName, out var definition)
+                        && LiveDefinitionMatcher.Matches(File.ReadAllText(o.FilePath), definition))
+            .ToList();
+    }
+
     public Task ExecuteScriptAsync(string connectionString, string script, CancellationToken cancellationToken = default)
         => ExecuteScriptAsync(connectionString, script, Array.Empty<Schemorph.Core.Ledger.LedgerEntry>(), cancellationToken);
 
@@ -77,7 +108,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
         }
 
         var result = session.Result!;
-        var messages = CollectMessages(result);
+        var messages = session.LoadWarnings.Concat(CollectMessages(result)).ToList();
         if (messages.Any(m => m.Severity == nameof(DacMessageType.Error)))
         {
             return new CompareResult(Array.Empty<RawChange>(), messages, UpdateScript: null);
@@ -115,7 +146,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
         }
 
         var result = session.Result!;
-        var messages = CollectMessages(result);
+        var messages = session.LoadWarnings.Concat(CollectMessages(result)).ToList();
         if (messages.Any(m => m.Severity == nameof(DacMessageType.Error)))
         {
             return new ApplyResult(false, Array.Empty<RawChange>(), Array.Empty<RawChange>(), messages);
@@ -166,17 +197,25 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
     private static ProgrammableAnalysis AnalyzeProgrammables(string desiredStateDirectory)
     {
+        // The loader classifies out deploy scripts / seed DML; its skip warnings are
+        // deliberately NOT included here — they surface once via the compare path,
+        // and both paths share the loader so the file sets always agree.
+        var loaded = DesiredStateLoader.Load(desiredStateDirectory);
+        if (loaded.Errors.Count > 0)
+        {
+            return new ProgrammableAnalysis(Array.Empty<ProgrammableObjectInfo>(), loaded.Errors);
+        }
+
         // Built with per-batch source names so each object knows its defining file.
         // The batch suffix exists because AddOrUpdateObjects REPLACES everything
         // previously registered under the same source name.
         using var model = new TSqlModel(ModelVersion, new TSqlModelOptions());
-        foreach (var file in Directory.GetFiles(desiredStateDirectory, "*.sql", SearchOption.AllDirectories)
-                     .OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+        foreach (var file in loaded.ModelFiles)
         {
             var batchIndex = 0;
-            foreach (var batch in SqlBatchSplitter.Split(File.ReadAllText(file)))
+            foreach (var batch in SqlBatchSplitter.Split(file.Text))
             {
-                model.AddOrUpdateObjects(NormalizeToCreate(batch), $"{file}::{batchIndex++}", new TSqlObjectOptions());
+                model.AddOrUpdateObjects(NormalizeToCreate(batch), $"{file.Path}::{batchIndex++}", new TSqlObjectOptions());
             }
         }
 
@@ -240,8 +279,9 @@ public sealed class SqlServerProvider : IDatabaseProvider
     /// <summary>
     /// The TSqlModel only accepts plain CREATE syntax; users may still write
     /// CREATE OR ALTER in desired-state files (it is what we execute anyway).
+    /// Internal: LiveDefinitionMatcher shares this equivalence.
     /// </summary>
-    private static string NormalizeToCreate(string sql) =>
+    internal static string NormalizeToCreate(string sql) =>
         System.Text.RegularExpressions.Regex.Replace(
             sql, @"\bCREATE\s+OR\s+ALTER\b", "CREATE",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase, TimeSpan.FromSeconds(5));
@@ -345,17 +385,25 @@ public sealed class SqlServerProvider : IDatabaseProvider
     private sealed class ComparisonSession : IDisposable
     {
         public List<RawMessage> ModelErrors { get; private init; } = new();
+        public List<RawMessage> LoadWarnings { get; private init; } = new();
         public SchemaComparisonResult? Result { get; private init; }
         private string? _dacpacPath;
 
         public static ComparisonSession Open(string desiredStateDirectory, string connectionString, CancellationToken cancellationToken)
         {
+            // Non-model files (deploy scripts, seed DML) are classified out here,
+            // loudly: the skip warnings ride on this session and reach the plan.
+            var loaded = DesiredStateLoader.Load(desiredStateDirectory);
+            if (loaded.Errors.Count > 0)
+            {
+                return new ComparisonSession { ModelErrors = loaded.Errors.ToList() };
+            }
+
             using var model = new TSqlModel(ModelVersion, new TSqlModelOptions());
-            foreach (var file in Directory.GetFiles(desiredStateDirectory, "*.sql", SearchOption.AllDirectories)
-                         .OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+            foreach (var file in loaded.ModelFiles)
             {
                 // TODO(core): replace line-based GO splitting with ScriptDom batch parsing.
-                foreach (var batch in SqlBatchSplitter.Split(File.ReadAllText(file)))
+                foreach (var batch in SqlBatchSplitter.Split(file.Text))
                 {
                     model.AddObjects(NormalizeToCreate(batch));
                 }
@@ -387,6 +435,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
             return new ComparisonSession
             {
                 Result = comparison.Compare(cancellationToken),
+                LoadWarnings = loaded.Warnings.ToList(),
                 _dacpacPath = dacpacPath,
             };
         }

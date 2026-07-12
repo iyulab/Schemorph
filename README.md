@@ -10,14 +10,20 @@ No ORM. No Visual Studio. No proprietary DSL. Just SQL, a single command, and ou
 # Inspect a live database into SQL files
 schemorph inspect --url "Server=...;Database=app" --out ./schema
 
-# Preview what would change (never applies anything)
+# Preview what would change (never applies anything) — prints the plan and its fingerprint
 schemorph diff --url "..." --schema ./schema
 
-# Apply the changes
-schemorph apply --url "..." --schema ./schema
+# Apply exactly the reviewed plan, or refuse if anything changed since the diff
+schemorph apply --url "..." --schema ./schema --expect-plan <hash>
+
+# Drift, ledger summary, pending migrations
+schemorph status --url "..." --schema ./schema --migrations ./migrations
+
+# Run as an MCP server (read-only tools + gated apply) for AI agents
+schemorph mcp
 ```
 
-**Status: pre-alpha, under active development.** The core loop already runs against SQL Server — `inspect`, `diff` (with destructive-change gating and semantic exit codes), `apply` with a history ledger, and checksummed versioned migrations. Programmable-object strategy routing (`CREATE OR ALTER`) and packaging are still in progress; nothing is published yet. The documents in [`docs/`](./docs) define the project's anchors — see [Design Principles](./docs/design-principles.md) for what is fixed and what is open.
+**Status: early (0.x), under active development.** Released on [NuGet](https://www.nuget.org/packages/Schemorph) and [GitHub releases](https://github.com/iyulab/Schemorph/releases). Working today against SQL Server: the full loop (`inspect` / `diff` / `apply` / `status`) with destructive-change gating and semantic exit codes; programmable-object routing via `CREATE OR ALTER`; checksummed run-once migrations; a history ledger; brownfield adoption (existing databases and SSDT trees are consumed as-is — matching objects reconcile instead of re-applying); a versioned machine-readable [plan format](./docs/plan-format.md) with an apply gate (`--expect-plan`); and an MCP server (`schemorph mcp`). The documents in [`docs/`](./docs) define the project's anchors — see [Design Principles](./docs/design-principles.md) for what is fixed and what is open.
 
 ---
 
@@ -64,13 +70,15 @@ See [Architecture](./docs/architecture.md) for the full model.
 
 Every command supports structured output and safe-by-default semantics:
 
-- `--format json` on every command — plans, diffs, and errors as machine-parseable structures
-- `diff` is always a dry run; `apply` requires explicit invocation, and destructive operations require an explicit flag
+- **Versioned plan format** ([docs/plan-format.md](./docs/plan-format.md)) — plans as machine contracts, with `--format json` on every command; JSON is the default whenever stdout is redirected (agents pipe, humans get text)
+- **The apply gate** — `diff` prints the plan's fingerprint (`planHash`); `apply --expect-plan <hash>` executes exactly the reviewed plan or refuses (`plan_mismatch`) if anything drifted in between
+- `diff` is always a dry run; destructive operations require an explicit flag
 - Exit codes distinguish "no changes", "changes pending", and "error", and failures carry a typed `{kind, code, message, hint}` envelope — see [Errors and exit codes](./docs/errors.md)
+- `schemorph schema` prints a JSON manifest of the whole CLI surface (verbs, options, exit codes) so agents discover it without parsing help text
 - Credentials come from the `SCHEMORPH_URL` environment variable (preferred over `--url`), and password material is redacted from every output channel — safe to pipe into logs and PR comments
-- An MCP server exposing the same operations as tools is a first-class deliverable, not a wrapper
+- **`schemorph mcp`** runs the same operations as an MCP server over stdio — read-only tools (`schemorph_diff`, `schemorph_inspect`, `schemorph_status`) plus `schemorph_apply` gated behind a required plan fingerprint; the connection string stays in the server's environment, never in the conversation
 
-The goal: an AI agent should be able to manage a schema change end-to-end — inspect, plan, review, apply — without screen-scraping human-oriented output.
+An AI agent manages a schema change end-to-end — inspect, plan, review, apply — without screen-scraping human-oriented output.
 
 ## Database Support
 
@@ -90,6 +98,8 @@ Standalone self-contained binaries (win-x64, linux-x64, osx-arm64) are attached 
 
 - [Design Principles](./docs/design-principles.md) — the project's anchors; read this first
 - [Architecture](./docs/architecture.md) — the three-strategy model, ledger, provider boundary
+- [The plan format](./docs/plan-format.md) — the machine-readable plan contract and its versioning
+- [Errors and exit codes](./docs/errors.md) — the typed error envelope agents branch on
 - [Architecture Decision Records](./docs/adr/) — why the foundational choices were made
 
 ## Contributing

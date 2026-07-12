@@ -60,7 +60,7 @@ public sealed class SqlServerLedgerStore : ILedgerStore
         }
 
         await using var command = new SqlCommand($"""
-            SELECT Kind, ObjectName, Operation, Checksum, Succeeded, Detail
+            SELECT Kind, ObjectName, Operation, Checksum, Succeeded, Detail, AppliedAtUtc
             FROM dbo.{LedgerObjects.HistoryTable}
             WHERE Kind = @kind
             ORDER BY Id;
@@ -77,7 +77,8 @@ public sealed class SqlServerLedgerStore : ILedgerStore
                 reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetString(3),
                 reader.GetBoolean(4),
-                reader.IsDBNull(5) ? null : reader.GetString(5)));
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.GetDateTime(6)));
         }
         return entries;
     }

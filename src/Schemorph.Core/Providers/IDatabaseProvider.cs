@@ -53,6 +53,19 @@ public interface IDatabaseProvider
     /// Ordering and checksum policy stay in the core.
     /// </summary>
     Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(string desiredStateDirectory, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Of the given desired-state programmable objects, the subset whose live
+    /// database definition already matches its file — dialect knowledge: where
+    /// definitions are stored, batch separators, idempotent-syntax equivalence
+    /// (CREATE OR ALTER vs CREATE). Brownfield reconciliation (ADR-0002 addendum):
+    /// lets the core adopt a database it did not build without redefining what
+    /// already matches. Objects absent from the database never match; when in
+    /// doubt, a provider must report no match (the safe fallback is one
+    /// idempotent redefinition).
+    /// </summary>
+    Task<IReadOnlyList<ProgrammableObjectInfo>> FilterMatchingLiveDefinitionsAsync(
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default);
 }
 
 public sealed record InspectRequest(string ConnectionString, string OutputDirectory);

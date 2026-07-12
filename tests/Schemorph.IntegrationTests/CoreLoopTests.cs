@@ -140,6 +140,82 @@ public sealed class CoreLoopTests : IDisposable
         Assert.Equal(2, second.Skipped);
     }
 
+    [SkippableFact]
+    public async Task Brownfield_objects_matching_their_files_reconcile_instead_of_redefining()
+    {
+        // ADR-0002 addendum: a database Schemorph did not build. The view exists,
+        // deployed by another tool; the file says the same thing.
+        _db.Execute("CREATE VIEW dbo.Existing AS SELECT 1 AS One");
+        Write("schema/views/dbo.Existing.sql",
+            "CREATE VIEW dbo.Existing AS SELECT 1 AS One;\nGO\n");
+        await _ledger.EnsureInitializedAsync(_db.Url);
+        var runner = new RedefineRunner(_provider, _ledger);
+        var analysis = await _provider.AnalyzeProgrammablesAsync(Path.Combine(_dir, "schema"));
+
+        // diff view: nothing pending — no phantom redefine on adoption.
+        var plan = await runner.PlanAsync(analysis, _db.Url);
+        Assert.Empty(plan.Pending);
+        Assert.Equal(new[] { "dbo.Existing" }, plan.Reconcilable.Select(o => o.ObjectName));
+
+        // apply view: recorded, nothing executed, and steady state from then on.
+        var run = await runner.RunAsync(analysis, _db.Url);
+        Assert.Empty(run.Redefined);
+        Assert.Equal(new[] { "dbo.Existing" }, run.Reconciled);
+        var entry = Assert.Single(await _ledger.ReadAsync(_db.Url, RedefineRunner.LedgerKind));
+        Assert.Equal("Reconcile", entry.Operation);
+
+        var steady = await runner.PlanAsync(analysis, _db.Url);
+        Assert.Empty(steady.Pending);
+        Assert.Empty(steady.Reconcilable);
+
+        // An edit after adoption is a normal pending redefine — edits always win.
+        Write("schema/views/dbo.Existing.sql",
+            "CREATE VIEW dbo.Existing AS SELECT 2 AS Two;\nGO\n");
+        var edited = await _provider.AnalyzeProgrammablesAsync(Path.Combine(_dir, "schema"));
+        var afterEdit = await runner.PlanAsync(edited, _db.Url);
+        Assert.Equal(new[] { "dbo.Existing" }, afterEdit.Pending.Select(o => o.ObjectName));
+    }
+
+    [SkippableFact]
+    public async Task Brownfield_objects_differing_from_their_files_stay_pending()
+    {
+        _db.Execute("CREATE VIEW dbo.Drifted AS SELECT 1 AS One");
+        Write("schema/views/dbo.Drifted.sql",
+            "CREATE VIEW dbo.Drifted AS SELECT 99 AS NinetyNine;\nGO\n");
+        await _ledger.EnsureInitializedAsync(_db.Url);
+        var runner = new RedefineRunner(_provider, _ledger);
+        var analysis = await _provider.AnalyzeProgrammablesAsync(Path.Combine(_dir, "schema"));
+
+        var plan = await runner.PlanAsync(analysis, _db.Url);
+
+        Assert.Equal(new[] { "dbo.Drifted" }, plan.Pending.Select(o => o.ObjectName));
+        Assert.Empty(plan.Reconcilable);
+    }
+
+    [SkippableFact]
+    public async Task Apply_gate_rejects_a_stale_fingerprint_and_accepts_the_current_one()
+    {
+        Write("schema/tables/dbo.Gated.sql",
+            "CREATE TABLE dbo.Gated (Id INT NOT NULL PRIMARY KEY);\nGO\n");
+        var schemaDir = Path.Combine(_dir, "schema");
+
+        // A stale hash (reviewed against a different plan) must abort with nothing applied.
+        var rejected = await Schemorph.Core.Operations.ApplyOperation.RunAsync(
+            _provider, _ledger, new Schemorph.Core.Operations.ApplyOperation.Request(
+                schemaDir, _db.Url, ExpectedPlanHash: new string('0', 64)));
+        Assert.False(rejected.Success);
+        Assert.Equal(Schemorph.Core.Operations.ApplyOperation.FailureStage.PlanMismatch, rejected.Stage);
+        Assert.Equal(0, _db.Scalar<int>("SELECT COUNT(*) FROM sys.tables WHERE name = 'Gated'"));
+
+        // The gate's own fingerprint (from the rejected outcome's computed plan) applies cleanly.
+        var expected = PlanFingerprint.Compute(rejected.Plan!);
+        var accepted = await Schemorph.Core.Operations.ApplyOperation.RunAsync(
+            _provider, _ledger, new Schemorph.Core.Operations.ApplyOperation.Request(
+                schemaDir, _db.Url, ExpectedPlanHash: expected));
+        Assert.True(accepted.Success);
+        Assert.Equal(1, _db.Scalar<int>("SELECT COUNT(*) FROM sys.tables WHERE name = 'Gated'"));
+    }
+
     public void Dispose()
     {
         _db.Dispose();

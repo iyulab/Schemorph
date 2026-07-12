@@ -12,7 +12,13 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
 {
     public const string LedgerKind = "migration";
 
-    public async Task<MigrationRunResult> RunAsync(
+    /// <summary>
+    /// Discovery + ledger consultation, without executing anything (read-only):
+    /// what would run, what already ran, what was ignored. Duplicate versions and
+    /// tampered applied migrations throw here — a plan over invalid inputs is not
+    /// a plan.
+    /// </summary>
+    public async Task<MigrationPlan> PlanAsync(
         string migrationsDirectory, string connectionString, CancellationToken cancellationToken = default)
     {
         // 1. Discover and order.
@@ -49,11 +55,22 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
             }
         }
 
-        // 3. Run pending migrations in order. The ledger row commits in the SAME
+        return new MigrationPlan(
+            scripts.Where(s => !appliedEntries.ContainsKey(s.FileName)).ToList(),
+            scripts.Count(s => appliedEntries.ContainsKey(s.FileName)),
+            ignored);
+    }
+
+    public async Task<MigrationRunResult> RunAsync(
+        string migrationsDirectory, string connectionString, CancellationToken cancellationToken = default)
+    {
+        var plan = await PlanAsync(migrationsDirectory, connectionString, cancellationToken);
+
+        // Run pending migrations in order. The ledger row commits in the SAME
         // transaction as the script (ADR-0004): a crash can never leave a migration
         // applied but unrecorded, which would re-run it and break run-once.
         var applied = new List<string>();
-        foreach (var script in scripts.Where(s => !appliedEntries.ContainsKey(s.FileName)))
+        foreach (var script in plan.Pending)
         {
             var entry = new LedgerEntry(LedgerKind, script.FileName, "Run", script.Checksum, Succeeded: true, Detail: null);
             try
@@ -70,9 +87,15 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
             applied.Add(script.FileName);
         }
 
-        return new MigrationRunResult(applied, scripts.Count - applied.Count, ignored);
+        return new MigrationRunResult(applied, plan.AppliedCount, plan.IgnoredFiles);
     }
 }
+
+/// <summary>Read-only judgment: pending scripts (in run order), applied count, ignored files.</summary>
+public sealed record MigrationPlan(
+    IReadOnlyList<MigrationScript> Pending,
+    int AppliedCount,
+    IReadOnlyList<string> IgnoredFiles);
 
 public sealed record MigrationRunResult(
     IReadOnlyList<string> Applied,
