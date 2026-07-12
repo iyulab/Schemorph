@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Schemorph.Cli/Schemorph.Cli.csproj" />
+    <Project Path="src/Schemorph.Core/Schemorph.Core.csproj" />
+    <Project Path="src/Schemorph.Provider.SqlServer/Schemorph.Provider.SqlServer.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Schemorph.Core.Tests/Schemorph.Core.Tests.csproj" />
+  </Folder>
+</Solution>

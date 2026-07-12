@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SqlServer.DacFx" Version="170.4.83" />
+  </ItemGroup>
+
+  <!-- AOT experiment: DacFx loads DatabaseSchemaProvider types reflectively by
+       type-name string, so the trimmer must keep these assemblies whole. -->
+  <ItemGroup Condition="'$(PublishAot)' == 'true' or '$(PublishTrimmed)' == 'true'">
+    <TrimmerRootAssembly Include="Microsoft.Data.Tools.Schema.Sql" />
+    <TrimmerRootAssembly Include="Microsoft.SqlServer.Dac" />
+    <TrimmerRootAssembly Include="Microsoft.SqlServer.Dac.Extensions" />
+  </ItemGroup>
+
+</Project>

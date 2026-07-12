@@ -1,2 +1,9 @@
 claudedocs/
 CLAUDE.md
+
+# .NET build artifacts
+bin/
+obj/
+publish/
+publish-*/
+*.user

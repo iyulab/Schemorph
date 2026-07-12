@@ -17,7 +17,7 @@ schemorph diff --url "..." --schema ./schema
 schemorph apply --url "..." --schema ./schema
 ```
 
-**Status: early design / pre-alpha.** The documents in [`docs/`](./docs) define the project's anchors. Implementation details are intentionally under-specified — see [Design Principles](./docs/design-principles.md) for what is fixed and what is open.
+**Status: pre-alpha, under active development.** The core loop already runs against SQL Server — `inspect`, `diff` (with destructive-change gating and semantic exit codes), `apply` with a history ledger, and checksummed versioned migrations. Programmable-object strategy routing (`CREATE OR ALTER`) and packaging are still in progress; nothing is published yet. The documents in [`docs/`](./docs) define the project's anchors — see [Design Principles](./docs/design-principles.md) for what is fixed and what is open.
 
 ---
 
@@ -29,12 +29,15 @@ Existing tools each solve part of the problem:
 |---|---|---|---|---|---|
 | SSDT / SqlPackage | ✅ | ✅ | ⚠️ pre/post scripts | ⚠️ CLI exists, project system is VS-bound | ❌ |
 | EF Migrations | ❌ (code-first) | ❌ | ⚠️ | ✅ | ❌ |
-| Flyway / Liquibase | ❌ | ⚠️ repeatable scripts | ✅ | ✅ | ❌ |
-| Atlas | ✅ | ⚠️ requires account login | ✅ | ⚠️ | ⚠️ |
-| sqldef | ✅ | ⚠️ limited | ❌ | ✅ | ❌ |
+| Flyway / Liquibase | ⚠️ Flyway schema model, commercial editions only | ⚠️ repeatable scripts | ✅ | ✅ | ⚠️ Liquibase MCP / agent governance, paid tiers |
+| Atlas | ✅ | ⚠️ limited on SQL Server | ✅ | ❌ SQL Server driver is paid (Pro) and requires login | ⚠️ |
+| Bytebase | ⚠️ PostgreSQL only | ❌ | ✅ | ⚠️ self-hosted server, GUI-first | ⚠️ AI assistant; MCP is query-oriented |
+| sqldef | ✅ | ⚠️ views/triggers only — no procedures/functions | ❌ | ✅ | ❌ |
 | **Schemorph** | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 Schemorph's position: combine the **declarative diff model** (SSDT, Atlas, sqldef) with the **versioned migration ledger** (Flyway, Liquibase) in one coherent tool, and treat **AI coding agents as a primary user** rather than an afterthought.
+
+On SQL Server specifically, that combination does not exist today as free, offline, login-free tooling: Atlas gates its SQL Server driver behind a paid plan, Bytebase's declarative workflow is PostgreSQL-only, Flyway's schema model requires commercial editions, and sqldef cannot manage procedures or functions. That gap is where Schemorph lives.
 
 ## Core Model
 
@@ -86,7 +89,6 @@ dotnet tool install -g Schemorph        # .NET tool
 
 - [Design Principles](./docs/design-principles.md) — the project's anchors; read this first
 - [Architecture](./docs/architecture.md) — the three-strategy model, ledger, provider boundary
-- [Roadmap](./docs/roadmap.md) — phased plan from MVP to Postgres
 - [Architecture Decision Records](./docs/adr/) — why the foundational choices were made
 
 ## Contributing

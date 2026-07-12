@@ -14,7 +14,15 @@ Copy the structure of an existing ADR: Status, Date, Context (the forces at play
 
 ## Development
 
-> Build/test instructions will land here with the first code. Planned stack: C# / .NET, distributed as a `dotnet tool` plus native binaries.
+Requires the .NET 10 SDK. SQL Server LocalDB (or any reachable SQL Server) is needed for end-to-end runs.
+
+```bash
+dotnet build Schemorph.slnx        # build everything
+dotnet test                        # unit tests (core semantics)
+dotnet run --project src/Schemorph.Cli -- help
+```
+
+Layout: `src/Schemorph.Core` (plan model, strategies, ledger contract), `src/Schemorph.Provider.SqlServer` (DacFx-based provider), `src/Schemorph.Cli`, `tests/`. The `spikes/` directory holds the Phase 0 validation spikes referenced by the ADRs; they are kept as executable evidence and a seed for the regression corpus.
 
 Expectations once code exists:
 
