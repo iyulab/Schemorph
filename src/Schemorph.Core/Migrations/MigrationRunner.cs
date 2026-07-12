@@ -49,15 +49,24 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
             }
         }
 
-        // 3. Run pending migrations in order, recording each in the ledger.
+        // 3. Run pending migrations in order. The ledger row commits in the SAME
+        // transaction as the script (ADR-0004): a crash can never leave a migration
+        // applied but unrecorded, which would re-run it and break run-once.
         var applied = new List<string>();
         foreach (var script in scripts.Where(s => !appliedEntries.ContainsKey(s.FileName)))
         {
-            await provider.ExecuteScriptAsync(connectionString, File.ReadAllText(script.FilePath), cancellationToken);
-            await ledger.AppendAsync(connectionString, new[]
+            var entry = new LedgerEntry(LedgerKind, script.FileName, "Run", script.Checksum, Succeeded: true, Detail: null);
+            try
             {
-                new LedgerEntry(LedgerKind, script.FileName, "Run", script.Checksum, Succeeded: true, Detail: null),
-            }, cancellationToken);
+                await provider.ExecuteScriptAsync(
+                    connectionString, File.ReadAllText(script.FilePath), new[] { entry }, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                await ledger.AppendFailureBestEffortAsync(
+                    connectionString, entry with { Succeeded = false, Detail = ex.Message }, cancellationToken);
+                throw;
+            }
             applied.Add(script.FileName);
         }
 

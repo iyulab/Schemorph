@@ -1,0 +1,2 @@
+CREATE PROCEDURE dbo.P AS SELECT Id, Id * 2 AS Doubled FROM dbo.T;
+GO

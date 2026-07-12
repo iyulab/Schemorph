@@ -29,13 +29,18 @@ public sealed class SqlServerProvider : IDatabaseProvider
     public Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken cancellationToken = default)
         => Task.Run(() => Compare(request, cancellationToken), cancellationToken);
 
-    public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, bool> includeChange, CancellationToken cancellationToken = default)
-        => Task.Run(() => Apply(request, includeChange, cancellationToken), cancellationToken);
+    public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, bool> includeChange, Action<IReadOnlyList<RawChange>>? onChangesComputed = null, CancellationToken cancellationToken = default)
+        => Task.Run(() => Apply(request, includeChange, onChangesComputed, cancellationToken), cancellationToken);
 
     public Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(string desiredStateDirectory, CancellationToken cancellationToken = default)
         => Task.Run(() => AnalyzeProgrammables(desiredStateDirectory), cancellationToken);
 
-    public async Task ExecuteScriptAsync(string connectionString, string script, CancellationToken cancellationToken = default)
+    public Task ExecuteScriptAsync(string connectionString, string script, CancellationToken cancellationToken = default)
+        => ExecuteScriptAsync(connectionString, script, Array.Empty<Schemorph.Core.Ledger.LedgerEntry>(), cancellationToken);
+
+    public async Task ExecuteScriptAsync(
+        string connectionString, string script,
+        IReadOnlyList<Schemorph.Core.Ledger.LedgerEntry> ledgerEntries, CancellationToken cancellationToken = default)
     {
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
@@ -46,6 +51,11 @@ public sealed class SqlServerProvider : IDatabaseProvider
             {
                 await using var command = new SqlCommand(batch, connection, transaction);
                 await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+            // ADR-0004: the ledger rows commit with the script or not at all.
+            foreach (var entry in ledgerEntries)
+            {
+                await LedgerSql.InsertAsync(connection, transaction, entry, cancellationToken);
             }
             await transaction.CommitAsync(cancellationToken);
         }
@@ -96,7 +106,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
     // ------------------------------------------------------------------ apply
 
-    private static ApplyResult Apply(ApplyRequest request, Func<RawChange, bool> includeChange, CancellationToken cancellationToken)
+    private static ApplyResult Apply(ApplyRequest request, Func<RawChange, bool> includeChange, Action<IReadOnlyList<RawChange>>? onChangesComputed, CancellationToken cancellationToken)
     {
         using var session = ComparisonSession.Open(request.DesiredStateDirectory, request.ConnectionString, cancellationToken);
         if (session.ModelErrors.Count > 0)
@@ -113,9 +123,11 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
         var applied = new List<RawChange>();
         var excluded = new List<RawChange>();
+        var all = new List<RawChange>();
         foreach (var difference in result.Differences)
         {
             var change = ToRawChange(difference);
+            all.Add(change);
             if (includeChange(change))
             {
                 applied.Add(change);
@@ -126,6 +138,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
                 result.Exclude(difference);
             }
         }
+
+        onChangesComputed?.Invoke(all);
 
         if (applied.Count == 0)
         {
@@ -367,6 +381,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
             // Report the full delta; inclusion policy is injected by the core.
             comparison.Options.BlockOnPossibleDataLoss = false;
             comparison.Options.DropObjectsNotInSource = true;
+            // ADR-0004: a mid-stream publish failure must leave the schema untouched.
+            comparison.Options.IncludeTransactionalScripts = true;
 
             return new ComparisonSession
             {

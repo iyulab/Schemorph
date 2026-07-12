@@ -86,7 +86,7 @@ The SQL Server provider wraps DacFx in-process (see [ADR-0001](./adr/0001-csharp
 
 ### CLI
 
-A `dotnet tool` plus standalone native binaries. Verb-oriented (`inspect`, `diff`, `apply`, `status`, ...), with `--format json` universally available. Exit codes are semantic. Exact verb set and flags evolve with usage.
+A `dotnet tool` plus standalone native binaries. Verb-oriented (`inspect`, `diff`, `apply`, `status`, ...), with `--format json` universally available. Exit codes are semantic and failures carry a typed error envelope ([errors.md](./errors.md)). Exact verb set and flags evolve with usage.
 
 ### MCP Server
 

@@ -43,12 +43,19 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
         var redefined = new List<string>();
         foreach (var obj in pending)
         {
-            await provider.ExecuteScriptAsync(connectionString, obj.ApplyScript, cancellationToken);
-            await ledger.AppendAsync(connectionString, new[]
+            // Ledger row commits in the same transaction as the script (ADR-0004).
+            var entry = new LedgerEntry(LedgerKind, obj.ObjectName, "Redefine", ChecksumOf(obj),
+                Succeeded: true, Detail: obj.ObjectType);
+            try
             {
-                new LedgerEntry(LedgerKind, obj.ObjectName, "Redefine", ChecksumOf(obj),
-                    Succeeded: true, Detail: obj.ObjectType),
-            }, cancellationToken);
+                await provider.ExecuteScriptAsync(connectionString, obj.ApplyScript, new[] { entry }, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                await ledger.AppendFailureBestEffortAsync(
+                    connectionString, entry with { Succeeded = false, Detail = ex.Message }, cancellationToken);
+                throw;
+            }
             redefined.Add(obj.ObjectName);
         }
 

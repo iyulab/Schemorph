@@ -37,25 +37,12 @@ public sealed class SqlServerLedgerStore : ILedgerStore
     {
         if (entries.Count == 0) return;
 
-        var appliedBy = $"{Environment.UserName}@{Environment.MachineName}";
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
 
         foreach (var entry in entries)
         {
-            await using var command = new SqlCommand($"""
-                INSERT dbo.{LedgerObjects.HistoryTable}
-                    (Kind, ObjectName, Operation, Checksum, AppliedBy, Succeeded, Detail)
-                VALUES (@kind, @objectName, @operation, @checksum, @appliedBy, @succeeded, @detail);
-                """, connection);
-            command.Parameters.AddWithValue("@kind", entry.Kind);
-            command.Parameters.AddWithValue("@objectName", entry.ObjectName);
-            command.Parameters.AddWithValue("@operation", entry.Operation);
-            command.Parameters.AddWithValue("@checksum", (object?)entry.Checksum ?? DBNull.Value);
-            command.Parameters.AddWithValue("@appliedBy", appliedBy);
-            command.Parameters.AddWithValue("@succeeded", entry.Succeeded);
-            command.Parameters.AddWithValue("@detail", (object?)entry.Detail ?? DBNull.Value);
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            await LedgerSql.InsertAsync(connection, transaction: null, entry, cancellationToken);
         }
     }
 

@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\Schemorph.Core\Schemorph.Core.csproj" />
@@ -7,9 +7,30 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <AssemblyName>schemorph</AssemblyName>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <!-- dotnet tool packaging. Version is overridden by the release workflow
+       (-p:Version=<tag>); the -dev default marks local builds unambiguously. -->
+  <PropertyGroup>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>schemorph</ToolCommandName>
+    <PackageId>Schemorph</PackageId>
+    <Version>0.1.0-dev</Version>
+    <Description>Declarative, SQL-first schema management for SQL Server: diff for structure, idempotent re-definition for programmable objects, versioned migrations for data — one plan, one history ledger, agent-friendly output.</Description>
+    <Authors>iyulab</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/iyulab/Schemorph</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/iyulab/Schemorph</PackageProjectUrl>
+    <PackageTags>sql-server;schema;migrations;database;devops;dacfx</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
 </Project>

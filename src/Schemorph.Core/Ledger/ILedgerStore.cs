@@ -18,6 +18,32 @@ public interface ILedgerStore
     Task<IReadOnlyList<LedgerEntry>> ReadAsync(string connectionString, string kind, CancellationToken cancellationToken = default);
 }
 
+public static class LedgerStoreExtensions
+{
+    /// <summary>
+    /// Record a failure row (ADR-0004 decision 4). Best effort by design: a ledger
+    /// that cannot be written to must never mask the error being recorded. Detail
+    /// text is redacted here — the ledger persists, so this sink must never store
+    /// credential material that an error message happened to embed.
+    /// </summary>
+    public static async Task AppendFailureBestEffortAsync(
+        this ILedgerStore ledger, string connectionString, LedgerEntry failure, CancellationToken cancellationToken = default)
+    {
+        if (failure.Detail is not null)
+        {
+            failure = failure with { Detail = Redaction.Redact(failure.Detail) };
+        }
+        try
+        {
+            await ledger.AppendAsync(connectionString, new[] { failure }, cancellationToken);
+        }
+        catch
+        {
+            // Swallowed deliberately; the caller rethrows the original error.
+        }
+    }
+}
+
 /// <summary>One applied change, as recorded in the ledger.</summary>
 /// <param name="Kind">declarative | redefine | migration</param>
 public sealed record LedgerEntry(

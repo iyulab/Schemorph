@@ -66,7 +66,8 @@ Every command supports structured output and safe-by-default semantics:
 
 - `--format json` on every command — plans, diffs, and errors as machine-parseable structures
 - `diff` is always a dry run; `apply` requires explicit invocation, and destructive operations require an explicit flag
-- Exit codes distinguish "no changes", "changes pending", and "error" so agents can branch on them
+- Exit codes distinguish "no changes", "changes pending", and "error", and failures carry a typed `{kind, code, message, hint}` envelope — see [Errors and exit codes](./docs/errors.md)
+- Credentials come from the `SCHEMORPH_URL` environment variable (preferred over `--url`), and password material is redacted from every output channel — safe to pipe into logs and PR comments
 - An MCP server exposing the same operations as tools is a first-class deliverable, not a wrapper
 
 The goal: an AI agent should be able to manage a schema change end-to-end — inspect, plan, review, apply — without screen-scraping human-oriented output.
@@ -78,7 +79,7 @@ The goal: an AI agent should be able to manage a schema change end-to-end — in
 
 ## Installation
 
-> Not yet published. Planned distribution:
+> Not yet published — the tag-triggered release pipeline is in place; the first `v*` tag ships. Distribution:
 
 ```bash
 dotnet tool install -g Schemorph        # .NET tool

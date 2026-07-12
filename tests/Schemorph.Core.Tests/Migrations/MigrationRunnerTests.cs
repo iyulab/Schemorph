@@ -8,8 +8,10 @@ public sealed class MigrationRunnerTests : IDisposable
 {
     private readonly string _dir = Directory.CreateDirectory(
         Path.Combine(Path.GetTempPath(), $"schemorph-mig-{Guid.NewGuid():N}")).FullName;
-    private readonly FakeProvider _provider = new();
     private readonly FakeLedger _ledger = new();
+    private readonly FakeProvider _provider;
+
+    public MigrationRunnerTests() => _provider = new FakeProvider { Ledger = _ledger };
 
     private MigrationRunner Runner => new(_provider, _ledger);
 
@@ -79,6 +81,53 @@ public sealed class MigrationRunnerTests : IDisposable
             MigrationScript.ComputeChecksum("INSERT A;\r\nINSERT B;"),
             MigrationScript.ComputeChecksum("INSERT A;\nINSERT B;"));
         await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Migration_commits_its_ledger_entry_with_the_script()
+    {
+        // ADR-0004 decision 2: script and ledger row are one atomic unit — the entry
+        // must travel WITH the script into the provider, not in a later append.
+        var path = WriteMigration("V1__seed.sql", "INSERT A;");
+
+        await Runner.RunAsync(_dir, "conn");
+
+        var (script, entries) = Assert.Single(_provider.AtomicExecutions);
+        Assert.Equal("INSERT A;", script);
+        var entry = Assert.Single(entries);
+        Assert.Equal("V1__seed.sql", entry.ObjectName);
+        Assert.Equal(MigrationScript.ComputeChecksum(File.ReadAllText(path)), entry.Checksum);
+        Assert.True(entry.Succeeded);
+    }
+
+    [Fact]
+    public async Task Failed_migration_records_a_failure_row_and_stops()
+    {
+        WriteMigration("V1__ok.sql", "INSERT A;");
+        WriteMigration("V2__bad.sql", "FAILING;");
+        WriteMigration("V3__after.sql", "INSERT C;");
+        var provider = new FakeProvider { Ledger = _ledger, FailOnScriptContaining = "FAILING" };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new MigrationRunner(provider, _ledger).RunAsync(_dir, "conn"));
+
+        Assert.Equal(new[] { "INSERT A;" }, provider.ExecutedScripts);   // fail-fast: V3 never ran
+        var failure = Assert.Single(_ledger.Entries, e => !e.Succeeded);
+        Assert.Equal("V2__bad.sql", failure.ObjectName);
+        Assert.Contains("boom", failure.Detail);
+    }
+
+    [Fact]
+    public async Task Failure_row_write_failure_never_masks_the_original_error()
+    {
+        WriteMigration("V1__bad.sql", "FAILING;");
+        var provider = new FakeProvider { Ledger = _ledger, FailOnScriptContaining = "FAILING" };
+        _ledger.AppendThrows = true;
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new MigrationRunner(provider, _ledger).RunAsync(_dir, "conn"));
+
+        Assert.Contains("boom", ex.Message);   // the script error, not "ledger unavailable"
     }
 
     [Fact]

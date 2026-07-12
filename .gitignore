@@ -6,4 +6,5 @@ bin/
 obj/
 publish/
 publish-*/
+.artifacts/
 *.user

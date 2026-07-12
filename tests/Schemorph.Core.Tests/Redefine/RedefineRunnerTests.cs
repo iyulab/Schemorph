@@ -9,8 +9,10 @@ public sealed class RedefineRunnerTests : IDisposable
 {
     private readonly string _dir = Directory.CreateDirectory(
         Path.Combine(Path.GetTempPath(), $"schemorph-redef-{Guid.NewGuid():N}")).FullName;
-    private readonly FakeProvider _provider = new();
     private readonly FakeLedger _ledger = new();
+    private readonly FakeProvider _provider;
+
+    public RedefineRunnerTests() => _provider = new FakeProvider { Ledger = _ledger };
 
     private RedefineRunner Runner => new(_provider, _ledger);
 
@@ -141,6 +143,38 @@ public sealed class RedefineRunnerTests : IDisposable
 
         var entry = Assert.Single(_ledger.Entries);
         Assert.Equal(ContentChecksum.Compute("BODY"), entry.Checksum);
+    }
+
+    [Fact]
+    public async Task Redefine_commits_its_ledger_entry_with_the_script()
+    {
+        // ADR-0004 decision 2: the redefine row commits in the script's transaction.
+        var obj = Obj("dbo.P", "Procedure", "BODY");
+
+        await Runner.RunAsync(Analysis(obj), "conn");
+
+        var (script, entries) = Assert.Single(_provider.AtomicExecutions);
+        Assert.Equal("CREATE OR ALTER -- BODY", script);
+        var entry = Assert.Single(entries);
+        Assert.Equal("dbo.P", entry.ObjectName);
+        Assert.True(entry.Succeeded);
+    }
+
+    [Fact]
+    public async Task Failed_redefine_records_a_failure_row_and_stops()
+    {
+        var analysis = Analysis(
+            Obj("dbo.AAA", "View", "SELECT * FROM dbo.ZZZ", "dbo.ZZZ"),
+            Obj("dbo.ZZZ", "View", "FAILING"));
+        var provider = new FakeProvider { Ledger = _ledger, FailOnScriptContaining = "FAILING" };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new RedefineRunner(provider, _ledger).RunAsync(analysis, "conn"));
+
+        Assert.Empty(provider.ExecutedScripts);   // dbo.ZZZ failed first; dbo.AAA never ran
+        var failure = Assert.Single(_ledger.Entries, e => !e.Succeeded);
+        Assert.Equal("dbo.ZZZ", failure.ObjectName);
+        Assert.Contains("boom", failure.Detail);
     }
 
     [Fact]

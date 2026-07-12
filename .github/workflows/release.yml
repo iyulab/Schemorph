@@ -1,0 +1,66 @@
+# Release: tag-triggered (v*). Binaries are attached straight to the GitHub
+# Release with gh — no workflow artifacts are ever uploaded (storage policy).
+# NuGet publish runs only when the NUGET_API_KEY secret exists.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # gh release create
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Resolve version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: dotnet test -c Release
+
+      - name: Pack dotnet tool
+        run: dotnet pack src/Schemorph.Cli -c Release -p:Version=$VERSION -o packages
+
+      # ADR-0001: self-contained, un-trimmed, single-file self-extract (no AOT),
+      # so every RID cross-publishes from Linux.
+      - name: Publish binaries
+        run: |
+          for rid in win-x64 linux-x64 osx-arm64; do
+            dotnet publish src/Schemorph.Cli -c Release -r "$rid" --self-contained \
+              -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
+              -p:Version=$VERSION -o "publish/$rid"
+          done
+          mkdir dist
+          (cd publish/win-x64  && zip -q ../../dist/schemorph-$VERSION-win-x64.zip schemorph.exe)
+          tar -C publish/linux-x64 -czf dist/schemorph-$VERSION-linux-x64.tar.gz schemorph
+          tar -C publish/osx-arm64 -czf dist/schemorph-$VERSION-osx-arm64.tar.gz schemorph
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* packages/*.nupkg \
+            --title "schemorph $VERSION" --generate-notes
+
+      - name: Push to NuGet
+        if: env.NUGET_API_KEY != ''
+        run: |
+          dotnet nuget push packages/*.nupkg \
+            --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate

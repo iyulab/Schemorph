@@ -1,0 +1,1 @@
+Delete Table dbo.Old
