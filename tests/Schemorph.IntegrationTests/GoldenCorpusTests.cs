@@ -43,7 +43,9 @@ public sealed class GoldenCorpusTests : IDisposable
             await provider.ExecuteScriptAsync(_db.Url, File.ReadAllText(setup));
         }
 
-        var compared = await provider.CompareAsync(new CompareRequest(Path.Combine(dir, "desired"), _db.Url));
+        var state = await provider.LoadDesiredStateAsync(Path.Combine(dir, "desired"));
+        Assert.Empty(state.Errors);
+        var compared = await provider.CompareAsync(new CompareRequest(state, _db.Url));
         Assert.DoesNotContain(compared.Messages, m => m.Severity == "Error");
 
         var actual = compared.Changes

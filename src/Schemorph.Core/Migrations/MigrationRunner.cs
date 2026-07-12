@@ -63,8 +63,7 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
         var warnings = new List<RawMessage>();
         foreach (var script in pending)
         {
-            var signals = await provider.LintMigrationScriptAsync(
-                File.ReadAllText(script.FilePath), cancellationToken);
+            var signals = await provider.LintMigrationScriptAsync(script.Text, cancellationToken);
             warnings.AddRange(signals.Select(signal => Warn(script.FileName, signal)));
         }
 
@@ -102,8 +101,9 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
             var entry = new LedgerEntry(LedgerKind, script.FileName, "Run", script.Checksum, Succeeded: true, Detail: null);
             try
             {
+                // The discovery snapshot runs — the same text the checksum covers.
                 await provider.ExecuteScriptAsync(
-                    connectionString, File.ReadAllText(script.FilePath), new[] { entry }, cancellationToken);
+                    connectionString, script.Text, new[] { entry }, cancellationToken);
             }
             catch (Exception ex)
             {

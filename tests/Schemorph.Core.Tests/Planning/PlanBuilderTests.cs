@@ -118,7 +118,7 @@ public class PlanBuilderTests
         var pending = new[]
         {
             new PendingRedefine(
-                new ProgrammableObjectInfo("dbo.P", "Procedure", "p.sql", "CREATE OR ALTER ...", Array.Empty<string>()),
+                new ProgrammableObjectInfo("dbo.P", "Procedure", "p.sql", "CREATE ...", "CREATE OR ALTER ...", Array.Empty<string>()),
                 RedefineReason.ChecksumChanged).ToPlanAction(),
         };
 

@@ -128,8 +128,10 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
             : ledger.AppendAsync(connectionString, tombstones, cancellationToken);
     }
 
+    // The checksum judges the loaded snapshot (never a re-read), so the ledger
+    // records exactly the content whose apply script ran.
     private static string ChecksumOf(ProgrammableObjectInfo obj) =>
-        ContentChecksum.Compute(File.ReadAllText(obj.FilePath));
+        ContentChecksum.Compute(obj.FileText);
 
     /// <summary>Kahn topological sort, stable (alphabetical among ready nodes).</summary>
     private static List<ProgrammableObjectInfo> TopologicalOrder(IReadOnlyList<ProgrammableObjectInfo> objects)

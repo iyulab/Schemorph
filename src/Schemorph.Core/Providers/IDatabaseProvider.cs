@@ -20,6 +20,14 @@ public interface IDatabaseProvider
     /// </summary>
     Task<InspectResult> InspectAsync(InspectRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Load and classify a desired-state directory (dialect knowledge: what is a
+    /// model file vs a deploy script / seed DML). Loaded ONCE per operation and
+    /// passed back into compare/apply/analyze, so a single operation never
+    /// re-reads or re-parses the directory.
+    /// </summary>
+    Task<IDesiredState> LoadDesiredStateAsync(string desiredStateDirectory, CancellationToken cancellationToken = default);
+
     /// <summary>Compare desired state against a live database → raw structural changes.</summary>
     Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken cancellationToken = default);
 
@@ -56,7 +64,7 @@ public interface IDatabaseProvider
     /// (dialect knowledge: CREATE OR ALTER), and dependencies within the set.
     /// Ordering and checksum policy stay in the core.
     /// </summary>
-    Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(string desiredStateDirectory, CancellationToken cancellationToken = default);
+    Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(IDesiredState desiredState, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Of the given desired-state programmable objects, the subset whose live
@@ -94,6 +102,27 @@ public enum MigrationLintSignal
     PermissionChange,
 }
 
+/// <summary>
+/// A desired-state directory, loaded and classified once by its provider
+/// (<see cref="IDatabaseProvider.LoadDesiredStateAsync"/>) and passed back into
+/// compare/apply/analyze — one load (file I/O + classification parse) serves
+/// every step of an operation. Opaque above the boundary: only the
+/// classification outcome is visible, never how the provider models the files.
+/// A state with <see cref="Errors"/> must not be passed onward; callers fail
+/// their operation first (providers throw if one slips through).
+/// </summary>
+public interface IDesiredState
+{
+    /// <summary>
+    /// Classification skip warnings (deploy scripts, seed DML) — the caller
+    /// surfaces them exactly once per operation, on the plan/apply messages.
+    /// </summary>
+    IReadOnlyList<RawMessage> Warnings { get; }
+
+    /// <summary>Load/classification errors (e.g. an unparseable model file), file-attributed.</summary>
+    IReadOnlyList<RawMessage> Errors { get; }
+}
+
 public sealed record InspectRequest(string ConnectionString);
 
 /// <summary>One rendered desired-state file, e.g. ("tables/dbo.Orders.sql", "CREATE TABLE ...").</summary>
@@ -101,7 +130,7 @@ public sealed record DesiredStateFile(string RelativePath, string Content);
 
 public sealed record InspectResult(IReadOnlyList<DesiredStateFile> Files);
 
-public sealed record CompareRequest(string DesiredStateDirectory, string ConnectionString);
+public sealed record CompareRequest(IDesiredState DesiredState, string ConnectionString);
 
 /// <summary>Provider-raw comparison output, in Schemorph terms (no engine types).</summary>
 public sealed record CompareResult(
@@ -128,12 +157,18 @@ public sealed record RawChange(string Operation, string ObjectType, string Objec
 public sealed record RawMessage(string Severity, string Code, string Text);
 
 /// <summary>One desired-state programmable object, in Schemorph terms.</summary>
+/// <param name="FileText">
+/// The defining file's text at load time. Checksums and live-definition
+/// matching judge THIS snapshot — the one the apply script was derived from —
+/// so what is recorded is always what actually ran, never a later re-read.
+/// </param>
 /// <param name="ApplyScript">Idempotent re-definition script (e.g. CREATE OR ALTER rewrite of the file).</param>
 /// <param name="DependsOn">Names of other programmable objects this one references.</param>
 public sealed record ProgrammableObjectInfo(
     string ObjectName,
     string ObjectType,
     string FilePath,
+    string FileText,
     string ApplyScript,
     IReadOnlyList<string> DependsOn);
 
@@ -141,7 +176,7 @@ public sealed record ProgrammableAnalysis(
     IReadOnlyList<ProgrammableObjectInfo> Objects,
     IReadOnlyList<RawMessage> Messages);
 
-public sealed record ApplyRequest(string DesiredStateDirectory, string ConnectionString);
+public sealed record ApplyRequest(IDesiredState DesiredState, string ConnectionString);
 
 public sealed record ApplyResult(
     bool Success,

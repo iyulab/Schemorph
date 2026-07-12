@@ -19,6 +19,13 @@ public sealed class AnalyzeProgrammablesTests : IDisposable
         File.WriteAllText(path, content);
     }
 
+    private async Task<Schemorph.Core.Providers.ProgrammableAnalysis> AnalyzeAsync()
+    {
+        var state = await _provider.LoadDesiredStateAsync(_dir);
+        Assert.Empty(state.Errors);
+        return await _provider.AnalyzeProgrammablesAsync(state);
+    }
+
     private void WriteCustomerSchema()
     {
         WriteFile(@"tables\dbo.Customers.sql", """
@@ -37,7 +44,7 @@ public sealed class AnalyzeProgrammablesTests : IDisposable
     {
         WriteCustomerSchema();
 
-        var analysis = await _provider.AnalyzeProgrammablesAsync(_dir);
+        var analysis = await AnalyzeAsync();
 
         Assert.Empty(analysis.Messages);
         Assert.Equal(2, analysis.Objects.Count);   // the table is structural, not programmable
@@ -55,7 +62,7 @@ public sealed class AnalyzeProgrammablesTests : IDisposable
     {
         WriteCustomerSchema();
 
-        var analysis = await _provider.AnalyzeProgrammablesAsync(_dir);
+        var analysis = await AnalyzeAsync();
 
         var view = Assert.Single(analysis.Objects, o => o.ObjectName == "dbo.CustomerNames");
         Assert.Empty(view.DependsOn);   // depends only on the table — outside the set
@@ -69,7 +76,7 @@ public sealed class AnalyzeProgrammablesTests : IDisposable
     {
         WriteCustomerSchema();
 
-        var analysis = await _provider.AnalyzeProgrammablesAsync(_dir);
+        var analysis = await AnalyzeAsync();
 
         var view = Assert.Single(analysis.Objects, o => o.ObjectName == "dbo.CustomerNames");
         Assert.Contains("CREATE OR ALTER VIEW", view.ApplyScript);
@@ -82,7 +89,7 @@ public sealed class AnalyzeProgrammablesTests : IDisposable
     {
         WriteFile(@"views\dbo.V.sql", "CREATE OR ALTER VIEW dbo.V AS SELECT 1 AS One;");
 
-        var analysis = await _provider.AnalyzeProgrammablesAsync(_dir);
+        var analysis = await AnalyzeAsync();
 
         var view = Assert.Single(analysis.Objects);
         Assert.DoesNotContain("CREATE OR ALTER OR ALTER", view.ApplyScript);
@@ -99,7 +106,7 @@ public sealed class AnalyzeProgrammablesTests : IDisposable
             CREATE TRIGGER dbo.TrgCustomers ON dbo.Customers AFTER INSERT AS BEGIN SET NOCOUNT ON; END;
             """);
 
-        var analysis = await _provider.AnalyzeProgrammablesAsync(_dir);
+        var analysis = await AnalyzeAsync();
 
         var trigger = Assert.Single(analysis.Objects);
         Assert.Equal("DmlTrigger", trigger.ObjectType);
@@ -116,7 +123,7 @@ public sealed class AnalyzeProgrammablesTests : IDisposable
             CREATE VIEW dbo.B AS SELECT 2 AS Two;
             """);
 
-        var analysis = await _provider.AnalyzeProgrammablesAsync(_dir);
+        var analysis = await AnalyzeAsync();
 
         var message = Assert.Single(analysis.Messages, m => m.Severity == "Error");
         Assert.Contains("two.sql", message.Text);
@@ -129,7 +136,7 @@ public sealed class AnalyzeProgrammablesTests : IDisposable
     {
         WriteFile(@"views\dbo.Broken.sql", "CREATE VIEW dbo.Broken AS SELECT Id FROM dbo.DoesNotExist;");
 
-        var analysis = await _provider.AnalyzeProgrammablesAsync(_dir);
+        var analysis = await AnalyzeAsync();
 
         Assert.Empty(analysis.Objects);
         Assert.Contains(analysis.Messages, m => m.Severity == "Error");

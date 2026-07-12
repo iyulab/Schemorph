@@ -53,7 +53,7 @@ In text mode the same information renders as `error[<code>]: <message> (<hint>)`
 | `invalid_arguments` | `usage` | Required options missing |
 | `schema_dir_not_found` | `usage` | `--schema` directory does not exist |
 | `migrations_dir_not_found` | `usage` | `--migrations` directory does not exist |
-| `invalid_desired_state` | `invalid_state` | Desired-state files fail model validation (e.g. `SCHEMORPH003/004`) |
+| `invalid_desired_state` | `invalid_state` | Desired-state files fail to load or validate (e.g. `SCHEMORPH003/004/007`) — same code on every verb, `diff`/`status`/`apply` alike |
 | `migration_failed` | `invalid_state` | Duplicate versions, or an applied migration was edited (tamper detection) |
 | `redefine_failed` | `invalid_state` | Dependency cycle among programmable objects |
 | `plan_mismatch` | `invalid_state` | `apply --expect-plan` (or MCP `expectedPlanHash`): the plan computed at apply time differs from the reviewed fingerprint — nothing was applied; re-run `diff`, review, retry with the new hash |

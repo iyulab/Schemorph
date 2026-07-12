@@ -5,10 +5,8 @@ using Schemorph.Core.Redefine;
 
 namespace Schemorph.Core.Tests.Redefine;
 
-public sealed class RedefineRunnerTests : IDisposable
+public sealed class RedefineRunnerTests
 {
-    private readonly string _dir = Directory.CreateDirectory(
-        Path.Combine(Path.GetTempPath(), $"schemorph-redef-{Guid.NewGuid():N}")).FullName;
     private readonly FakeLedger _ledger = new();
     private readonly FakeProvider _provider;
 
@@ -16,12 +14,9 @@ public sealed class RedefineRunnerTests : IDisposable
 
     private RedefineRunner Runner => new(_provider, _ledger);
 
-    private ProgrammableObjectInfo Obj(string name, string type, string body, params string[] dependsOn)
-    {
-        var path = Path.Combine(_dir, $"{name}.sql");
-        File.WriteAllText(path, body);
-        return new ProgrammableObjectInfo(name, type, path, $"CREATE OR ALTER -- {body}", dependsOn);
-    }
+    // No disk involved: the runner judges the loaded FileText snapshot, never a re-read.
+    private static ProgrammableObjectInfo Obj(string name, string type, string body, params string[] dependsOn) =>
+        new(name, type, $"{name}.sql", body, $"CREATE OR ALTER -- {body}", dependsOn);
 
     private static ProgrammableAnalysis Analysis(params ProgrammableObjectInfo[] objects) =>
         new(objects, Array.Empty<RawMessage>());
@@ -293,6 +288,4 @@ public sealed class RedefineRunnerTests : IDisposable
         Assert.Equal("Drop", entry.Operation);
         Assert.Null(entry.Checksum);
     }
-
-    public void Dispose() => Directory.Delete(_dir, recursive: true);
 }

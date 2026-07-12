@@ -74,9 +74,10 @@ Safety linting (detecting destructive drops, non-nullable additions without defa
 A provider supplies, at minimum:
 
 1. **Inspect** — read a live database into desired-state SQL files
-2. **Compare** — desired state vs. live database → raw structural changes (strategy 1)
-3. **Execute** — run generated SQL and object re-definitions transactionally where the database allows
-4. **Dialect knowledge** — object classification, `CREATE OR ALTER` equivalents, quoting, batch separators
+2. **Load** — read and classify a desired-state directory once per operation (model files vs. deploy scripts/seed DML); the resulting handle feeds compare, apply, and programmable analysis so a single operation never re-reads or re-parses the directory
+3. **Compare** — desired state vs. live database → raw structural changes (strategy 1)
+4. **Execute** — run generated SQL and object re-definitions transactionally where the database allows
+5. **Dialect knowledge** — object classification, `CREATE OR ALTER` equivalents, quoting, batch separators
 
 The core owns everything else. A provider should never need to know about the ledger format, the plan format, the CLI, or the MCP surface.
 

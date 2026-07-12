@@ -28,10 +28,21 @@ public sealed class CoreLoopTests : IDisposable
         return path;
     }
 
-    private Task<ApplyResult> Apply(
+    /// <summary>Load-first, mirroring the operations: one desired-state load per call.</summary>
+    private async Task<IDesiredState> LoadAsync(string schemaDir)
+    {
+        var state = await _provider.LoadDesiredStateAsync(schemaDir);
+        Assert.Empty(state.Errors);
+        return state;
+    }
+
+    private async Task<ApplyResult> Apply(
         string schemaDir, bool allowDestructive = false, Action<IReadOnlyList<RawChange>>? onChangesComputed = null) =>
-        _provider.ApplyAsync(new ApplyRequest(schemaDir, _db.Url),
+        await _provider.ApplyAsync(new ApplyRequest(await LoadAsync(schemaDir), _db.Url),
             c => PlanBuilder.ShouldInclude(c, allowDestructive), onChangesComputed);
+
+    private async Task<ProgrammableAnalysis> AnalyzeAsync(string schemaDir) =>
+        await _provider.AnalyzeProgrammablesAsync(await LoadAsync(schemaDir));
 
     [SkippableFact]
     public async Task Apply_creates_the_schema_and_a_second_compare_converges_to_zero()
@@ -55,7 +66,8 @@ public sealed class CoreLoopTests : IDisposable
         Assert.False(tableExistedAtAnnounce);
         Assert.Equal(1, _db.Scalar<int>("SELECT COUNT(*) FROM sys.tables WHERE name = 'Items'"));
 
-        var again = await _provider.CompareAsync(new CompareRequest(Path.Combine(_dir, "schema"), _db.Url));
+        var again = await _provider.CompareAsync(
+            new CompareRequest(await LoadAsync(Path.Combine(_dir, "schema")), _db.Url));
         Assert.Empty(again.Changes);
     }
 
@@ -129,7 +141,7 @@ public sealed class CoreLoopTests : IDisposable
         await _ledger.EnsureInitializedAsync(_db.Url);
         var runner = new RedefineRunner(_provider, _ledger);
 
-        var analysis = await _provider.AnalyzeProgrammablesAsync(Path.Combine(_dir, "schema"));
+        var analysis = await AnalyzeAsync(Path.Combine(_dir, "schema"));
         Assert.DoesNotContain(analysis.Messages, m => m.Severity == "Error");
         var run = await runner.RunAsync(analysis, _db.Url);
 
@@ -151,7 +163,7 @@ public sealed class CoreLoopTests : IDisposable
             "CREATE VIEW dbo.Existing AS SELECT 1 AS One;\nGO\n");
         await _ledger.EnsureInitializedAsync(_db.Url);
         var runner = new RedefineRunner(_provider, _ledger);
-        var analysis = await _provider.AnalyzeProgrammablesAsync(Path.Combine(_dir, "schema"));
+        var analysis = await AnalyzeAsync(Path.Combine(_dir, "schema"));
 
         // diff view: nothing pending — no phantom redefine on adoption.
         var plan = await runner.PlanAsync(analysis, _db.Url);
@@ -172,7 +184,7 @@ public sealed class CoreLoopTests : IDisposable
         // An edit after adoption is a normal pending redefine — edits always win.
         Write("schema/views/dbo.Existing.sql",
             "CREATE VIEW dbo.Existing AS SELECT 2 AS Two;\nGO\n");
-        var edited = await _provider.AnalyzeProgrammablesAsync(Path.Combine(_dir, "schema"));
+        var edited = await AnalyzeAsync(Path.Combine(_dir, "schema"));
         var afterEdit = await runner.PlanAsync(edited, _db.Url);
         Assert.Equal(new[] { "dbo.Existing" }, afterEdit.Pending.Select(o => o.Object.ObjectName));
     }
@@ -185,7 +197,7 @@ public sealed class CoreLoopTests : IDisposable
             "CREATE VIEW dbo.Drifted AS SELECT 99 AS NinetyNine;\nGO\n");
         await _ledger.EnsureInitializedAsync(_db.Url);
         var runner = new RedefineRunner(_provider, _ledger);
-        var analysis = await _provider.AnalyzeProgrammablesAsync(Path.Combine(_dir, "schema"));
+        var analysis = await AnalyzeAsync(Path.Combine(_dir, "schema"));
 
         var plan = await runner.PlanAsync(analysis, _db.Url);
 

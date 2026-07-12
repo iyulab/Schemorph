@@ -46,8 +46,17 @@ public static class ApplyOperation
         IDatabaseProvider provider, ILedgerStore ledger, Request request,
         Action<Plan>? onPlan = null, CancellationToken cancellationToken = default)
     {
-        // Strategy 2 analysis runs first so a misplaced file fails before any DB work.
-        var programmables = await provider.AnalyzeProgrammablesAsync(request.SchemaDir, cancellationToken);
+        // One load serves analysis and apply — the desired state is read and
+        // classified exactly once per operation, and a broken file fails here,
+        // before any DB work.
+        var state = await provider.LoadDesiredStateAsync(request.SchemaDir, cancellationToken);
+        if (state.Errors.Count > 0)
+        {
+            return Failure(FailureStage.DesiredState, state.Errors);
+        }
+
+        // Strategy 2 analysis runs next, still ahead of any DB work.
+        var programmables = await provider.AnalyzeProgrammablesAsync(state, cancellationToken);
         if (programmables.Messages.Any(m => m.Severity == "Error"))
         {
             return Failure(FailureStage.DesiredState, programmables.Messages);
@@ -68,7 +77,7 @@ public static class ApplyOperation
         try
         {
             result = await provider.ApplyAsync(
-                new ApplyRequest(request.SchemaDir, request.ConnectionString),
+                new ApplyRequest(state, request.ConnectionString),
                 change => PlanBuilder.ShouldInclude(change, request.AllowDestructive),
                 changes =>
                 {
@@ -93,14 +102,18 @@ public static class ApplyOperation
                 new[] { new RawMessage("Error", "plan_mismatch", ex.Message) }) with { Plan = plan };
         }
 
+        // Classification skip warnings surface once per operation, ahead of the
+        // provider's own messages (they used to ride the comparison session).
+        var messages = state.Warnings.Concat(result.Messages).ToList();
+
         if (!result.Success)
         {
-            var errorText = string.Join("; ", result.Messages
+            var errorText = string.Join("; ", messages
                 .Where(m => m.Severity == "Error").Select(m => $"{m.Code}: {m.Text}"));
             await ledger.AppendFailureBestEffortAsync(request.ConnectionString, new LedgerEntry(
                 "declarative", "(publish)", "Publish", Checksum: null,
                 Succeeded: false, Detail: errorText), cancellationToken);
-            return Failure(FailureStage.Publish, result.Messages) with { Plan = plan };
+            return Failure(FailureStage.Publish, messages) with { Plan = plan };
         }
 
         // Every applied change is recorded in the history ledger — the audit trail.
@@ -128,7 +141,7 @@ public static class ApplyOperation
         var excludedVisible = result.ExcludedChanges
             .Where(c => !LedgerObjects.IsLedgerObject(c.ObjectName) && !PlanBuilder.RoutesToRedefine(c))
             .ToList();
-        var visibleMessages = result.Messages
+        var visibleMessages = messages
             .Where(m => !LedgerObjects.IsLedgerObject(m.Text))
             .Select(m => m with { Text = Redaction.Redact(m.Text) })
             .ToList();

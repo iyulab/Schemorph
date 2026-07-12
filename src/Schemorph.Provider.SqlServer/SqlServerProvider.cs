@@ -26,14 +26,17 @@ public sealed class SqlServerProvider : IDatabaseProvider
     public Task<InspectResult> InspectAsync(InspectRequest request, CancellationToken cancellationToken = default)
         => Task.Run(() => Inspect(request, cancellationToken), cancellationToken);
 
+    public Task<IDesiredState> LoadDesiredStateAsync(string desiredStateDirectory, CancellationToken cancellationToken = default)
+        => Task.Run<IDesiredState>(() => SqlServerDesiredState.Load(desiredStateDirectory), cancellationToken);
+
     public Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken cancellationToken = default)
         => Task.Run(() => Compare(request, cancellationToken), cancellationToken);
 
     public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, bool> includeChange, Action<IReadOnlyList<RawChange>>? onChangesComputed = null, CancellationToken cancellationToken = default)
         => Task.Run(() => Apply(request, includeChange, onChangesComputed, cancellationToken), cancellationToken);
 
-    public Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(string desiredStateDirectory, CancellationToken cancellationToken = default)
-        => Task.Run(() => AnalyzeProgrammables(desiredStateDirectory), cancellationToken);
+    public Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(IDesiredState desiredState, CancellationToken cancellationToken = default)
+        => Task.Run(() => AnalyzeProgrammables(SqlServerDesiredState.From(desiredState)), cancellationToken);
 
     public async Task<IReadOnlyList<ProgrammableObjectInfo>> FilterMatchingLiveDefinitionsAsync(
         string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default)
@@ -62,7 +65,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
         return objects
             .Where(o => live.TryGetValue(o.ObjectName, out var definition)
-                        && LiveDefinitionMatcher.Matches(File.ReadAllText(o.FilePath), definition))
+                        && LiveDefinitionMatcher.Matches(o.FileText, definition))
             .ToList();
     }
 
@@ -105,14 +108,15 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
     private static CompareResult Compare(CompareRequest request, CancellationToken cancellationToken)
     {
-        using var session = ComparisonSession.Open(request.DesiredStateDirectory, request.ConnectionString, cancellationToken);
+        var state = SqlServerDesiredState.From(request.DesiredState);
+        using var session = ComparisonSession.Open(state, request.ConnectionString, cancellationToken);
         if (session.ModelErrors.Count > 0)
         {
             return new CompareResult(Array.Empty<RawChange>(), session.ModelErrors, UpdateScript: null);
         }
 
         var result = session.Result!;
-        var messages = session.LoadWarnings.Concat(CollectMessages(result)).ToList();
+        var messages = CollectMessages(result);
         if (messages.Any(m => m.Severity == nameof(DacMessageType.Error)))
         {
             return new CompareResult(Array.Empty<RawChange>(), messages, UpdateScript: null);
@@ -144,14 +148,15 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
     private static ApplyResult Apply(ApplyRequest request, Func<RawChange, bool> includeChange, Action<IReadOnlyList<RawChange>>? onChangesComputed, CancellationToken cancellationToken)
     {
-        using var session = ComparisonSession.Open(request.DesiredStateDirectory, request.ConnectionString, cancellationToken);
+        var state = SqlServerDesiredState.From(request.DesiredState);
+        using var session = ComparisonSession.Open(state, request.ConnectionString, cancellationToken);
         if (session.ModelErrors.Count > 0)
         {
             return new ApplyResult(false, Array.Empty<RawChange>(), Array.Empty<RawChange>(), session.ModelErrors);
         }
 
         var result = session.Result!;
-        var messages = session.LoadWarnings.Concat(CollectMessages(result)).ToList();
+        var messages = CollectMessages(result);
         if (messages.Any(m => m.Severity == nameof(DacMessageType.Error)))
         {
             return new ApplyResult(false, Array.Empty<RawChange>(), Array.Empty<RawChange>(), messages);
@@ -200,25 +205,16 @@ public sealed class SqlServerProvider : IDatabaseProvider
         TableValuedFunction.TypeClass, DmlTrigger.TypeClass,
     };
 
-    private static ProgrammableAnalysis AnalyzeProgrammables(string desiredStateDirectory)
+    private static ProgrammableAnalysis AnalyzeProgrammables(SqlServerDesiredState state)
     {
-        // The loader classifies out deploy scripts / seed DML; its skip warnings are
-        // deliberately NOT included here — they surface once via the compare path,
-        // and both paths share the loader so the file sets always agree.
-        var loaded = DesiredStateLoader.Load(desiredStateDirectory);
-        if (loaded.Errors.Count > 0)
-        {
-            return new ProgrammableAnalysis(Array.Empty<ProgrammableObjectInfo>(), loaded.Errors);
-        }
-
         // Built with per-batch source names so each object knows its defining file.
         // The batch suffix exists because AddOrUpdateObjects REPLACES everything
         // previously registered under the same source name.
         using var model = new TSqlModel(ModelVersion, new TSqlModelOptions());
-        foreach (var file in loaded.ModelFiles)
+        foreach (var file in state.ModelFiles)
         {
             var batchIndex = 0;
-            foreach (var batch in SqlBatchSplitter.Split(file.Text))
+            foreach (var batch in file.Batches)
             {
                 model.AddOrUpdateObjects(NormalizeToCreate(batch), $"{file.Path}::{batchIndex++}", new TSqlObjectOptions());
             }
@@ -235,6 +231,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
         var programmables = model.GetObjects(DacQueryScopes.UserDefined, ProgrammableTypeClasses).ToList();
         var names = programmables.Select(FullName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var textByPath = state.ModelFiles.ToDictionary(f => f.Path, f => f.Text, StringComparer.OrdinalIgnoreCase);
 
         var objects = new List<ProgrammableObjectInfo>();
         foreach (var obj in programmables)
@@ -255,8 +252,9 @@ public sealed class SqlServerProvider : IDatabaseProvider
                 .OrderBy(r => r, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
+            var fileText = textByPath[file];
             objects.Add(new ProgrammableObjectInfo(
-                name, obj.ObjectType.Name, file, RewriteToCreateOrAlter(File.ReadAllText(file)), dependsOn));
+                name, obj.ObjectType.Name, file, fileText, RewriteToCreateOrAlter(fileText), dependsOn));
         }
 
         // ADR-0002: one programmable object per file, with a clear error otherwise —
@@ -386,24 +384,15 @@ public sealed class SqlServerProvider : IDatabaseProvider
     private sealed class ComparisonSession : IDisposable
     {
         public List<RawMessage> ModelErrors { get; private init; } = new();
-        public List<RawMessage> LoadWarnings { get; private init; } = new();
         public SchemaComparisonResult? Result { get; private init; }
         private string? _dacpacPath;
 
-        public static ComparisonSession Open(string desiredStateDirectory, string connectionString, CancellationToken cancellationToken)
+        public static ComparisonSession Open(SqlServerDesiredState state, string connectionString, CancellationToken cancellationToken)
         {
-            // Non-model files (deploy scripts, seed DML) are classified out here,
-            // loudly: the skip warnings ride on this session and reach the plan.
-            var loaded = DesiredStateLoader.Load(desiredStateDirectory);
-            if (loaded.Errors.Count > 0)
-            {
-                return new ComparisonSession { ModelErrors = loaded.Errors.ToList() };
-            }
-
             using var model = new TSqlModel(ModelVersion, new TSqlModelOptions());
-            foreach (var file in loaded.ModelFiles)
+            foreach (var file in state.ModelFiles)
             {
-                foreach (var batch in SqlBatchSplitter.Split(file.Text))
+                foreach (var batch in file.Batches)
                 {
                     model.AddObjects(NormalizeToCreate(batch));
                 }
@@ -435,7 +424,6 @@ public sealed class SqlServerProvider : IDatabaseProvider
             return new ComparisonSession
             {
                 Result = comparison.Compare(cancellationToken),
-                LoadWarnings = loaded.Warnings.ToList(),
                 _dacpacPath = dacpacPath,
             };
         }
