@@ -79,12 +79,12 @@ The goal: an AI agent should be able to manage a schema change end-to-end — in
 
 ## Installation
 
-> Not yet published — the tag-triggered release pipeline is in place; the first `v*` tag ships. Distribution:
-
 ```bash
-dotnet tool install -g Schemorph        # .NET tool
-# plus standalone native binaries (win-x64, linux-x64, osx-arm64) per release
+dotnet tool install -g Schemorph
 ```
+
+Standalone self-contained binaries (win-x64, linux-x64, osx-arm64) are attached to each
+[GitHub release](https://github.com/iyulab/Schemorph/releases) — no .NET runtime required.
 
 ## Documentation
 
