@@ -77,6 +77,7 @@ Warnings never change the exit code.
 | `SCHEMORPH005` | Warning | File skipped: SQLCMD syntax marks it as a deploy script, not desired state |
 | `SCHEMORPH006` | Warning | File skipped: contains imperative statements (EXEC / DML) — not declarative DDL |
 | `SCHEMORPH007` | Error | A `.sql` file failed to parse (file, line, and column are named) |
+| `SCHEMORPH008` | Warning | The comparison was restricted (the connection lacks VIEW ANY DEFINITION) — some object definitions could not be read, so the plan may be incomplete; a partial result must not be read as "in sync" |
 
 ### Safety lint (`SCHEMORPH1xx`)
 

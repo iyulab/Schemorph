@@ -29,7 +29,7 @@ Single-mechanism tools fail predictably: pure diff tools mangle procedure bodies
 | Procedures, functions, views, triggers | **Idempotent re-definition** (`CREATE OR ALTER`) | Bodies are opaque text; re-applying the whole definition is trivially correct where body-diffing is fragile |
 | Data changes (seeds, backfills, one-offs) | **Versioned, checksummed migrations** | Data changes are events, not states; only a ledger can represent them |
 
-This three-way split is an anchor. The exact classification of edge-case object types (sequences, user-defined types, permissions, ...) is an open decision to be made per-provider as implementation reveals their behavior.
+This three-way split is an anchor. The exact classification of edge-case object types (sequences, user-defined types, permissions, ...) is an open decision to be made per-provider as implementation reveals their behavior. **Security principals** (users, logins, roles, role membership, permissions) are the first such edge case settled: on SQL Server they are excluded from the declarative diff — a code-generated desired-state never emits them and dropping a login for being "absent" is the silent destruction §4 forbids ([ADR-0006](./adr/0006-security-principals-out-of-declarative-model.md)).
 
 ## 3. AI agents are a primary user
 

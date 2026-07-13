@@ -199,11 +199,16 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
     // ------------------------------------------------------------------ programmables
 
-    private static readonly ModelTypeClass[] ProgrammableTypeClasses =
-    {
+    // Resolved on demand, never captured at type-load: the DacFx model type-class
+    // statics (Procedure.TypeClass, ...) are only populated once DacFx's model
+    // services have initialized (the first TSqlModel build). Baking them into a
+    // static field lets an earlier touch of any SqlServerProvider static member
+    // freeze them as null, which then NREs every GetObjects for the process.
+    private static ModelTypeClass[] ProgrammableTypeClasses =>
+    [
         Procedure.TypeClass, View.TypeClass, ScalarFunction.TypeClass,
         TableValuedFunction.TypeClass, DmlTrigger.TypeClass,
-    };
+    ];
 
     private static ProgrammableAnalysis AnalyzeProgrammables(SqlServerDesiredState state)
     {
@@ -380,6 +385,51 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
     // ------------------------------------------------------------------ shared
 
+    /// <summary>
+    /// Security principals (users, logins, roles, role membership, permissions)
+    /// are excluded from the SQL Server declarative diff — the open per-provider
+    /// edge-case classification of design principle §2, settled here (ADR-0006).
+    /// They are not the structural state the declarative strategy owns; a code-gen
+    /// desired-state never emits them; and dropping a login because it is "absent
+    /// from the desired state" is exactly the silent destruction §4 forbids
+    /// (DacFx reported <c>DROP USER [app-login]</c> as a non-destructive change,
+    /// slipping past the destructive gate). Managing principals declaratively is a
+    /// future opt-in, added when a consumer actually needs it — not a default.
+    /// </summary>
+    private static readonly ObjectType[] ExcludedSecurityPrincipalTypes =
+    {
+        ObjectType.Users, ObjectType.Logins, ObjectType.LinkedServerLogins,
+        ObjectType.DatabaseRoles, ObjectType.ApplicationRoles, ObjectType.ServerRoles,
+        ObjectType.RoleMembership, ObjectType.ServerRoleMembership, ObjectType.Permissions,
+    };
+
+    /// <summary>
+    /// The comparison policy shared by compare and apply. Reports the full
+    /// structural delta (inclusion policy is injected by the core) minus the
+    /// object classes Schemorph deliberately does not manage declaratively.
+    /// </summary>
+    internal static void ConfigureCompareOptions(DacDeployOptions options)
+    {
+        options.BlockOnPossibleDataLoss = false;
+        options.DropObjectsNotInSource = true;
+        // ADR-0004: a mid-stream publish failure must leave the schema untouched.
+        options.IncludeTransactionalScripts = true;
+        // Column order is not meaningful state for a declarative SQL-first model:
+        // a code-generated CREATE TABLE lists columns in logical order, which
+        // rarely matches a live table's physical ordinal after columns were added
+        // over time. Honoring the difference makes DacFx rebuild the whole table
+        // (new table, copy rows, drop, rename) just to re-seat a column — turning
+        // an additive `ALTER TABLE ADD` into full data motion on every unrelated
+        // table. Ignoring it keeps additive changes in place (§4: don't rebuild a
+        // data-holding table for a cosmetic reorder).
+        options.IgnoreColumnOrder = true;
+        // Security principals are out of the declarative model by default (ADR-0006).
+        options.ExcludeObjectTypes = (options.ExcludeObjectTypes ?? Array.Empty<ObjectType>())
+            .Concat(ExcludedSecurityPrincipalTypes)
+            .Distinct()
+            .ToArray();
+    }
+
     /// <summary>Model build + dacpac + SchemaComparison lifecycle for compare/apply.</summary>
     private sealed class ComparisonSession : IDisposable
     {
@@ -415,11 +465,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
                 new SchemaCompareDacpacEndpoint(dacpacPath),
                 new SchemaCompareDatabaseEndpoint(connectionString));
 
-            // Report the full delta; inclusion policy is injected by the core.
-            comparison.Options.BlockOnPossibleDataLoss = false;
-            comparison.Options.DropObjectsNotInSource = true;
-            // ADR-0004: a mid-stream publish failure must leave the schema untouched.
-            comparison.Options.IncludeTransactionalScripts = true;
+            ConfigureCompareOptions(comparison.Options);
 
             return new ComparisonSession
             {
@@ -434,10 +480,35 @@ public sealed class SqlServerProvider : IDatabaseProvider
         }
     }
 
-    private static List<RawMessage> CollectMessages(SchemaComparisonResult result) =>
-        result.GetErrors()
+    private static List<RawMessage> CollectMessages(SchemaComparisonResult result)
+    {
+        var messages = result.GetErrors()
             .Select(e => new RawMessage(e.MessageType.ToString(), $"{e.Prefix}{e.Number}", e.Message))
             .ToList();
+        if (RestrictedComparisonWarning(messages) is { } restricted)
+        {
+            messages.Add(restricted);
+        }
+        return messages;
+    }
+
+    /// <summary>
+    /// DacFx restricts the comparison to catalog-scoped elements when the login
+    /// cannot read object definitions (no VIEW ANY DEFINITION): programmable
+    /// bodies and other definitions are then not read, so changes to them are
+    /// silently absent from the plan — "no differences" cannot be trusted for the
+    /// objects it could not see. Surface that as an explicit incompleteness
+    /// warning so a partial plan is never mistaken for an in-sync database. Keyed
+    /// on DacFx's own permission-name text; if that ever drifts the warning simply
+    /// does not fire (the raw DacFx warning still shows) — missing beats wrong.
+    /// </summary>
+    internal static RawMessage? RestrictedComparisonWarning(IReadOnlyList<RawMessage> messages) =>
+        messages.Any(m => m.Text.Contains("VIEW ANY DEFINITION", StringComparison.OrdinalIgnoreCase))
+            ? new RawMessage("Warning", "SCHEMORPH008",
+                "The comparison was restricted: the connection lacks VIEW ANY DEFINITION, so not all object " +
+                "definitions could be read and changes to them are absent from this plan — a partial or empty " +
+                "result must not be read as \"in sync\". Grant VIEW ANY DEFINITION for a complete comparison.")
+            : null;
 
     private static RawChange ToRawChange(SchemaDifference difference) => new(
         difference.UpdateAction.ToString(),

@@ -71,20 +71,69 @@ public sealed class CoreLoopTests : IDisposable
         Assert.Empty(again.Changes);
     }
 
-    // The safety lint must survive DacFx's own scripting choices. Inserting a
-    // NOT NULL column WITHOUT a default mid-table makes DacFx rebuild the table
-    // rather than ALTER ADD — the row-copy then omits the new column, so the
-    // same "fails on a row-holding table" hazard is present. This drives the
-    // REAL generated rebuild through the plan+lint path (the hand-written
-    // attributor unit test cannot catch DacFx changing its rebuild shape), so
-    // SCHEMORPH101 must fire alongside the rebuild-cost SCHEMORPH102.
+    // ADR-0006: a principal that lives outside the model (an app login, a
+    // backup-operator account) must not be dropped just because the desired state
+    // is silent about it. Before the fix DacFx planned DROP USER as a
+    // non-destructive change, so a plain column edit would delete the app's login.
+    [SkippableFact]
+    public async Task Principals_absent_from_the_desired_state_are_not_dropped()
+    {
+        _db.Execute("CREATE USER [schemorph_it_principal] WITHOUT LOGIN");
+        _db.Execute("CREATE ROLE [schemorph_it_role]");
+        _db.Execute("CREATE TABLE dbo.Keep (Id INT NOT NULL PRIMARY KEY)");
+        // Desired state has the table but says nothing about the principals.
+        Write("schema/tables/dbo.Keep.sql",
+            "CREATE TABLE dbo.Keep (Id INT NOT NULL PRIMARY KEY);\nGO\n");
+
+        var compared = await _provider.CompareAsync(
+            new CompareRequest(await LoadAsync(Path.Combine(_dir, "schema")), _db.Url));
+
+        Assert.DoesNotContain(compared.Changes, c => c.ObjectName is "schemorph_it_principal" or "schemorph_it_role");
+        Assert.DoesNotContain(compared.Changes,
+            c => c.ObjectType is "User" or "Login" or "Role" && c.Operation is "Delete" or "Drop");
+    }
+
+    // ADR-0006 sibling default: column order is not meaningful state. Adding a
+    // nullable column in a logical mid position must NOT rebuild the table — the
+    // whole reason a code-gen consumer saw 7 unrelated tables rebuilt on a single
+    // additive change. With IgnoreColumnOrder it is an in-place ALTER TABLE ADD.
+    [SkippableFact]
+    public async Task Adding_a_column_mid_table_stays_in_place_not_a_rebuild()
+    {
+        _db.Execute("CREATE TABLE dbo.Ledger (Id INT NOT NULL PRIMARY KEY, Amount INT NOT NULL)");
+        _db.Execute("INSERT INTO dbo.Ledger (Id, Amount) VALUES (1, 100)");
+        // The new column sits logically between the existing two.
+        Write("schema/tables/dbo.Ledger.sql",
+            "CREATE TABLE dbo.Ledger (Id INT NOT NULL PRIMARY KEY, Memo NVARCHAR(50) NULL, Amount INT NOT NULL);\nGO\n");
+
+        var compared = await _provider.CompareAsync(
+            new CompareRequest(await LoadAsync(Path.Combine(_dir, "schema")), _db.Url));
+        var plan = PlanBuilder.Build(compared, allowDestructive: false);
+
+        var change = Assert.Single(plan.Actions, a => a.ObjectName == "dbo.Ledger");
+        Assert.NotNull(change.Sql);
+        Assert.DoesNotContain("tmp_ms_xx", change.Sql);   // no rebuild
+        Assert.Contains("ADD", change.Sql, StringComparison.OrdinalIgnoreCase);   // in-place ALTER ADD
+        Assert.DoesNotContain(plan.Messages, m => m.Code == "SCHEMORPH102");   // no rebuild-cost warning
+    }
+
+    // The safety lint must survive DacFx's own scripting choices. A widened
+    // primary key forces a genuine table rebuild (independent of column order,
+    // which Schemorph now ignores), and the new NOT NULL-without-default column
+    // is omitted from the row-copy INSERT — the same "fails on a row-holding
+    // table" hazard. This drives the REAL generated rebuild through the plan+lint
+    // path (the hand-written attributor unit test cannot catch DacFx changing its
+    // rebuild shape), so SCHEMORPH101 must fire alongside the rebuild-cost
+    // SCHEMORPH102.
     [SkippableFact]
     public async Task Rebuild_that_adds_a_not_null_without_default_column_lints_SCHEMORPH101()
     {
         _db.Execute("CREATE TABLE dbo.Cat (Id INT NOT NULL PRIMARY KEY, Tail INT NOT NULL)");
         _db.Execute("INSERT INTO dbo.Cat (Id, Tail) VALUES (1, 10)");   // a row to fail on
+        // Widening the PK to (Id, Tail) forces a rebuild; Middle is a new NOT NULL
+        // column with no default that the row-copy cannot carry.
         Write("schema/tables/dbo.Cat.sql",
-            "CREATE TABLE dbo.Cat (Id INT NOT NULL PRIMARY KEY, Middle NVARCHAR(30) NOT NULL, Tail INT NOT NULL);\nGO\n");
+            "CREATE TABLE dbo.Cat (Id INT NOT NULL, Tail INT NOT NULL, Middle NVARCHAR(30) NOT NULL, CONSTRAINT PK_Cat PRIMARY KEY (Id, Tail));\nGO\n");
 
         var compared = await _provider.CompareAsync(
             new CompareRequest(await LoadAsync(Path.Combine(_dir, "schema")), _db.Url));
@@ -95,6 +144,29 @@ public sealed class CoreLoopTests : IDisposable
         Assert.Contains("tmp_ms_xx", change.Sql);   // confirms DacFx chose a rebuild
         Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH101");
         Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH102");
+    }
+
+    // The ALTER-ADD shape of the same hazard still lints: adding a NOT NULL column
+    // without a default now stays an in-place ALTER TABLE ADD (column order
+    // ignored, so no rebuild), and SCHEMORPH101 fires without the rebuild-cost
+    // SCHEMORPH102 — the lint follows the hazard, not the scripting shape.
+    [SkippableFact]
+    public async Task In_place_add_of_a_not_null_without_default_column_lints_SCHEMORPH101_only()
+    {
+        _db.Execute("CREATE TABLE dbo.Dog (Id INT NOT NULL PRIMARY KEY, Tail INT NOT NULL)");
+        _db.Execute("INSERT INTO dbo.Dog (Id, Tail) VALUES (1, 10)");   // a row to fail on
+        Write("schema/tables/dbo.Dog.sql",
+            "CREATE TABLE dbo.Dog (Id INT NOT NULL PRIMARY KEY, Middle NVARCHAR(30) NOT NULL, Tail INT NOT NULL);\nGO\n");
+
+        var compared = await _provider.CompareAsync(
+            new CompareRequest(await LoadAsync(Path.Combine(_dir, "schema")), _db.Url));
+        var plan = PlanBuilder.Build(compared, allowDestructive: false);
+
+        var change = Assert.Single(plan.Actions, a => a.ObjectName == "dbo.Dog");
+        Assert.NotNull(change.Sql);
+        Assert.DoesNotContain("tmp_ms_xx", change.Sql);   // in-place, not a rebuild
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH101");
+        Assert.DoesNotContain(plan.Messages, m => m.Code == "SCHEMORPH102");
     }
 
     [SkippableFact]
