@@ -79,6 +79,25 @@ Warnings never change the exit code.
 | `SCHEMORPH007` | Error | A `.sql` file failed to parse (file, line, and column are named) |
 | `SCHEMORPH008` | Warning | The comparison was restricted (the connection lacks VIEW ANY DEFINITION) — some object definitions could not be read, so the plan may be incomplete; a partial result must not be read as "in sync" |
 
+#### `SCHEMORPH008` scope: it is about the declarative diff only
+
+`VIEW ANY DEFINITION` is a **server-scope** permission that DacFx's declarative
+comparison (tables, columns, indexes, constraints) uses to read a complete target
+model. Lacking it restricts *that* comparison, which is what `SCHEMORPH008` reports.
+
+It does **not** gate programmable-object **re-definition**. Views, procedures,
+functions, and triggers are routed to the idempotent redefine strategy (ADR-0002),
+which reads live bodies through its own `sys.sql_modules` query. That column is
+visible to any principal with `VIEW DEFINITION` — or `CONTROL` / `ALTER` /
+`TAKE OWNERSHIP` — on the object or database ([Metadata visibility configuration](https://learn.microsoft.com/sql/relational-databases/security/metadata-visibility-configuration)),
+so a **`db_owner`** login (which has `CONTROL` on its database) reads every body
+without the server-scope grant. Consequently, a minimal-privilege `db_owner` still
+re-defines existing views correctly; only the structural diff's *completeness*
+degrades, and it degrades loudly (`SCHEMORPH008`) rather than silently. A
+programmable object that is *absent* from the plan was reconciled — its live body
+matched the file — never "skipped for lack of permission": an unreadable body makes
+the object **appear** as a redefine, not vanish.
+
 ### Safety lint (`SCHEMORPH1xx`)
 
 Lint findings over the plan, in their own code band. Always warnings — they inform
