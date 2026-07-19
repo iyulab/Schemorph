@@ -45,12 +45,20 @@ Exit criterion: an AI coding agent completes a schema change end-to-end (edit SQ
 
 ## Phase 4 — PostgreSQL provider
 
-Deliberately last and deliberately unspecified ([ADR-0003](docs/adr/0003-postgres-as-second-provider.md)):
+Still deliberately last, and the **engine choice is still deferred** ([ADR-0003](docs/adr/0003-postgres-as-second-provider.md)). What changed (2026-07-20): a first committed consumer supplied a **behavioral** requirement set — managed/non-superuser Postgres with no extension dependency, the three-strategy model at parity, expression-normalized diffs that re-run empty, plan/error/MCP contracts identical across providers, and transactional-DDL apply atomicity as a Postgres-specific opportunity — plus the acceptance scenarios it will judge adoption by. Behavioral requirements do not pick an engine; they become the axes the engine is chosen on.
 
-- [ ] Evaluate engine options as they exist *then* (psqldef subprocess, parser-library binding, native catalog comparison)
+Directional sequence (each stage gated on the previous; the whole phase gated on Phase 3):
+
+- [ ] Requirements capture — record the consumer requirement set and the one design question it opens: whether apply **atomicity** may differ per provider and, if so, that it must be declared in the plan rather than left implicit (ADR-0004 territory). Decided at kickoff, not before.
+- [ ] Evaluate engine options as they exist *then* (psqldef subprocess, parser-library binding, native catalog comparison), scored against those requirements — extension-freedom, control over apply atomicity, control over expression normalization, and single-file distribution all cut against some candidates
 - [ ] ADR recording the choice
-- [ ] Implement behind the provider boundary; revise the boundary where reality disagrees with it
-- [ ] The test that matters: identical commands, file layout, plan format, and ledger semantics on both databases
+- [ ] Implement behind the provider boundary in vertical slices; revise the boundary where reality disagrees with it. Expression-normalized structural diff is the highest-risk slice, not the largest — false re-diffs are this tool category's chronic defect
+- [ ] The test that matters: identical commands, file layout, plan format, and ledger semantics on both databases — run against a real managed-Postgres-shaped target, not only a permissive local container
+
+Doable before that phase, and worth doing on their own merits (not gates):
+
+- [ ] Idempotent re-diff as an explicit golden-corpus case — "apply, then diff again, and the plan is empty" is a provider-independent invariant that SQL Server should pin first
+- [ ] Provider resolution seam — `new SqlServerProvider()` is currently constructed at ~10 call sites in the CLI/MCP surface. A minimal factory (no plugin infrastructure) whenever it is convenient; boundary corrections beyond that wait for the second provider to prove them, per ADR-0003
 
 ## Watching (deliberately not planned)
 
