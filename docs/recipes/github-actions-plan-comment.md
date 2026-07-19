@@ -103,6 +103,10 @@ jobs:
   nobody saw.
 - The comment is updated in place on each push (marker-based), so a PR has one
   living plan, not a trail of stale ones.
+- A plan that never goes empty — the same change reappearing on every PR,
+  including PRs that did not touch it — is usually not drift but an expression
+  the engine does not round-trip; see [Limitations](../limitations.md) for the
+  symptom and the fix.
 
 ## Variants
 

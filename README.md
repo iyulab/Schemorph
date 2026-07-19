@@ -94,7 +94,7 @@ An AI agent manages a schema change end-to-end — inspect, plan, review, apply 
 ## Database Support
 
 - **SQL Server** — initial target. The diff engine builds on [DacFx](https://github.com/microsoft/DacFx) (Microsoft's schema comparison framework, the same engine behind SSDT), giving full-fidelity handling of T-SQL objects from day one.
-- **PostgreSQL** — planned. The provider boundary is designed in from the start; see [ADR-0003](./docs/adr/0003-postgres-as-second-provider.md).
+- **PostgreSQL** — planned, with no committed timeline. The provider boundary is designed in from the start and a first consumer has supplied its requirements, but the engine choice is still deliberately open; see [ADR-0003](./docs/adr/0003-postgres-as-second-provider.md). **If you need PostgreSQL today, Atlas, sqldef, or Flyway will serve you better** — that is a more useful answer than a date we cannot keep.
 
 ## Installation
 
@@ -111,6 +111,7 @@ Standalone self-contained binaries (win-x64, linux-x64, osx-arm64) are attached 
 - [Architecture](./docs/architecture.md) — the three-strategy model, ledger, provider boundary
 - [The plan format](./docs/plan-format.md) — the machine-readable plan contract and its versioning
 - [Errors and exit codes](./docs/errors.md) — the typed error envelope agents branch on, and the safety-lint warning band
+- [Limitations](./docs/limitations.md) — what does not converge or is out of scope, and what to do instead
 - [Recipes](./docs/recipes/) — ready-made integrations (GitHub Actions plan-on-PR comment)
 - [Architecture Decision Records](./docs/adr/) — why the foundational choices were made
 

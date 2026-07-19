@@ -1,4 +1,4 @@
-# Architecture
+﻿# Architecture
 
 This document describes the shape of Schemorph at the level that should remain true across implementation iterations. Component internals, exact schemas, and API signatures are intentionally not specified here.
 
@@ -103,10 +103,14 @@ schema/
   functions/
 migrations/
   V0001__*.sql
-schemorph.json     project configuration (target, paths, safety policy)
 ```
 
-The layout above is the default convention. Schemorph reads configuration to locate things; it does not hard-code the tree.
+The layout above is the default convention; paths are passed as arguments
+(`--schema`, `--migrations`) and the tree is not hard-coded. A project
+configuration file (target, paths, safety policy) is a *designed-for*, not a
+shipped, surface: introducing it is demand-driven and tied to the multi-environment
+work ([Roadmap Phase 3](../ROADMAP.md), [ADR-0006](adr/0006-security-principals-out-of-declarative-model.md)).
+Nothing today reads one.
 
 What *is* enforced is content, not layout: the schema directory is classified file-by-file, and only declarative DDL enters the model. Deploy scripts living alongside model files (SQLCMD `:r`/`:setvar`/`$(var)`, EXEC-only touch-ups, seed DML) are skipped with a per-file warning instead of poisoning the comparison — so an existing SSDT project tree can be pointed at as-is. A file that fails to parse *without* SQLCMD evidence is a hard, file-attributed error, never a silent skip (a false skip would surface as a phantom DROP).
 

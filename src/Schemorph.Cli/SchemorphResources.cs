@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Text;
 using ModelContextProtocol;
@@ -8,7 +8,6 @@ using Schemorph.Core;
 using Schemorph.Core.Operations;
 using Schemorph.Core.Planning;
 using Schemorph.Core.Providers;
-using Schemorph.Provider.SqlServer;
 
 namespace Schemorph.Cli;
 
@@ -82,8 +81,9 @@ internal sealed class SchemorphResources
 
         // Same semantics as schemorph_diff's default (destructive changes gated),
         // so the resource's planHash is exactly what a reviewed apply expects.
+        var (provider, ledger) = ProviderSelection.Current;
         var result = await DiffOperation.RunAsync(
-            new SqlServerProvider(), new SqlServerLedgerStore(), schemaDir, url,
+            provider, ledger, schemaDir, url,
             allowDestructive: false, cancellationToken);
         if (!result.Success)
         {
@@ -99,7 +99,7 @@ internal sealed class SchemorphResources
         var url = RequireEnv("SCHEMORPH_URL");
         try
         {
-            var inspected = await new SqlServerProvider().InspectAsync(new InspectRequest(url), cancellationToken);
+            var inspected = await ProviderSelection.Current.Provider.InspectAsync(new InspectRequest(url), cancellationToken);
             return inspected.Files;
         }
         catch (Exception ex) when (ex is not McpException and not OperationCanceledException)

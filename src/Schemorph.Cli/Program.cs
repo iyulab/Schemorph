@@ -1,4 +1,4 @@
-// Schemorph CLI — verb-oriented, structured output first (design principle §3).
+﻿// Schemorph CLI — verb-oriented, structured output first (design principle §3).
 // Exit codes are semantic (Terraform convention):
 //   0 = success / no changes pending, 1 = error, 2 = changes pending.
 // Argument parsing is deliberately hand-rolled while the surface is small;
@@ -17,7 +17,6 @@ using Schemorph.Core.Operations;
 using Schemorph.Core.Planning;
 using Schemorph.Core.Providers;
 using Schemorph.Core.Redefine;
-using Schemorph.Provider.SqlServer;
 
 const int ExitNoChanges = (int)ExitCode.Success;
 const int ExitError = (int)ExitCode.Error;
@@ -152,8 +151,9 @@ async Task<int> RunApply(string[] args, string format)
     {
         // The apply itself lives in the core (ApplyOperation) — the CLI and the
         // MCP surface render the same operation; this method renders and maps errors.
+        var (provider, ledger) = ProviderSelection.Current;
         var outcome = await ApplyOperation.RunAsync(
-            new SqlServerProvider(), new SqlServerLedgerStore(),
+            provider, ledger,
             new ApplyOperation.Request(schemaDir, url, allowDestructive, migrationsDir,
                 ParseOption(args, "--expect-plan")),
             onPlan: plan =>
@@ -273,8 +273,9 @@ async Task<int> RunStatus(string[] args, string format)
 
     try
     {
+        var (provider, ledger) = ProviderSelection.Current;
         var result = await StatusOperation.RunAsync(
-            new SqlServerProvider(), new SqlServerLedgerStore(),
+            provider, ledger,
             new StatusOperation.Request(schemaDir, url, migrationsDir));
 
         if (!result.Success)
@@ -362,7 +363,7 @@ async Task<int> RunInspect(string[] args, string format)
 
     try
     {
-        var result = await InspectOperation.RunAsync(new SqlServerProvider(), url, outDir);
+        var result = await InspectOperation.RunAsync(ProviderSelection.Current.Provider, url, outDir);
 
         if (format == "json")
         {
@@ -402,8 +403,9 @@ async Task<int> RunDiff(string[] args, string format)
     {
         // The diff itself lives in the core (DiffOperation) so the CLI and the MCP
         // surface render the same operation; this method only renders and maps errors.
+        var (provider, ledger) = ProviderSelection.Current;
         var result = await DiffOperation.RunAsync(
-            new SqlServerProvider(), new SqlServerLedgerStore(), schemaDir, url, allowDestructive);
+            provider, ledger, schemaDir, url, allowDestructive);
 
         if (!result.Success)
         {

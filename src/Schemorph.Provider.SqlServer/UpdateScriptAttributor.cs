@@ -28,14 +28,22 @@ internal static partial class UpdateScriptAttributor
     [GeneratedRegex(@"^[A-Za-z][A-Za-z ]*\s(?<name>\[[^\]]+\](\.\[[^\]]+\])+)\.\.\.$")]
     private static partial Regex Announcement();
 
+    /// <summary>One announced run of batches, before it is attributed to a change.</summary>
+    private sealed class Segment
+    {
+        public required string AnnouncedName { get; init; }
+        public StringBuilder Sql { get; } = new();
+        public bool Rebuild { get; set; }
+    }
+
     public static IReadOnlyList<ChangeScript> Attribute(string updateScript, IReadOnlyList<RawChange> changes)
     {
         var changeNames = changes.Select(c => c.ObjectName).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        // objectName -> (sql segments, rebuild) — one object can own several
-        // announced segments (e.g. ALTER TABLE + CREATE INDEX); they concatenate.
-        var segments = new Dictionary<string, (StringBuilder Sql, bool Rebuild)>(StringComparer.OrdinalIgnoreCase);
-        string? current = null;
+        // Segments in script order; one change can own several (e.g. ALTER TABLE
+        // then CREATE INDEX), and they concatenate in that order.
+        var segments = new List<Segment>();
+        Segment? current = null;
 
         foreach (var batch in SqlBatchSplitter.Split(updateScript))
         {
@@ -45,20 +53,24 @@ internal static partial class UpdateScriptAttributor
                 var text = print.Groups["text"].Value;
                 if (Announcement().Match(text) is { Success: true } announced)
                 {
-                    var name = ObjectName(announced.Groups["name"].Value);
-                    var rebuild = text.Contains("rebuild", StringComparison.OrdinalIgnoreCase);
-                    // Only track objects the comparison actually reported; DacFx
-                    // side-work (e.g. refreshing dependent views) is not a change.
-                    current = changeNames.Contains(name) ? name : null;
-                    if (current is not null)
-                    {
-                        (StringBuilder Sql, bool Rebuild) entry = segments.TryGetValue(current, out var existing)
-                            ? existing
-                            : (new StringBuilder(), false);
-                        segments[current] = (entry.Sql, entry.Rebuild || rebuild);
-                    }
+                    // Every announced run is captured, even when the announced
+                    // name is not itself a reported change — DacFx announces a
+                    // table's work under the *constraint* it is touching, so the
+                    // owner is recovered below from the statements themselves.
+                    current = new Segment { AnnouncedName = ObjectName(announced.Groups["name"].Value) };
+                    current.Rebuild = text.Contains("rebuild", StringComparison.OrdinalIgnoreCase);
+                    segments.Add(current);
                 }
-                continue;   // progress chatter is never payload
+                else
+                {
+                    // Progress chatter ('Checking existing data against newly
+                    // created constraints', 'Update complete.') marks the end of
+                    // the announced work, not more of it. Leaving the segment open
+                    // let the generator's post-commit batches flow into the last
+                    // announced object.
+                    current = null;
+                }
+                continue;   // a PRINT itself is never payload
             }
 
             // A PRINT the regex could not read (e.g. escaped quotes in a name) is
@@ -75,19 +87,101 @@ internal static partial class UpdateScriptAttributor
                 continue;
             }
 
-            var (sql, _) = segments[current];
-            if (sql.Length > 0) sql.AppendLine("GO");
-            sql.AppendLine(trimmed);
+            if (current.Sql.Length > 0) current.Sql.AppendLine("GO");
+            current.Sql.AppendLine(trimmed);
         }
 
-        return segments
-            .Select(kv =>
+        // objectName -> (sql, rebuild), preserving first-seen order.
+        var attributed = new Dictionary<string, (StringBuilder Sql, bool Rebuild)>(StringComparer.OrdinalIgnoreCase);
+        var order = new List<string>();
+
+        foreach (var segment in segments)
+        {
+            var owner = Owner(segment, changeNames);
+            if (owner is null)
             {
-                var sql = kv.Value.Sql.ToString().TrimEnd();
-                return new ChangeScript(kv.Key, sql, kv.Value.Rebuild, AddsNotNullWithoutDefault(sql));
+                continue;
+            }
+
+            if (!attributed.TryGetValue(owner, out var entry))
+            {
+                entry = (new StringBuilder(), false);
+                order.Add(owner);
+            }
+            if (entry.Sql.Length > 0) entry.Sql.AppendLine("GO");
+            entry.Sql.Append(segment.Sql);
+            attributed[owner] = (entry.Sql, entry.Rebuild || segment.Rebuild);
+        }
+
+        return order
+            .Select(name =>
+            {
+                var sql = attributed[name].Sql.ToString().TrimEnd();
+                return new ChangeScript(name, sql, attributed[name].Rebuild, AddsNotNullWithoutDefault(sql));
             })
             .Where(s => s.Sql.Length > 0)
             .ToList();
+    }
+
+    /// <summary>
+    /// Which reported change a segment belongs to, or null when it cannot be
+    /// proven. Two sources of evidence, in order of directness:
+    ///
+    /// 1. The announced name is itself a reported change (the common case; an
+    ///    index announced as <c>[dbo].[T].[IX]</c> already reduces to its table).
+    /// 2. Otherwise the announced name is a dependent object DacFx names in its
+    ///    own right — a check, default, or foreign-key constraint — while the
+    ///    reported change is the table that owns it. The statements say which
+    ///    table that is: every one of them is <c>ALTER TABLE &lt;owner&gt; …</c>.
+    ///    Attribution follows the statements' own target, which is stronger
+    ///    evidence than the marker, and only when they agree on a single table
+    ///    that the comparison actually reported.
+    ///
+    /// Anything else — an unparseable segment, statements touching more than one
+    /// table, a target that is not a reported change — resolves to null. A
+    /// missing slice is honest; a wrong one is not.
+    /// </summary>
+    private static string? Owner(Segment segment, HashSet<string> changeNames)
+    {
+        if (changeNames.Contains(segment.AnnouncedName))
+        {
+            return segment.AnnouncedName;
+        }
+
+        var sql = segment.Sql.ToString();
+        if (sql.Length == 0)
+        {
+            return null;
+        }
+
+        var parser = new TSql150Parser(initialQuotedIdentifiers: true);
+        using var reader = new StringReader(sql);
+        var fragment = parser.Parse(reader, out var parseErrors);
+        if (parseErrors is { Count: > 0 } || fragment is not TSqlScript script)
+        {
+            return null;
+        }
+
+        string? owner = null;
+        foreach (var statement in script.Batches.SelectMany(b => b.Statements))
+        {
+            // Only ALTER TABLE proves ownership. A segment mixing in anything else
+            // is not a constraint's segment, and guessing from it would be exactly
+            // the wrong attachment this attributor refuses to make.
+            if (statement is not AlterTableStatement alter)
+            {
+                return null;
+            }
+
+            var target = string.Join('.', alter.SchemaObjectName.Identifiers.Select(i => i.Value));
+            if (owner is not null && !owner.Equals(target, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+            owner = target;
+        }
+
+        return owner is not null && changeNames.Contains(owner) ? owner : null;
     }
 
     /// <summary>
@@ -205,10 +299,11 @@ internal static partial class UpdateScriptAttributor
             string.Join('.', name.Identifiers.Select(i => i.Value));
     }
 
-    /// <summary>The generator's transaction/error bookkeeping between segments.</summary>
+    /// <summary>The generator's transaction/error/session bookkeeping between segments.</summary>
     private static bool IsScaffolding(string batch) =>
         batch.StartsWith("IF @@ERROR", StringComparison.OrdinalIgnoreCase)
         || batch.StartsWith("IF @@TRANCOUNT", StringComparison.OrdinalIgnoreCase)
+        || batch.StartsWith("USE ", StringComparison.OrdinalIgnoreCase)
         || batch.Contains("#tmpErrors", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>[dbo].[X] or [dbo].[X].[IX_Y] → "dbo.X" (an index belongs to its table's change).</summary>

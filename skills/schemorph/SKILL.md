@@ -52,6 +52,13 @@ migrations/        # versioned, run-once data events
 5. **Converge**: `schemorph status --schema ./schema` — exit `0` and
    `hasPendingWork: false` confirm the database matches the files.
 
+If step 5 does not converge — the *same* change reappears after a successful
+apply — stop and read `changes[].sql`. An expression the engine stores in its own
+form (most often `CHECK (… IN (…))`, which SQL Server keeps as an OR chain) will
+re-diff forever: the database is correct and the plan is not. Do not re-apply in a
+loop. Rewrite the expression in the stored form — `schemorph inspect` renders it —
+or report the file to the human. See `docs/limitations.md`.
+
 Destructive changes (DROPs that lose data) are excluded from plans by default
 and surfaced as messages; include them only with an explicit
 `--allow-destructive` on both diff and apply, after confirming intent.

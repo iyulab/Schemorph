@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text.Json;
 using ModelContextProtocol.Server;
 using Schemorph.Core;
@@ -6,7 +6,6 @@ using Schemorph.Core.Errors;
 using Schemorph.Core.Operations;
 using Schemorph.Core.Planning;
 using Schemorph.Core.Providers;
-using Schemorph.Provider.SqlServer;
 
 namespace Schemorph.Cli;
 
@@ -45,8 +44,9 @@ internal sealed class SchemorphTools
                 "Pass the directory that holds the desired-state .sql files.");
         }
 
+        var (provider, ledger) = ProviderSelection.Current;
         var result = await DiffOperation.RunAsync(
-            new SqlServerProvider(), new SqlServerLedgerStore(), schemaDir, url, allowDestructive, cancellationToken);
+            provider, ledger, schemaDir, url, allowDestructive, cancellationToken);
         if (!result.Success)
         {
             var code = result.Stage == DiffOperation.FailureStage.DesiredState ? "invalid_desired_state" : "compare_failed";
@@ -71,7 +71,7 @@ internal sealed class SchemorphTools
             return MissingUrl();
         }
 
-        var result = await InspectOperation.RunAsync(new SqlServerProvider(), url, outDir, cancellationToken);
+        var result = await InspectOperation.RunAsync(ProviderSelection.Current.Provider, url, outDir, cancellationToken);
         return JsonSerializer.Serialize(new { files = result.WrittenFiles }, ErrorJson);
     }
 
@@ -102,8 +102,9 @@ internal sealed class SchemorphTools
 
         try
         {
+            var (provider, ledger) = ProviderSelection.Current;
             var result = await StatusOperation.RunAsync(
-                new SqlServerProvider(), new SqlServerLedgerStore(),
+                provider, ledger,
                 new StatusOperation.Request(schemaDir, url, migrationsDir), cancellationToken);
             if (!result.Success)
             {
@@ -177,8 +178,9 @@ internal sealed class SchemorphTools
 
         try
         {
+            var (provider, ledger) = ProviderSelection.Current;
             var outcome = await ApplyOperation.RunAsync(
-                new SqlServerProvider(), new SqlServerLedgerStore(),
+                provider, ledger,
                 new ApplyOperation.Request(schemaDir, url, allowDestructive, migrationsDir, expectedPlanHash),
                 cancellationToken: cancellationToken);
 

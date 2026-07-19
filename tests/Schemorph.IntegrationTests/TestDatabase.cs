@@ -31,6 +31,9 @@ public sealed class TestDatabase : IDisposable
 
     public void Execute(string sql) => Execute(Url, sql);
 
+    /// <summary>Run against the server (master), for server-scoped objects such as logins.</summary>
+    public void ExecuteOnServer(string sql) => Execute(_serverConnectionString, sql);
+
     public T? Scalar<T>(string sql)
     {
         using var connection = new SqlConnection(Url);

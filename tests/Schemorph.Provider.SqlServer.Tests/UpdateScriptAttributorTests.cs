@@ -1,4 +1,4 @@
-using Schemorph.Core.Providers;
+﻿using Schemorph.Core.Providers;
 using Schemorph.Provider.SqlServer;
 
 namespace Schemorph.Provider.SqlServer.Tests;
@@ -201,6 +201,67 @@ public sealed class UpdateScriptAttributorTests
         Assert.False(Assert.Single(result).AddsNotNullWithoutDefault);
     }
 
+    // DacFx announces a table's constraint work under the CONSTRAINT's name, not
+    // the table's — so a change reported as "Change Table dbo.T" had no attributable
+    // slice at all whenever the edit was expressed as constraint churn (check,
+    // default, foreign key). That is the common case for a column default or a CHECK,
+    // and it left `sql` null exactly where a reader most needs it. The statements
+    // name the owner, and that is stronger evidence than the marker.
+    [Fact]
+    public void Constraint_segments_attribute_to_the_table_that_owns_them()
+    {
+        var script = """
+            PRINT N'Dropping Check Constraint [dbo].[CK_T_Status]...';
+            GO
+            ALTER TABLE [dbo].[T] DROP CONSTRAINT [CK_T_Status];
+            GO
+            PRINT N'Creating Check Constraint [dbo].[CK_T_Status]...';
+            GO
+            ALTER TABLE [dbo].[T] WITH NOCHECK
+                ADD CONSTRAINT [CK_T_Status] CHECK (Status IN ('A', 'B'));
+            GO
+            """;
+
+        var result = UpdateScriptAttributor.Attribute(script,
+            new[] { new RawChange("Change", "Table", "dbo.T") });
+
+        var slice = Assert.Single(result);
+        Assert.Equal("dbo.T", slice.ObjectName);
+        Assert.Contains("DROP CONSTRAINT [CK_T_Status]", slice.Sql);
+        Assert.Contains("ADD CONSTRAINT [CK_T_Status]", slice.Sql);
+    }
+
+    [Fact]
+    public void A_constraint_on_a_table_that_is_not_a_reported_change_is_not_attributed()
+    {
+        var result = UpdateScriptAttributor.Attribute("""
+            PRINT N'Dropping Check Constraint [dbo].[CK_Other_Status]...';
+            GO
+            ALTER TABLE [dbo].[Other] DROP CONSTRAINT [CK_Other_Status];
+            GO
+            """,
+            new[] { new RawChange("Change", "Table", "dbo.T") });
+
+        Assert.Empty(result);
+    }
+
+    // Ownership is only proven when the statements agree. A segment touching two
+    // tables names no single owner, so it attaches to neither.
+    [Fact]
+    public void A_segment_spanning_two_tables_is_not_attributed()
+    {
+        var result = UpdateScriptAttributor.Attribute("""
+            PRINT N'Dropping Foreign Key [dbo].[FK_A_B]...';
+            GO
+            ALTER TABLE [dbo].[A] DROP CONSTRAINT [FK_A_B];
+            ALTER TABLE [dbo].[B] DROP CONSTRAINT [FK_B_A];
+            GO
+            """,
+            new[] { new RawChange("Change", "Table", "dbo.A"), new RawChange("Change", "Table", "dbo.B") });
+
+        Assert.Empty(result);
+    }
+
     [Fact]
     public void Unrecognized_script_shape_degrades_to_no_attribution()
     {
@@ -209,5 +270,91 @@ public sealed class UpdateScriptAttributorTests
             new[] { new RawChange("Change", "Table", "dbo.X") });
 
         Assert.Empty(result);   // no announcements → nothing attributed, nothing wrong
+    }
+
+    // Verbatim shape captured from a real DacFx update script (cycle-61): the
+    // scaffolding batches between segments must not swallow the following segment.
+    [Fact]
+    public void Real_dacfx_constraint_churn_attributes_both_halves()
+    {
+        var script = """
+            PRINT N'Dropping Check Constraint [dbo].[CK_Flags_Status]...';
+
+
+            GO
+            ALTER TABLE [dbo].[Flags] DROP CONSTRAINT [CK_Flags_Status];
+
+
+            GO
+            IF @@ERROR <> 0
+               AND @@TRANCOUNT > 0
+                BEGIN
+                    ROLLBACK;
+                END
+
+            IF OBJECT_ID(N'tempdb..#tmpErrors') IS NULL
+                BEGIN
+                END
+
+            GO
+            PRINT N'Dropping Table [dbo].[__SchemorphHistory]...';
+
+
+            GO
+            DROP TABLE [dbo].[__SchemorphHistory];
+
+
+            GO
+            IF @@ERROR <> 0
+               AND @@TRANCOUNT > 0
+                BEGIN
+                    ROLLBACK;
+                END
+
+            GO
+            PRINT N'Creating Check Constraint [dbo].[CK_Flags_Status]...';
+
+
+            GO
+            ALTER TABLE [dbo].[Flags] WITH NOCHECK
+                ADD CONSTRAINT [CK_Flags_Status] CHECK (Status IN ('A', 'B', 'C'));
+
+
+            GO
+            """;
+
+        var result = UpdateScriptAttributor.Attribute(script,
+            new[] { new RawChange("Change", "Table", "dbo.Flags"), new RawChange("Delete", "Table", "dbo.__SchemorphHistory") });
+
+        var slice = result.Single(s => s.ObjectName == "dbo.Flags");
+        Assert.Contains("DROP CONSTRAINT", slice.Sql);
+        Assert.Contains("ADD CONSTRAINT", slice.Sql);
+    }
+
+    // A PRINT that is not an announcement ends the announced work; it must close
+    // the open segment. Real scripts continue after it with the generator's own
+    // post-commit batches (a USE, a constraint re-validation), and letting those
+    // flow into the last announced object cost that object its whole slice —
+    // ownership is proven from the statements, and one foreign statement
+    // disproves it (cycle-61).
+    [Fact]
+    public void Chatter_closes_the_open_segment()
+    {
+        var result = UpdateScriptAttributor.Attribute("""
+            PRINT N'Dropping Check Constraint [dbo].[CK_T_Status]...';
+            GO
+            ALTER TABLE [dbo].[T] DROP CONSTRAINT [CK_T_Status];
+            GO
+            PRINT N'Checking existing data against newly created constraints';
+            GO
+            USE [$(DatabaseName)];
+            GO
+            ALTER TABLE [dbo].[T] WITH CHECK CHECK CONSTRAINT [CK_T_Status];
+            GO
+            """,
+            new[] { new RawChange("Change", "Table", "dbo.T") });
+
+        var slice = Assert.Single(result);
+        Assert.Equal("ALTER TABLE [dbo].[T] DROP CONSTRAINT [CK_T_Status];", slice.Sql);
     }
 }

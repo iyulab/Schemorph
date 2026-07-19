@@ -32,3 +32,50 @@ The temptation in this situation is one of two errors:
 - The boundary will be wrong in some ways — every abstraction with one implementation is. The Postgres work will force revisions; this is planned for, and cheaper than either error described above.
 - Until the second provider exists, "provider-independent" claims in the core are unverified. Mitigation: keep the core's schema-model surface small and expressed in Schemorph's own terms (plan actions, object classes, risk levels), never in DacFx types.
 - Users needing PostgreSQL today are better served by existing tools (Atlas, sqldef, Flyway); the README should say so honestly rather than promise timelines.
+
+## Addendum (2026-07): a committed consumer, and what it does *not* change
+
+The decision above stands unchanged. What changed is the evidence around it.
+
+A first consumer has committed to adopting the Postgres provider when it exists, and
+supplied a **behavioral** requirement set with acceptance scenarios: managed,
+non-superuser Postgres with no extension dependency in the core; the three-strategy
+model at parity; expression-normalized diffs that re-run empty; plan, error, and MCP
+contracts identical across providers; and transactional-DDL apply atomicity treated as
+a Postgres-specific opportunity rather than an accident.
+
+**What this changes:** the phase is no longer "deliberately unspecified" in its
+*requirements*. There is now a written definition of what the provider must behave
+like, and a partner to judge it.
+
+**What it does not change:**
+
+- **The engine choice stays deferred.** Behavioral requirements do not select an
+  engine — they become the axes an engine is scored on. Requirements capture is not
+  engine commitment, and conflating the two would be the same "decide with the least
+  information" error this ADR was written to avoid.
+- **The ordering stays.** Postgres remains last. The consumer holds a working
+  alternative and no deadline; a committed consumer is a reason to specify the work,
+  not to resequence the project.
+- **The honesty stays.** One consumer is not a timeline. The README continues to point
+  Postgres users at Atlas, sqldef, and Flyway, and promises no date.
+
+**Counted honestly: N = 1.** This is recorded for prioritization, not as demand proof.
+The provider was already an accepted phase, so the commitment adds a verification
+partner rather than a justification.
+
+### Evidence added to the engine-evaluation axes
+
+Two of the axes are no longer hypothetical:
+
+- **Control over expression normalization.** SQL Server exhibits this failure *today*:
+  it stores `CHECK (… IN (…))` as an OR chain and DacFx compares expressions as text, so
+  that shape never converges — the database is correct and the plan is not
+  ([limitations](../limitations.md), pinned by `ConvergenceTests`). An engine that does
+  not expose expression handling cannot fix this class; one wrapped as a subprocess
+  cannot even see it.
+- **Control over apply atomicity.** Postgres can put most DDL in a transaction, which
+  SQL Server cannot. Whether that becomes a per-provider guarantee — and if so, that it
+  must be *declared* in the plan rather than left implicit, since this ADR forbids
+  provider specifics leaking into the user-facing contract — is an open question for
+  kickoff, not for now.

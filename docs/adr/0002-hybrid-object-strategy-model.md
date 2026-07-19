@@ -61,3 +61,27 @@ all doubt resolves to "no match". Objects *with* history never consult the live
 definition: a recorded-but-different checksum means the files moved on, and edits
 always win. The anchor is unchanged — this makes strategy 2's answer to "what needs
 applying?" state-honest, the same standard strategy 1 already met.
+
+## Addendum — layout is a convention, not a contract (2026-07-20)
+
+One accepted risk above is obsolete and would now mislead a reader. It said:
+
+> Users must learn which directory an object belongs in. Mitigated by making
+> `inspect` generate the correct layout, and by clear errors when a file is misplaced.
+
+Implementation went further than the mitigation. The desired-state loader classifies
+by **content, not by directory** — it parses each file and routes on what the
+statement *is*. A `CREATE PROCEDURE` saved under `tables/` is routed to strategy 2 and
+re-defined normally; no error is raised, because nothing is wrong. Verified against a
+live database: such a file plans as `redefine Procedure`, alongside the table in the
+same directory planning as a structural change.
+
+So there is no "misplaced file" error, and users do not have to learn the layout. The
+conventional layout is what `inspect` *writes* and what makes a tree readable to
+humans — not what the tool requires to work. That is also what lets brownfield SSDT
+trees be consumed as-is, which the roadmap treats as a first-class adoption path.
+
+The remaining true half of that risk is narrower: users must still know **which
+strategy** an object gets (declarative diff vs. idempotent re-definition vs. versioned
+migration), because that governs how a change is reviewed and applied. That knowledge
+is about object kinds, not folders.
