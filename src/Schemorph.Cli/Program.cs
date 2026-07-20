@@ -93,6 +93,12 @@ switch (verb)
               --format json|text          output form (default: text on a terminal,
                                           json when stdout is redirected)
 
+            if an apply fails:
+              re-run it — every stage converges on re-run, and there is no repair
+              command to remember. What the database looks like after a partial
+              apply, and how to read the ledger without misreading it:
+              https://github.com/iyulab/Schemorph/blob/main/docs/failure-semantics.md
+
             connection:
               --url can be omitted when the SCHEMORPH_URL environment variable is set
               (preferred: keeps credentials out of shell history). Passwords are

@@ -119,6 +119,9 @@ public sealed class SqlServerProvider : IDatabaseProvider
         var messages = CollectMessages(result);
         if (messages.Any(m => m.Severity == nameof(DacMessageType.Error)))
         {
+            // No changes, and no basis for saying so. Callers fail on the errors
+            // rather than treat this as an in-sync database (DiffOperation,
+            // ApplyOperation) — an unreadable target never becomes a plan.
             return new CompareResult(Array.Empty<RawChange>(), messages, UpdateScript: null);
         }
 
@@ -508,22 +511,50 @@ public sealed class SqlServerProvider : IDatabaseProvider
     }
 
     /// <summary>
-    /// DacFx restricts the comparison to catalog-scoped elements when the login
-    /// cannot read object definitions (no VIEW ANY DEFINITION): programmable
-    /// bodies and other definitions are then not read, so changes to them are
-    /// silently absent from the plan — "no differences" cannot be trusted for the
-    /// objects it could not see. Surface that as an explicit incompleteness
-    /// warning so a partial plan is never mistaken for an in-sync database. Keyed
-    /// on DacFx's own permission-name text; if that ever drifts the warning simply
-    /// does not fire (the raw DacFx warning still shows) — missing beats wrong.
+    /// An incomplete comparison must never read as an in-sync database: when the
+    /// target could not be read in full, changes to what was missed are simply
+    /// absent, so "no differences" means nothing. This surfaces that as an
+    /// explicit warning.
+    ///
+    /// Keyed on the *effect* — a comparison that reported an error — rather than
+    /// on any particular missing permission, because measurement (cycle 66)
+    /// showed permissions do not predict completeness in either direction:
+    ///
+    ///   login                                  server VAD / db VD / obj VD   changes
+    ///   db_owner, no server-scope grant                 0 / 1 / 1            complete
+    ///   db_datareader + DENY VIEW DEFINITION            0 / 0 / 0            EMPTY
+    ///   db-scope GRANT + object-level DENY              0 / 1 / 0            EMPTY
+    ///
+    /// The first row is the shape this tool's own docs recommend, and it reads
+    /// everything — so firing on "lacks VIEW ANY DEFINITION" is a false positive
+    /// on the common least-privilege setup. The third row is why checking the
+    /// database-scoped permission instead would be worse: it looks granted while
+    /// the comparison still comes back empty, trading a false positive for a
+    /// false negative in a safety warning.
+    ///
+    /// What does separate them is that DacFx reports an error ("the reverse
+    /// engineering operation cannot continue…") in exactly the incomplete cases,
+    /// while the complete one carries only the benign server-scope warning. Note
+    /// that warning is doubly inapplicable here: it restricts the comparison "to
+    /// database scoped elements if the source is a database", and this provider's
+    /// source is always a dacpac.
+    ///
+    /// Source-model errors never reach this point — <see cref="ComparisonSession.Open"/>
+    /// returns them separately — so an error here is about reading the target.
     /// </summary>
-    internal static RawMessage? RestrictedComparisonWarning(IReadOnlyList<RawMessage> messages) =>
-        messages.Any(m => m.Text.Contains("VIEW ANY DEFINITION", StringComparison.OrdinalIgnoreCase))
-            ? new RawMessage("Warning", "SCHEMORPH008",
-                "The comparison was restricted: the connection lacks VIEW ANY DEFINITION, so not all object " +
-                "definitions could be read and changes to them are absent from this plan — a partial or empty " +
-                "result must not be read as \"in sync\". Grant VIEW ANY DEFINITION for a complete comparison.")
-            : null;
+    internal static RawMessage? RestrictedComparisonWarning(IReadOnlyList<RawMessage> messages)
+    {
+        var errors = messages.Where(m => m.Severity == "Error").ToList();
+        if (errors.Count == 0) return null;
+
+        // Echo what the engine actually said instead of asserting a cause: the
+        // reason ("no permission on the database" vs "denied on at least one
+        // object") decides what the operator has to fix.
+        var reported = string.Join(" ", errors.Select(e => e.Text));
+        return new RawMessage("Warning", "SCHEMORPH008",
+            "The comparison could not read the target completely, so changes to what it missed are absent " +
+            "from this plan — a partial or empty result must not be read as \"in sync\". Reported: " + reported);
+    }
 
     /// <summary>
     /// Tables where an existing column's definition changes. DacFx reports this

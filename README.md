@@ -111,6 +111,7 @@ Standalone self-contained binaries (win-x64, linux-x64, osx-arm64) are attached 
 - [Architecture](./docs/architecture.md) — the three-strategy model, ledger, provider boundary
 - [The plan format](./docs/plan-format.md) — the machine-readable plan contract and its versioning
 - [Errors and exit codes](./docs/errors.md) — the typed error envelope agents branch on, and the safety-lint warning band
+- [When an apply fails](./docs/failure-semantics.md) — what the database looks like after a partial apply, how to recover, and how to read the ledger
 - [Limitations](./docs/limitations.md) — what does not converge or is out of scope, and what to do instead
 - [Recipes](./docs/recipes/) — ready-made integrations (GitHub Actions plan-on-PR comment)
 - [Architecture Decision Records](./docs/adr/) — why the foundational choices were made

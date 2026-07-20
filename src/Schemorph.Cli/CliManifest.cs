@@ -13,7 +13,7 @@ namespace Schemorph.Cli;
 /// </summary>
 internal static class CliManifest
 {
-    public const string ManifestVersion = "1.0";
+    public const string ManifestVersion = "1.1";   // 1.1: docs.failureSemantics (additive)
 
     public static string ToJson(string toolVersion) => JsonSerializer.Serialize(new
     {
@@ -124,6 +124,7 @@ internal static class CliManifest
         {
             planFormat = "docs/plan-format.md",
             errors = "docs/errors.md",
+            failureSemantics = "docs/failure-semantics.md",
             repository = "https://github.com/iyulab/Schemorph",
         },
     }, new JsonSerializerOptions { WriteIndented = true });

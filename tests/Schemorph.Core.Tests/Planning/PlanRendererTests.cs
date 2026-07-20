@@ -64,6 +64,11 @@ public class PlanRendererTests
         Assert.Contains("No changes", PlanRenderer.ToText(empty));
     }
 
+    // No incompleteness flag lives here on purpose: a comparison that could not
+    // read the target never becomes a plan at all — DiffOperation fails on the
+    // errors that report it, and apply refuses the same way. Pinned by
+    // RestrictedComparisonIntegrationTests.
+
     // ------------------------------------------------------------- fingerprint
     // The apply gate's identity: same executable changes = same hash; messages
     // and descriptive fields must not perturb it.

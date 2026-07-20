@@ -77,26 +77,58 @@ Warnings never change the exit code.
 | `SCHEMORPH005` | Warning | File skipped: SQLCMD syntax marks it as a deploy script, not desired state |
 | `SCHEMORPH006` | Warning | File skipped: contains imperative statements (EXEC / DML) — not declarative DDL |
 | `SCHEMORPH007` | Error | A `.sql` file failed to parse (file, line, and column are named) |
-| `SCHEMORPH008` | Warning | The comparison was restricted (the connection lacks VIEW ANY DEFINITION) — some object definitions could not be read, so the plan may be incomplete; a partial result must not be read as "in sync" |
+| `SCHEMORPH008` | Warning | The comparison could not read the target completely. The engine's own reason is echoed in the message. It accompanies an engine error, so the verb fails — see below |
 
-#### `SCHEMORPH008` scope: it is about the declarative diff only
+#### An incomplete comparison is a failure, not a partial answer
 
-`VIEW ANY DEFINITION` is a **server-scope** permission that DacFx's declarative
-comparison (tables, columns, indexes, constraints) uses to read a complete target
-model. Lacking it restricts *that* comparison, which is what `SCHEMORPH008` reports.
+`SCHEMORPH008` never rides a successful plan. The engine reports the incompleteness
+as an *error*, and both verbs stop there: `diff` fails with `compare_failed` (exit
+`1`), `apply` refuses before touching anything. There is no partial plan and no
+`hasChanges: false` for automation to mistake for an in-sync database — a plan
+exists only when the whole target was read.
 
-It does **not** gate programmable-object **re-definition**. Views, procedures,
-functions, and triggers are routed to the idempotent redefine strategy (ADR-0002),
-which reads live bodies through its own `sys.sql_modules` query. That column is
-visible to any principal with `VIEW DEFINITION` — or `CONTROL` / `ALTER` /
-`TAKE OWNERSHIP` — on the object or database ([Metadata visibility configuration](https://learn.microsoft.com/sql/relational-databases/security/metadata-visibility-configuration)),
-so a **`db_owner`** login (which has `CONTROL` on its database) reads every body
-without the server-scope grant. Consequently, a minimal-privilege `db_owner` still
-re-defines existing views correctly; only the structural diff's *completeness*
-degrades, and it degrades loudly (`SCHEMORPH008`) rather than silently. A
-programmable object that is *absent* from the plan was reconciled — its live body
-matched the file — never "skipped for lack of permission": an unreadable body makes
-the object **appear** as a redefine, not vanish.
+The warning is what names the reason inside that failure, which is why it is worth
+reading rather than just the envelope.
+
+#### `SCHEMORPH008` fires on an incomplete comparison, not on a missing permission
+
+The warning reports an **effect**: the comparison came back without having read the
+whole target. It deliberately does not key on any particular grant, because
+permissions turn out not to predict completeness in either direction. Measured
+against a live SQL Server, same database and same desired state, differing only in
+what the login may read:
+
+| Login | server `VIEW ANY DEFINITION` | database `VIEW DEFINITION` | on the changed object | comparison |
+|---|---|---|---|---|
+| `db_owner`, no server-scope grant | ✗ | ✓ | ✓ | **complete** |
+| `db_datareader` + `DENY VIEW DEFINITION` | ✗ | ✗ | ✗ | **empty** |
+| database-scope `GRANT` + object-level `DENY` | ✗ | ✓ | ✗ | **empty** |
+
+The first row is the least-privilege shape this project's own guidance recommends,
+and it reads every database object — so firing on "lacks `VIEW ANY DEFINITION`"
+warns exactly the setups that are fine. The third row is why checking the
+database-scoped permission instead would be worse than the problem: it looks
+granted while the comparison still returns nothing, which turns a false alarm into
+a silent miss.
+
+DacFx's own warning is narrower than it first reads — it restricts the comparison
+"to database scoped elements *if the source is a database*", and this tool's source
+is always a dacpac built from the desired-state files. What it does report, in the
+incomplete cases only, is an error: *the reverse engineering operation cannot
+continue because you do not have View Definition permission on the '…' database* /
+*…because you have been denied View Definition permission on at least one object in
+the '…' database*. `SCHEMORPH008` fires on that and echoes it verbatim, because the
+two reasons need different fixes and guessing between them helps nobody.
+
+**Programmable-object re-definition is a separate path and is not gated by this at
+all.** Views, procedures, functions, and triggers go through the idempotent redefine
+strategy (ADR-0002), which reads live bodies with its own `sys.sql_modules` query.
+That column is visible to any principal with `VIEW DEFINITION` — or `CONTROL` /
+`ALTER` / `TAKE OWNERSHIP` — on the object or database ([Metadata visibility configuration](https://learn.microsoft.com/sql/relational-databases/security/metadata-visibility-configuration)),
+so a `db_owner` login reads every body through its `CONTROL`. A programmable object
+that is *absent* from the plan was reconciled — its live body matched the file —
+never "skipped for lack of permission": an unreadable body makes the object
+**appear** as a redefine, not vanish.
 
 ### Safety lint (`SCHEMORPH1xx`)
 
