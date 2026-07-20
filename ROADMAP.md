@@ -87,13 +87,16 @@ header is the hash the apply refuses to deviate from.
 
 - [ ] **Failure semantics are not a user-facing contract** — a consumer about to apply 31 objects to production asked what the database looks like if the 17th fails, found no answer in `--help`, the manifest, or `docs/`, and reverse-engineered the ledger to a *wrong* conclusion: the per-object rows with success flags read like a progress log, but declarative rows are written in one batch after the publish commits. The real answer is three-tier — the declarative stage is transactional (`IncludeTransactionalScripts`, [ADR-0004 §3](docs/adr/0004-failure-semantics-and-resume.md)), redefines and migrations are per-object, and there is no cross-stage rollback. ADR-0004 answers all of it, but an ADR is a decision record, not a contract an operator reads before approving; §Consequences even claims "re-run until green" is a documented operator instruction, and the only user-facing trace is a parenthetical in `docs/errors.md`. Two deliverables: the document, and a failure envelope that carries the stage and what was already applied — `ApplyOperation.Outcome` has both today and the JSON error path drops them (a redefine failure rethrows past the operation entirely and surfaces as a generic `execution` error, hiding the declarative changes that did commit)
 
+- [ ] **Every verb's failure hint is a hardcoded guess** — the same consumer hit an `inspect` failure whose hint named "the connection string and output directory"; neither was the cause. The filename in the message (`schemorph-inspect-<guid>.dacpac`, a prefix used at exactly one call site) pins the throw to `Extract` writing into `Path.GetTempPath()` — an internal artifact the user never asked for, surfacing as a path they cannot connect to any argument they passed. They reasonably concluded `--out` was not being created; it is, recursively, and `CoreLoopTests` already passes a non-existent subdirectory to prove it. So the filed fix would have been a no-op, and shipping it would have closed the issue without fixing anything. Two things follow. The verb-level one: `inspect`'s temp workspace is the tool's own responsibility — guard it and stop leaking the internal filename (the comparison session leaks the same way). The structural one, which is the same defect as the item above: `catch (Exception ex)` plus a fixed hint string appears on `inspect_failed`, `compare_failed`, and `apply_failed` alike, so the envelope work should widen to make the code and hint follow the exception rather than the verb. **Reproduce first** — the consumer reports that `mkdir -p` on `--out` fixed it, and no theory yet explains that, so the failure is not fully understood
+
 Last because the behavior is already correct — only its self-description is missing.
 S2 shrinks the harm further: the recommended path already hands the operator a
 reviewed artifact before anything runs.
 
 *Exit:* the question that started this ("what does the database look like if the 17th
-of 31 objects fails?") is answered by a document the operator can find, and a failed
-apply names its stage and what it had already committed.
+of 31 objects fails?") is answered by a document the operator can find, a failed apply
+names its stage and what it had already committed, and no failure hint points at
+something the tool has not actually checked.
 
 #### Awaiting a human decision
 
