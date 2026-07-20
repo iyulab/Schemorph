@@ -40,9 +40,62 @@ Exit criterion: an AI coding agent completes a schema change end-to-end (edit SQ
 
 - [x] Drift detection — `status` verb + MCP `schemorph_status`: the plan a diff would produce now (drift), ledger summary (by kind, failures, last activity), pending migrations; exit 2 on pending work
 - [x] Brownfield onboarding, part 1: existing databases and SSDT trees are consumed as-is — non-model files (SQLCMD deploy scripts, seed DML) are classified out with per-file warnings, and history-less programmable objects matching their live definitions **reconcile** (recorded, nothing executed) instead of phantom-redefining (ADR-0002 addendum)
+- [x] Retype-triggered dependency invalidation for programmable objects — a column retype left a dependent view's text byte-identical, so the redefine checksum skipped it and the database kept describing the old type. The comparison now reports tables whose *existing* column definitions change, programmable objects carry the tables they read, and the redefine plan invalidates what depends on them transitively, in dependency order, and inside the fingerprint the apply gate checks. Column additions and removals are deliberately not invalidations, so the common additive change still redefines nothing
+
 ### Open — code
 
-- [x] **Retype-triggered dependency invalidation for programmable objects** — a column retype left a dependent view's text byte-identical, so the redefine checksum skipped it and SQL Server's cached view metadata kept describing the old type (the gap `sp_refreshview` papered over under SSDT). Fixed at the root the checksum could not see: the comparison now reports the tables whose *existing* column definitions change, programmable objects carry the tables they read, and the redefine plan invalidates what depends on them — transitively, in dependency order, and never anything already pending. Targeted by construction: column additions and removals are not invalidations (they leave an explicitly-projected object's meaning intact), so the common additive change still redefines nothing. The invalidation is in the plan before it runs, and therefore inside the fingerprint the apply gate checks. Consumers can drop their partial `RefreshViews.sql`
+Two things are open, and they differ in kind. The first is a **staged response to the
+first production consumer's feedback** — three findings from a real 31-object apply
+against a live database, triaged 2026-07-20 and all accepted. The second is a single
+item that cannot move without a human decision.
+
+#### Production-gate hardening — staged
+
+The ordering is by *harm*, not by size. The consumer drew a wrong conclusion from a
+plan (S1), reviewed an artifact they had reassembled themselves (S2), and planned for
+a worse failure mode than the tool actually has (S3). Correctness of the signal comes
+before the artifact built on it, which comes before the prose describing it.
+
+**S0 — verification that can be trusted** *(gate for S1–S3)*
+
+Every stage below lands its evidence in the integration suite. Fixing the measuring
+instrument is not overhead here; it is the precondition for believing any of it.
+
+- [ ] **Flaky integration suite** — `AgentSurfaceTests` (and occasionally `CoreLoopTests.Destructive_drop_needs_the_explicit_flag`) fail intermittently under a full-suite run and pass in isolation; verified present on a clean tree, so this predates the current work. The observed symptom is a plan whose `changes[].sql` is null: DacFx's `GenerateScript` intermittently fails under concurrent load and the provider — correctly — degrades to a `SCHEMORPH002` warning rather than inventing a script. So the *tool* is honest and the *test* is strict, but a suite that cannot be trusted to be green undermines every verification built on it. Worth fixing before it is used to gate anything
+
+**S1 — the plan tells the truth about its own completeness**
+
+- [ ] **Restricted-comparison warning fires on the cause, not the effect** — `SCHEMORPH008` is keyed on DacFx reporting a missing `VIEW ANY DEFINITION`, so it fires on every least-privilege `db_owner` connection whether or not anything went unread. The first production consumer measured the effect on their database: 64 objects live, 64 read by `inspect`, **0 actually missing** — and had to run a catalog query and a manual reconciliation to learn that, on every apply. Worse, `docs/errors.md` already argues (correctly) that a `db_owner` reads every definition through `CONTROL`, so the documentation and the warning contradict each other. The fix is to fire on an object that genuinely came back unreadable, and to say how many; suppressing the warning for `db_owner` is explicitly rejected — that trades a false positive for a possible false negative in a safety warning, which is the wrong direction for this one. Related: the restriction is reachable only through `messages[]`, while automation reads the top-level booleans — a warning whose whole point is "do not trust `hasChanges`" cannot participate in the judgment that reads `hasChanges`. Additive top-level field, plan format 1.3, excluded from `planHash` (permissions are not actions)
+
+*Exit:* the consumer's measured case (64 objects live, 64 read, 0 missing) is silent;
+a genuinely restricted login still fires; automation can gate on the restriction
+without reading `messages[]`.
+
+**S2 — the plan becomes an artifact a person can sign** *(after S1)*
+
+- [ ] **No reviewable script artifact for a human approval gate** — production consumers gate schema changes on a person reading the DDL, and the tool computes exactly that but never emits it: the first such consumer parsed `diff --format json` and reassembled the SQL themselves, which makes the reviewed text a *different artifact* from the executed one. `diff --format sql`, rendering the plan in execution order with the `planHash` in its header, closes it — and pairs the fingerprint with the paper a human actually signed. Note this is **not** blocked by the apply-path attribution item below: that constraint is about generating a script and publishing from one comparison, and `diff` does not publish. It already holds the update script and every redefine script. Review-only by design — a directly executable artifact invites `sqlcmd`, which skips the ledger, the redefine ordering, and the migration run-once contract
+
+Not a hard dependency on S1 — the header could carry today's warning. A
+*correctness-of-signal* one: a warning that fires on every least-privilege connection,
+printed at the top of the document a reviewer is supposed to read carefully, teaches
+them to skip it. Warning fatigue is worst exactly there.
+
+*Exit:* a reviewer reads one artifact covering the whole plan, and the hash in its
+header is the hash the apply refuses to deviate from.
+
+**S3 — the apply says what it did and what it left**
+
+- [ ] **Failure semantics are not a user-facing contract** — a consumer about to apply 31 objects to production asked what the database looks like if the 17th fails, found no answer in `--help`, the manifest, or `docs/`, and reverse-engineered the ledger to a *wrong* conclusion: the per-object rows with success flags read like a progress log, but declarative rows are written in one batch after the publish commits. The real answer is three-tier — the declarative stage is transactional (`IncludeTransactionalScripts`, [ADR-0004 §3](docs/adr/0004-failure-semantics-and-resume.md)), redefines and migrations are per-object, and there is no cross-stage rollback. ADR-0004 answers all of it, but an ADR is a decision record, not a contract an operator reads before approving; §Consequences even claims "re-run until green" is a documented operator instruction, and the only user-facing trace is a parenthetical in `docs/errors.md`. Two deliverables: the document, and a failure envelope that carries the stage and what was already applied — `ApplyOperation.Outcome` has both today and the JSON error path drops them (a redefine failure rethrows past the operation entirely and surfaces as a generic `execution` error, hiding the declarative changes that did commit)
+
+Last because the behavior is already correct — only its self-description is missing.
+S2 shrinks the harm further: the recommended path already hands the operator a
+reviewed artifact before anything runs.
+
+*Exit:* the question that started this ("what does the database look like if the 17th
+of 31 objects fails?") is answered by a document the operator can find, and a failed
+apply names its stage and what it had already committed.
+
+#### Awaiting a human decision
 
 - [ ] **Apply-path script attribution** — `diff` computes the update script and attributes it per change; `apply` does not (its plan is built with `UpdateScript: null`), so the same operation says less at the moment it executes: no per-change `sql`, and `SCHEMORPH102` (rebuild cost) cannot fire on the path that actually rebuilds.
 
@@ -50,13 +103,9 @@ Exit criterion: an AI coding agent completes a schema change end-to-end (edit SQ
 
   Scope of the actual harm, stated honestly: with `--expect-plan` the user already holds the reviewed plan — the one from `diff`, with its SQL and lint — and the fingerprint proves the apply matches it. The gap bites the *ungated* apply, which is the mode this tool least wants to encourage. **Needs a human decision (and an ADR) on whether apply should stop delegating execution to DacFx's publish**; not autonomous work.
 
-- [ ] **Restricted-comparison warning fires on the cause, not the effect** — `SCHEMORPH008` is keyed on DacFx reporting a missing `VIEW ANY DEFINITION`, so it fires on every least-privilege `db_owner` connection whether or not anything went unread. The first production consumer measured the effect on their database: 64 objects live, 64 read by `inspect`, **0 actually missing** — and had to run a catalog query and a manual reconciliation to learn that, on every apply. Worse, `docs/errors.md` already argues (correctly) that a `db_owner` reads every definition through `CONTROL`, so the documentation and the warning contradict each other. The fix is to fire on an object that genuinely came back unreadable, and to say how many; suppressing the warning for `db_owner` is explicitly rejected — that trades a false positive for a possible false negative in a safety warning, which is the wrong direction for this one. Related: the restriction is reachable only through `messages[]`, while automation reads the top-level booleans — a warning whose whole point is "do not trust `hasChanges`" cannot participate in the judgment that reads `hasChanges`. Additive top-level field, plan format 1.3, excluded from `planHash` (permissions are not actions)
-
-- [ ] **No reviewable script artifact for a human approval gate** — production consumers gate schema changes on a person reading the DDL, and the tool computes exactly that but never emits it: the first such consumer parsed `diff --format json` and reassembled the SQL themselves, which makes the reviewed text a *different artifact* from the executed one. `diff --format sql`, rendering the plan in execution order with the `planHash` in its header, closes it — and pairs the fingerprint with the paper a human actually signed. Note this is **not** blocked by the apply-path attribution item below: that constraint is about generating a script and publishing from one comparison, and `diff` does not publish. It already holds the update script and every redefine script. Review-only by design — a directly executable artifact invites `sqlcmd`, which skips the ledger, the redefine ordering, and the migration run-once contract
-
-- [ ] **Failure semantics are not a user-facing contract** — a consumer about to apply 31 objects to production asked what the database looks like if the 17th fails, found no answer in `--help`, the manifest, or `docs/`, and reverse-engineered the ledger to a *wrong* conclusion: the per-object rows with success flags read like a progress log, but declarative rows are written in one batch after the publish commits. The real answer is three-tier — the declarative stage is transactional (`IncludeTransactionalScripts`, [ADR-0004 §3](docs/adr/0004-failure-semantics-and-resume.md)), redefines and migrations are per-object, and there is no cross-stage rollback. ADR-0004 answers all of it, but an ADR is a decision record, not a contract an operator reads before approving; §Consequences even claims "re-run until green" is a documented operator instruction, and the only user-facing trace is a parenthetical in `docs/errors.md`. Two deliverables: the document, and a failure envelope that carries the stage and what was already applied — `ApplyOperation.Outcome` has both today and the JSON error path drops them (a redefine failure rethrows past the operation entirely and surfaces as a generic `execution` error, hiding the declarative changes that did commit)
-
-- [ ] **Flaky integration suite** — `AgentSurfaceTests` (and occasionally `CoreLoopTests.Destructive_drop_needs_the_explicit_flag`) fail intermittently under a full-suite run and pass in isolation; verified present on a clean tree, so this predates the current work. The observed symptom is a plan whose `changes[].sql` is null: DacFx's `GenerateScript` intermittently fails under concurrent load and the provider — correctly — degrades to a `SCHEMORPH002` warning rather than inventing a script. So the *tool* is honest and the *test* is strict, but a suite that cannot be trusted to be green undermines every verification built on it. Worth fixing before it is used to gate anything
+  Worth re-examining after S2: once `diff --format sql` exists and the documented path
+  is review-then-`--expect-plan`, the ungated apply this gap bites is even less
+  load-bearing, and the decision may reasonably resolve as *won't do*.
 
 ### Demand-gated — waiting for a signal, not for time
 
@@ -70,9 +119,14 @@ Each needs an observation before it is worth building. None is scheduled.
 
 Still deliberately last, and the **engine choice is still deferred** ([ADR-0003](docs/adr/0003-postgres-as-second-provider.md)). What changed (2026-07-20): a first committed consumer supplied a **behavioral** requirement set — managed/non-superuser Postgres with no extension dependency, the three-strategy model at parity, expression-normalized diffs that re-run empty, plan/error/MCP contracts identical across providers, and transactional-DDL apply atomicity as a Postgres-specific opportunity — plus the acceptance scenarios it will judge adoption by. Behavioral requirements do not pick an engine; they become the axes the engine is chosen on.
 
-Directional sequence (each stage gated on the previous; the whole phase gated on Phase 3's
-**open code** items — not on its demand-gated ones, which may never acquire a signal and must
-not hold the next phase hostage):
+The gate, restated (2026-07-20): **Phase 3's staged production-gate hardening, S0 through
+S3.** Not its demand-gated items, and not the item awaiting a human decision — both may
+never acquire what they are waiting for, and neither should hold a phase hostage. This
+does push Phase 4 out, and that is the intended trade: a first production consumer
+reporting from a live database outranks a second provider whose own consumer has a
+working alternative and has stated no deadline.
+
+Directional sequence (each stage gated on the previous):
 
 - [ ] Requirements capture — record the consumer requirement set and the one design question it opens: whether apply **atomicity** may differ per provider and, if so, that it must be declared in the plan rather than left implicit (ADR-0004 territory). Decided at kickoff, not before.
 - [ ] Evaluate engine options as they exist *then* (psqldef subprocess, parser-library binding, native catalog comparison), scored against those requirements — extension-freedom, control over apply atomicity, control over expression normalization, and single-file distribution all cut against some candidates
