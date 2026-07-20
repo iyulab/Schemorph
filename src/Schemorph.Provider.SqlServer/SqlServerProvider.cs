@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Dac;
 using Microsoft.SqlServer.Dac.Compare;
@@ -32,7 +32,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
     public Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken cancellationToken = default)
         => Task.Run(() => Compare(request, cancellationToken), cancellationToken);
 
-    public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, bool> includeChange, Action<IReadOnlyList<RawChange>>? onChangesComputed = null, CancellationToken cancellationToken = default)
+    public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, bool> includeChange, Action<CompareResult>? onChangesComputed = null, CancellationToken cancellationToken = default)
         => Task.Run(() => Apply(request, includeChange, onChangesComputed, cancellationToken), cancellationToken);
 
     public Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(IDesiredState desiredState, CancellationToken cancellationToken = default)
@@ -141,12 +141,13 @@ public sealed class SqlServerProvider : IDatabaseProvider
         }
 
         return new CompareResult(changes, messages, script,
-            script is null ? null : UpdateScriptAttributor.Attribute(script, changes));
+            script is null ? null : UpdateScriptAttributor.Attribute(script, changes),
+            TablesWithColumnChanges(result.Differences));
     }
 
     // ------------------------------------------------------------------ apply
 
-    private static ApplyResult Apply(ApplyRequest request, Func<RawChange, bool> includeChange, Action<IReadOnlyList<RawChange>>? onChangesComputed, CancellationToken cancellationToken)
+    private static ApplyResult Apply(ApplyRequest request, Func<RawChange, bool> includeChange, Action<CompareResult>? onChangesComputed, CancellationToken cancellationToken)
     {
         var state = SqlServerDesiredState.From(request.DesiredState);
         using var session = ComparisonSession.Open(state, request.ConnectionString, cancellationToken);
@@ -180,7 +181,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
             }
         }
 
-        onChangesComputed?.Invoke(all);
+        onChangesComputed?.Invoke(new CompareResult(all, Array.Empty<RawMessage>(), UpdateScript: null,
+            ChangeScripts: null, TablesWithColumnChanges(result.Differences)));
 
         if (applied.Count == 0)
         {
@@ -250,16 +252,29 @@ public sealed class SqlServerProvider : IDatabaseProvider
                 continue;
             }
 
-            var dependsOn = obj.GetReferenced(DacQueryScopes.UserDefined)
+            var referenced = obj.GetReferenced(DacQueryScopes.UserDefined).ToList();
+            var dependsOn = referenced
                 .Select(FullName)
                 .Where(r => names.Contains(r) && !r.Equals(name, StringComparison.OrdinalIgnoreCase))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(r => r, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
+            // A referenced column names its table in its first two parts; a
+            // reference to the table itself (SELECT *) names it directly.
+            var dependsOnTables = referenced
+                .Where(r => r.ObjectType == Table.TypeClass || r.ObjectType == Column.TypeClass)
+                .Select(r => r.ObjectType == Table.TypeClass
+                    ? FullName(r)
+                    : string.Join(".", r.Name.Parts.Take(2)))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(r => r, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
             var fileText = textByPath[file];
             objects.Add(new ProgrammableObjectInfo(
-                name, obj.ObjectType.Name, file, fileText, RewriteToCreateOrAlter(fileText), dependsOn));
+                name, obj.ObjectType.Name, file, fileText, RewriteToCreateOrAlter(fileText),
+                dependsOn, dependsOnTables));
         }
 
         // ADR-0002: one programmable object per file, with a clear error otherwise —
@@ -509,6 +524,25 @@ public sealed class SqlServerProvider : IDatabaseProvider
                 "definitions could be read and changes to them are absent from this plan — a partial or empty " +
                 "result must not be read as \"in sync\". Grant VIEW ANY DEFINITION for a complete comparison.")
             : null;
+
+    /// <summary>
+    /// Tables where an existing column's definition changes. DacFx reports this
+    /// as a Change difference on the table with a Change difference on the column
+    /// beneath it — the shape a retype, a nullability flip or a collation change
+    /// all take. Column additions and removals are deliberately not included:
+    /// they leave an explicitly-projected dependent object's meaning intact, and
+    /// treating every additive column as an invalidation would redefine the world
+    /// on the most common change there is.
+    /// </summary>
+    private static IReadOnlyList<string> TablesWithColumnChanges(IEnumerable<SchemaDifference> differences) =>
+        differences
+            .Where(d => d.UpdateAction == SchemaUpdateAction.Change
+                        && (d.SourceObject ?? d.TargetObject)?.ObjectType == Table.TypeClass
+                        && d.Children.Any(c => c.UpdateAction == SchemaUpdateAction.Change
+                                               && (c.SourceObject ?? c.TargetObject)?.ObjectType == Column.TypeClass))
+            .Select(FullName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     private static RawChange ToRawChange(SchemaDifference difference) => new(
         difference.UpdateAction.ToString(),

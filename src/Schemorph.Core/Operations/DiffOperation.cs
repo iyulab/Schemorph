@@ -1,4 +1,4 @@
-using Schemorph.Core.Ledger;
+﻿using Schemorph.Core.Ledger;
 using Schemorph.Core.Planning;
 using Schemorph.Core.Providers;
 using Schemorph.Core.Redefine;
@@ -50,8 +50,9 @@ public static class DiffOperation
         {
             return new DiffResult(null, programmables.Messages, FailureStage.DesiredState);
         }
-        var redefinePlan = await new RedefineRunner(provider, ledger)
-            .PlanAsync(programmables, connectionString, cancellationToken);
+        var redefinePlan = RedefineRunner.WithInvalidations(
+            await new RedefineRunner(provider, ledger).PlanAsync(programmables, connectionString, cancellationToken),
+            programmables, compared.TablesWithColumnChanges);
 
         return new DiffResult(
             PlanBuilder.Build(compared with { Messages = messages }, allowDestructive,

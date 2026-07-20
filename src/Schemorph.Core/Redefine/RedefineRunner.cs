@@ -1,4 +1,4 @@
-using Schemorph.Core.Ledger;
+﻿using Schemorph.Core.Ledger;
 using Schemorph.Core.Planning;
 using Schemorph.Core.Providers;
 
@@ -133,6 +133,73 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
     private static string ChecksumOf(ProgrammableObjectInfo obj) =>
         ContentChecksum.Compute(obj.FileText);
 
+    /// <summary>
+    /// Adds the objects a declarative column change invalidates to an existing
+    /// plan, in dependency order.
+    ///
+    /// A checksum over a file cannot see this: retype a column and every view
+    /// selecting it keeps the same text while its cached metadata goes stale, so
+    /// the view reports the old type until something re-defines it (what
+    /// sp_refreshview papered over under SSDT). The checksum judges the object's
+    /// own SQL; its effective meaning also depends on the columns upstream.
+    ///
+    /// Targeted by construction: only objects reading an affected table, plus the
+    /// objects reading those (a view over a view is just as stale), and never
+    /// anything already pending. Blanket re-definition would be simpler and would
+    /// throw away the idempotent skip and brownfield reconciliation that make
+    /// strategy 2 worth having.
+    /// </summary>
+    public static RedefinePlan WithInvalidations(
+        RedefinePlan plan, ProgrammableAnalysis analysis, IReadOnlyList<string>? tablesWithColumnChanges)
+    {
+        if (tablesWithColumnChanges is not { Count: > 0 })
+        {
+            return plan;
+        }
+
+        var affected = tablesWithColumnChanges.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ordered = TopologicalOrder(analysis.Objects);
+
+        // Dependency order means an object's programmable dependencies are already
+        // decided when it is reached, so one pass closes over the graph.
+        var invalidated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var obj in ordered)
+        {
+            if ((obj.DependsOnTables ?? Array.Empty<string>()).Any(affected.Contains)
+                || obj.DependsOn.Any(invalidated.Contains))
+            {
+                invalidated.Add(obj.ObjectName);
+            }
+        }
+
+        var alreadyPlanned = plan.Pending.Select(p => p.Object.ObjectName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var additions = ordered
+            .Where(o => invalidated.Contains(o.ObjectName) && !alreadyPlanned.Contains(o.ObjectName))
+            .Select(o => new PendingRedefine(o, RedefineReason.DependencyChanged))
+            .ToList();
+        if (additions.Count == 0)
+        {
+            return plan;
+        }
+
+        // Re-sorted as a whole: an addition can be an existing entry's dependency.
+        var pendingByName = plan.Pending.Concat(additions)
+            .ToDictionary(p => p.Object.ObjectName, StringComparer.OrdinalIgnoreCase);
+        var pending = ordered
+            .Where(o => pendingByName.ContainsKey(o.ObjectName))
+            .Select(o => pendingByName[o.ObjectName])
+            .ToList();
+
+        // An invalidated object is re-applied, so it is no longer a candidate for
+        // "matches live, just record it".
+        return plan with
+        {
+            Pending = pending,
+            Reconcilable = plan.Reconcilable.Where(o => !invalidated.Contains(o.ObjectName)).ToList(),
+        };
+    }
+
     /// <summary>Kahn topological sort, stable (alphabetical among ready nodes).</summary>
     private static List<ProgrammableObjectInfo> TopologicalOrder(IReadOnlyList<ProgrammableObjectInfo> objects)
     {
@@ -171,6 +238,11 @@ public enum RedefineReason
     NoHistory,
     /// <summary>The file's checksum differs from the last successfully applied one.</summary>
     ChecksumChanged,
+    /// <summary>
+    /// Its file did not change, but a column it depends on did — the object's
+    /// cached metadata would otherwise describe the old shape.
+    /// </summary>
+    DependencyChanged,
 }
 
 /// <summary>
@@ -187,6 +259,8 @@ public sealed record PendingRedefine(ProgrammableObjectInfo Object, RedefineReas
         {
             RedefineReason.ChecksumChanged =>
                 "The file's checksum differs from the last applied definition; re-defined idempotently (CREATE OR ALTER).",
+            RedefineReason.DependencyChanged =>
+                "Its file is unchanged, but a column it depends on is being altered — the object's cached metadata would keep describing the old shape, so it is re-defined idempotently (CREATE OR ALTER).",
             _ =>
                 "No history in the ledger and the live definition does not match the file; defined idempotently (CREATE OR ALTER) and recorded.",
         });

@@ -1,4 +1,4 @@
-using Schemorph.Core.Ledger;
+﻿using Schemorph.Core.Ledger;
 using Schemorph.Core.Migrations;
 using Schemorph.Core.Planning;
 using Schemorph.Core.Providers;
@@ -68,7 +68,12 @@ public static class ApplyOperation
         await ledger.EnsureInitializedAsync(request.ConnectionString, cancellationToken);
 
         var redefineRunner = new RedefineRunner(provider, ledger);
-        var redefinePlan = await redefineRunner.PlanAsync(programmables, request.ConnectionString, cancellationToken);
+        // The base plan is what the files alone imply; the comparison can add to
+        // it (a column change invalidates what depends on that column), so the
+        // final plan is only known inside the hook — and that is the plan that is
+        // fingerprinted, shown, and executed.
+        var basePlan = await redefineRunner.PlanAsync(programmables, request.ConnectionString, cancellationToken);
+        var redefinePlan = basePlan;
 
         // The plan is announced from the SAME comparison session that applies
         // (provider hook), so what is gated and shown is exactly what runs.
@@ -79,11 +84,13 @@ public static class ApplyOperation
             result = await provider.ApplyAsync(
                 new ApplyRequest(state, request.ConnectionString),
                 change => PlanBuilder.ShouldInclude(change, request.AllowDestructive),
-                changes =>
+                computed =>
                 {
+                    redefinePlan = RedefineRunner.WithInvalidations(
+                        basePlan, programmables, computed.TablesWithColumnChanges);
                     plan = PlanBuilder.Build(
-                        new CompareResult(changes, Array.Empty<RawMessage>(), UpdateScript: null),
-                        request.AllowDestructive, redefinePlan.Pending.Select(p => p.ToPlanAction()).ToList());
+                        computed, request.AllowDestructive,
+                        redefinePlan.Pending.Select(p => p.ToPlanAction()).ToList());
                     if (request.ExpectedPlanHash is { } expected)
                     {
                         var actual = PlanFingerprint.Compute(plan);

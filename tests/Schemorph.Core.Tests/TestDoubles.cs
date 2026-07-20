@@ -1,4 +1,4 @@
-using Schemorph.Core.Ledger;
+﻿using Schemorph.Core.Ledger;
 using Schemorph.Core.Providers;
 
 namespace Schemorph.Core.Tests;
@@ -48,7 +48,7 @@ internal sealed class FakeProvider : IDatabaseProvider
     public Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken ct = default)
         => throw new NotSupportedException();
 
-    public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, bool> include, Action<IReadOnlyList<RawChange>>? onChangesComputed = null, CancellationToken ct = default)
+    public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, bool> include, Action<CompareResult>? onChangesComputed = null, CancellationToken ct = default)
         => throw new NotSupportedException();
 
     public Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(IDesiredState desiredState, CancellationToken ct = default)

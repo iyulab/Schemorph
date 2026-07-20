@@ -1,4 +1,4 @@
-using Schemorph.Core.Ledger;
+﻿using Schemorph.Core.Ledger;
 
 namespace Schemorph.Core.Providers;
 
@@ -35,14 +35,19 @@ public interface IDatabaseProvider
     /// Apply desired state to the target database. <paramref name="includeChange"/>
     /// is the core's policy hook: the provider mechanically applies exactly the
     /// changes the core includes (destructive gating, self-exclusion, ...).
-    /// <paramref name="onChangesComputed"/> fires with the full computed change set
-    /// before anything executes — from the same comparison that then applies, so a
-    /// plan shown through it cannot race a second comparison.
+    /// <paramref name="onChangesComputed"/> fires before anything executes, with
+    /// the comparison the apply will carry out — from the same session, so a plan
+    /// shown through it cannot race a second comparison. It carries the compare
+    /// shape rather than a bare change list because the plan built from it must
+    /// account for everything the apply will do, including the re-definitions a
+    /// column change invalidates. (It does not carry the update script: DacFx
+    /// treats generating the script and publishing as alternative actions on one
+    /// comparison — see the apply-path attribution item in ROADMAP.)
     /// </summary>
     Task<ApplyResult> ApplyAsync(
         ApplyRequest request,
         Func<RawChange, bool> includeChange,
-        Action<IReadOnlyList<RawChange>>? onChangesComputed = null,
+        Action<CompareResult>? onChangesComputed = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -132,12 +137,20 @@ public sealed record InspectResult(IReadOnlyList<DesiredStateFile> Files);
 
 public sealed record CompareRequest(IDesiredState DesiredState, string ConnectionString);
 
-/// <summary>Provider-raw comparison output, in Schemorph terms (no engine types).</summary>
+/// <summary>
+/// Provider-raw comparison output, in Schemorph terms (no engine types).
+/// <paramref name="TablesWithColumnChanges"/>: tables where an existing column's
+/// definition changes (type, nullability, collation) — not columns added or
+/// dropped. A programmable object's text can be byte-identical across such a
+/// change while its meaning is not, so this is what strategy 2 needs in order to
+/// invalidate what depends on it (see <see cref="ProgrammableObjectInfo.DependsOnTables"/>).
+/// </summary>
 public sealed record CompareResult(
     IReadOnlyList<RawChange> Changes,
     IReadOnlyList<RawMessage> Messages,
     string? UpdateScript,
-    IReadOnlyList<ChangeScript>? ChangeScripts = null);
+    IReadOnlyList<ChangeScript>? ChangeScripts = null,
+    IReadOnlyList<string>? TablesWithColumnChanges = null);
 
 /// <summary>
 /// The slice of the update script attributable to one change (plan explanations):
@@ -164,13 +177,20 @@ public sealed record RawMessage(string Severity, string Code, string Text);
 /// </param>
 /// <param name="ApplyScript">Idempotent re-definition script (e.g. CREATE OR ALTER rewrite of the file).</param>
 /// <param name="DependsOn">Names of other programmable objects this one references.</param>
+/// <param name="DependsOnTables">
+/// Tables this object reads, directly or through a referenced column. Its own
+/// text says nothing about their column types, yet its meaning depends on them —
+/// which is why a column change there must invalidate this object even when its
+/// file has not moved.
+/// </param>
 public sealed record ProgrammableObjectInfo(
     string ObjectName,
     string ObjectType,
     string FilePath,
     string FileText,
     string ApplyScript,
-    IReadOnlyList<string> DependsOn);
+    IReadOnlyList<string> DependsOn,
+    IReadOnlyList<string>? DependsOnTables = null);
 
 public sealed record ProgrammableAnalysis(
     IReadOnlyList<ProgrammableObjectInfo> Objects,

@@ -1,4 +1,4 @@
-using Schemorph.Core.Ledger;
+﻿using Schemorph.Core.Ledger;
 using Schemorph.Core.Migrations;
 using Schemorph.Core.Operations;
 using Schemorph.Core.Planning;
@@ -37,7 +37,7 @@ public sealed class CoreLoopTests : IDisposable
     }
 
     private async Task<ApplyResult> Apply(
-        string schemaDir, bool allowDestructive = false, Action<IReadOnlyList<RawChange>>? onChangesComputed = null) =>
+        string schemaDir, bool allowDestructive = false, Action<CompareResult>? onChangesComputed = null) =>
         await _provider.ApplyAsync(new ApplyRequest(await LoadAsync(schemaDir), _db.Url),
             c => PlanBuilder.ShouldInclude(c, allowDestructive), onChangesComputed);
 
@@ -54,9 +54,9 @@ public sealed class CoreLoopTests : IDisposable
         // executes — before anything hits the database.
         IReadOnlyList<RawChange>? announced = null;
         var tableExistedAtAnnounce = true;
-        var result = await Apply(Path.Combine(_dir, "schema"), onChangesComputed: changes =>
+        var result = await Apply(Path.Combine(_dir, "schema"), onChangesComputed: computed =>
         {
-            announced = changes;
+            announced = computed.Changes;
             tableExistedAtAnnounce = _db.Scalar<int>("SELECT COUNT(*) FROM sys.tables WHERE name = 'Items'") > 0;
         });
 
@@ -325,6 +325,81 @@ public sealed class CoreLoopTests : IDisposable
                 schemaDir, _db.Url, ExpectedPlanHash: expected));
         Assert.True(accepted.Success);
         Assert.Equal(1, _db.Scalar<int>("SELECT COUNT(*) FROM sys.tables WHERE name = 'Gated'"));
+    }
+
+    // A column retype leaves a dependent view's text byte-identical, so the
+    // redefine checksum sees nothing to do and the declarative diff has nothing to
+    // say about the view either — but SQL Server's cached view metadata still
+    // describes the old column type. The view then reports int for a bigint
+    // column until someone refreshes it (what sp_refreshview papered over under
+    // SSDT). Whoever changed the column never asked for a stale view.
+    [SkippableFact]
+    public async Task Retyping_a_column_redefines_the_views_that_depend_on_it()
+    {
+        _db.Execute("CREATE TABLE dbo.Bill (Id INT NOT NULL PRIMARY KEY, Amount INT NOT NULL)");
+        _db.Execute("CREATE VIEW dbo.BillView AS SELECT b.Id, b.Amount FROM dbo.Bill AS b");
+        _db.Execute("CREATE VIEW dbo.BillTotals AS SELECT COUNT(*) AS Bills, SUM(v.Amount) AS Total FROM dbo.BillView AS v");
+
+        // Only the column type changes. Both view files are byte-identical to what
+        // is already deployed.
+        Write("schema/tables/dbo.Bill.sql",
+            "CREATE TABLE dbo.Bill (Id INT NOT NULL PRIMARY KEY, Amount BIGINT NOT NULL);\nGO\n");
+        Write("schema/views/dbo.BillView.sql",
+            "CREATE VIEW dbo.BillView AS SELECT b.Id, b.Amount FROM dbo.Bill AS b;\nGO\n");
+        Write("schema/views/dbo.BillTotals.sql",
+            "CREATE VIEW dbo.BillTotals AS SELECT COUNT(*) AS Bills, SUM(v.Amount) AS Total FROM dbo.BillView AS v;\nGO\n");
+        var schemaDir = Path.Combine(_dir, "schema");
+
+        // The plan must say so before it runs — a redefinition nobody was told
+        // about is the same silence in the other direction.
+        var diff = await DiffOperation.RunAsync(_provider, _ledger, schemaDir, _db.Url, allowDestructive: false);
+        Assert.Contains(diff.Plan!.Actions, a =>
+            a.ObjectName == "dbo.BillView" && a.Operation == PlanOperation.Redefine);
+
+        var outcome = await ApplyOperation.RunAsync(
+            _provider, _ledger, new ApplyOperation.Request(schemaDir, _db.Url));
+        Assert.True(outcome.Success);
+
+        // The view's own metadata must now describe the new type. bigint is 8
+        // bytes, int is 4 — a stale view still reports 4.
+        Assert.Equal((short)8, _db.Scalar<short>("""
+            SELECT c.max_length FROM sys.columns c
+            JOIN sys.views v ON v.object_id = c.object_id
+            WHERE v.name = 'BillView' AND c.name = 'Amount'
+            """));
+        // ... and so must a view that only depends on it transitively.
+        Assert.Equal((short)8, _db.Scalar<short>("""
+            SELECT c.max_length FROM sys.columns c
+            JOIN sys.views v ON v.object_id = c.object_id
+            WHERE v.name = 'BillTotals' AND c.name = 'Total'
+            """));
+    }
+
+    // The invalidation must stay targeted: an unrelated additive column change
+    // must not drag every view through a redefinition (that would throw away the
+    // idempotent-skip and reconcile behaviour ADR-0002 exists for).
+    [SkippableFact]
+    public async Task An_unrelated_table_change_does_not_redefine_views()
+    {
+        _db.Execute("CREATE TABLE dbo.Alpha (Id INT NOT NULL PRIMARY KEY)");
+        _db.Execute("CREATE TABLE dbo.Beta (Id INT NOT NULL PRIMARY KEY, Amount INT NOT NULL)");
+        _db.Execute("CREATE VIEW dbo.BetaView AS SELECT b.Id, b.Amount FROM dbo.Beta AS b");
+
+        // Alpha gains a column; Beta and its view are untouched.
+        Write("schema/tables/dbo.Alpha.sql",
+            "CREATE TABLE dbo.Alpha (Id INT NOT NULL PRIMARY KEY, Label NVARCHAR(20) NULL);\nGO\n");
+        Write("schema/tables/dbo.Beta.sql",
+            "CREATE TABLE dbo.Beta (Id INT NOT NULL PRIMARY KEY, Amount INT NOT NULL);\nGO\n");
+        Write("schema/views/dbo.BetaView.sql",
+            "CREATE VIEW dbo.BetaView AS SELECT b.Id, b.Amount FROM dbo.Beta AS b;\nGO\n");
+        var schemaDir = Path.Combine(_dir, "schema");
+
+        // First apply reconciles the view (its live definition matches the file).
+        await ApplyOperation.RunAsync(_provider, _ledger, new ApplyOperation.Request(schemaDir, _db.Url));
+
+        // Nothing is left to do — in particular the view is not redefined again.
+        var diff = await DiffOperation.RunAsync(_provider, _ledger, schemaDir, _db.Url, allowDestructive: false);
+        Assert.DoesNotContain(diff.Plan!.Actions, a => a.ObjectName == "dbo.BetaView");
     }
 
     public void Dispose()
