@@ -1,4 +1,4 @@
-# Roadmap
+﻿# Roadmap
 
 Phases, not dates. Each phase should produce something usable end-to-end before the next begins. Scope within phases is directional; items move as implementation teaches us.
 
@@ -36,18 +36,33 @@ Exit criterion: an AI coding agent completes a schema change end-to-end (edit SQ
 
 ## Phase 3 — Hardening & ecosystem
 
+### Done
+
 - [x] Drift detection — `status` verb + MCP `schemorph_status`: the plan a diff would produce now (drift), ledger summary (by kind, failures, last activity), pending migrations; exit 2 on pending work
 - [x] Brownfield onboarding, part 1: existing databases and SSDT trees are consumed as-is — non-model files (SQLCMD deploy scripts, seed DML) are classified out with per-file warnings, and history-less programmable objects matching their live definitions **reconcile** (recorded, nothing executed) instead of phantom-redefining (ADR-0002 addendum)
-- [ ] Baseline/onboarding flow, part 2: absorbing existing migration *history* from other tools (Flyway/Liquibase tables)
-- [ ] **Retype-triggered dependency invalidation for programmable objects** — a column retype (type change, same name) leaves a dependent view's projection text (`b.[Amount]`) byte-identical, so the redefine gate (checksum of file text, `RedefineRunner`) skips it and SQL Server's cached view metadata goes stale — the exact gap `sp_refreshview` papered over under SSDT. Root cause: the checksum judges the wrong input (a view's effective binding depends on its upstream columns' types, not just its own SQL). Fix (design, not yet built): when the declarative diff retypes a column, mark programmable objects depending on that table/column as dirty and redefine them in dependency order (the runner already holds the graph via `TopologicalOrder`/`DependsOn`) — targeted, not a blanket force-redefine-all that would discard the idempotent-skip + reconcile value. Surfaced by the yesung consumer (2026-07-14, D5-non-blocking); until it ships, consumers keep a partial `RefreshViews.sql`.
-- [ ] Multi-environment configuration (dev/staging/prod targets, per-target safety policy) — design should leave the door open to policy-as-code (machine-evaluable policies failing CI on violating plans) without pre-building it. *Deferred until real demand (2026-07-12, human decision): introducing a config-file surface is demand-driven; the second dogfooding round doubles as the demand observation.*
-- [ ] Documentation site, examples, comparison guides — README positioning lead settled (2026-07-12, human-approved: combination-first structure around the empirically open combination — SQL Server declarative diff + programmable objects first-class + versioned data ledger + free/no-login/offline, with agent-native claims backed by shipped behavior); remaining scope is the site/examples/guides themselves, and periodic re-verification of competitive claims. *Scheduled after the v0.2.0 release and the second dogfooding round (2026-07-12, human decision) so the site documents a verified surface; both gates are now met (dogfooding completed 2026-07-13, cycles 48–52), so only the kickoff infrastructure proposal (static generator / hosting) and the site/examples/guides themselves remain*
+### Open — code
+
+The remaining engineering work in this phase. Both are known gaps with a consumer
+workaround standing in for them today.
+
+- [ ] **Retype-triggered dependency invalidation for programmable objects** — a column retype (type change, same name) leaves a dependent view's projection text (`b.[Amount]`) byte-identical, so the redefine gate (checksum of file text, `RedefineRunner`) skips it and SQL Server's cached view metadata goes stale — the exact gap `sp_refreshview` papered over under SSDT. Root cause: the checksum judges the wrong input (a view's effective binding depends on its upstream columns' types, not just its own SQL). Fix (design, not yet built): when the declarative diff retypes a column, mark programmable objects depending on that table/column dirty and redefine them in dependency order (the runner already holds the graph via `TopologicalOrder`/`DependsOn`) — targeted, not a blanket force-redefine-all that would discard the idempotent-skip + reconcile value. Surfaced by the yesung consumer (2026-07-14); until it ships, consumers keep a partial `RefreshViews.sql`
+- [ ] **Apply-path script attribution** — `diff` computes the update script and attributes it per change; `apply` does not (its plan is built with `UpdateScript: null`), so the same operation is more informative in preview than in execution: no per-change `sql`, and `SCHEMORPH102` (rebuild cost) cannot fire on the path that actually rebuilds. Same root as the parked rebuild-gating question: the apply gate sees `RawChange` only, with no script to judge. Fixing the asymmetry is a prerequisite for that gating decision, and worth it on its own — a plan that goes quiet at the moment it executes is the wrong way round
+
+### Demand-gated — waiting for a signal, not for time
+
+Each needs an observation before it is worth building. None is scheduled.
+
+- [ ] Baseline/onboarding flow, part 2: absorbing existing migration *history* from other tools (Flyway/Liquibase tables) — no consumer has asked
+- [ ] Multi-environment configuration (dev/staging/prod targets, per-target safety policy) — a config-file surface is demand-driven (2026-07-12, human decision); the design should leave the door open to policy-as-code without pre-building it. Current signal: one consumer runs three environments but has not asked for per-environment *policy*
+- [ ] Examples and comparison guides — end-to-end walkthrough, brownfield adoption walkthrough, and the README's competitive claims written out with sources. This is the content the ecosystem work is actually made of. A documentation **site** is deliberately *not* scheduled: at twelve files and ~10k words the docs have no navigation problem a generator would solve, and adding one would mean a Node toolchain this repo does not otherwise have (2026-07-20, human decision). Revisit if the doc set outgrows the README index — the evaluation is kept in `claudedocs/proposals/`
 
 ## Phase 4 — PostgreSQL provider
 
 Still deliberately last, and the **engine choice is still deferred** ([ADR-0003](docs/adr/0003-postgres-as-second-provider.md)). What changed (2026-07-20): a first committed consumer supplied a **behavioral** requirement set — managed/non-superuser Postgres with no extension dependency, the three-strategy model at parity, expression-normalized diffs that re-run empty, plan/error/MCP contracts identical across providers, and transactional-DDL apply atomicity as a Postgres-specific opportunity — plus the acceptance scenarios it will judge adoption by. Behavioral requirements do not pick an engine; they become the axes the engine is chosen on.
 
-Directional sequence (each stage gated on the previous; the whole phase gated on Phase 3):
+Directional sequence (each stage gated on the previous; the whole phase gated on Phase 3's
+**open code** items — not on its demand-gated ones, which may never acquire a signal and must
+not hold the next phase hostage):
 
 - [ ] Requirements capture — record the consumer requirement set and the one design question it opens: whether apply **atomicity** may differ per provider and, if so, that it must be declared in the plan rather than left implicit (ADR-0004 territory). Decided at kickoff, not before.
 - [ ] Evaluate engine options as they exist *then* (psqldef subprocess, parser-library binding, native catalog comparison), scored against those requirements — extension-freedom, control over apply atomicity, control over expression normalization, and single-file distribution all cut against some candidates
