@@ -1,0 +1,80 @@
+namespace Schemorph.Provider.Postgres.Tests;
+
+public class CatalogReaderTests
+{
+    private const string Ddl = """
+        CREATE TABLE "Workspaces" (
+            "Id" uuid NOT NULL DEFAULT gen_random_uuid(),
+            "Name" text NOT NULL,
+            "Status" text NOT NULL,
+            "CreatedAt" timestamptz NOT NULL DEFAULT now(),
+            CONSTRAINT "PK_Workspaces" PRIMARY KEY ("Id"),
+            CONSTRAINT "UQ_Workspaces_Name" UNIQUE ("Name"),
+            CONSTRAINT "CK_Workspaces_Status" CHECK ("Status" IN ('active', 'suspended'))
+        );
+        CREATE INDEX "IX_Workspaces_CreatedAt" ON "Workspaces" ("CreatedAt");
+        """;
+
+    [SkippableFact]
+    public async Task Columns_are_read_with_the_engines_own_type_rendering()
+    {
+        await using var schema = await PgTestSchema.CreateAsync(Ddl);
+
+        var tables = await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, schema.Name);
+
+        var table = Assert.Single(tables);
+        Assert.Equal("Workspaces", table.Name);
+        Assert.Equal(schema.Name, table.Schema);
+
+        var id = table.Columns.Single(c => c.Name == "Id");
+        Assert.Equal("uuid", id.DataType);
+        Assert.True(id.NotNull);
+        Assert.Equal("gen_random_uuid()", id.Default);
+
+        // timestamptz is an alias; the catalog's own spelling is what a diff will
+        // compare, so that is what must be captured.
+        Assert.Equal("timestamp with time zone", table.Columns.Single(c => c.Name == "CreatedAt").DataType);
+    }
+
+    [SkippableFact]
+    public async Task Constraints_arrive_in_the_engines_canonical_form()
+    {
+        await using var schema = await PgTestSchema.CreateAsync(Ddl);
+
+        var table = (await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, schema.Name)).Single();
+
+        Assert.Contains(table.Constraints, c => c.Name == "PK_Workspaces" && c.Definition.StartsWith("PRIMARY KEY"));
+        Assert.Contains(table.Constraints, c => c.Name == "UQ_Workspaces_Name" && c.Definition.StartsWith("UNIQUE"));
+
+        // The catalog re-renders IN (...) as = ANY (ARRAY[...]). Capturing that
+        // rendering rather than the source text is the whole point of reading
+        // through the engine (ADR-0007) — text comparison never converges.
+        var check = table.Constraints.Single(c => c.Name == "CK_Workspaces_Status");
+        Assert.Contains("ANY", check.Definition);
+    }
+
+    [SkippableFact]
+    public async Task Constraint_backed_indexes_are_not_reported_twice()
+    {
+        // PK and UNIQUE constraints each own an index that also appears in
+        // pg_indexes. Emitting both would render a file that fails to apply:
+        // the constraint creates the index, then CREATE INDEX collides with it.
+        await using var schema = await PgTestSchema.CreateAsync(Ddl);
+
+        var table = (await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, schema.Name)).Single();
+
+        var index = Assert.Single(table.Indexes);
+        Assert.Equal("IX_Workspaces_CreatedAt", index.Name);
+    }
+
+    [SkippableFact]
+    public async Task Only_the_requested_schema_is_read()
+    {
+        await using var schema = await PgTestSchema.CreateAsync(Ddl);
+        await using var other = await PgTestSchema.CreateAsync("CREATE TABLE \"Elsewhere\" (\"x\" int);");
+
+        var tables = await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, schema.Name);
+
+        Assert.DoesNotContain(tables, t => t.Name == "Elsewhere");
+    }
+}
