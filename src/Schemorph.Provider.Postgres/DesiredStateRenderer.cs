@@ -1,0 +1,70 @@
+using System.Text;
+using Schemorph.Core.Providers;
+
+namespace Schemorph.Provider.Postgres;
+
+/// <summary>
+/// Renders a catalog snapshot as desired-state files: one file per table,
+/// complete and self-applicable, under the conventional kind layout.
+/// Pure — it never touches a connection.
+/// </summary>
+internal static class DesiredStateRenderer
+{
+    public static IReadOnlyList<DesiredStateFile> Render(IReadOnlyList<PgTable> tables)
+    {
+        var files = new List<DesiredStateFile>(tables.Count);
+        foreach (var table in tables)
+        {
+            files.Add(new DesiredStateFile(
+                $"tables/{table.Schema}.{table.Name}.sql",
+                RenderTable(table)));
+        }
+        return files;
+    }
+
+    /// <summary>
+    /// Always quote. Postgres folds unquoted identifiers to lower case, so an
+    /// unquoted rendering of a mixed-case schema does not survive a round trip.
+    /// </summary>
+    internal static string Quote(string identifier)
+        => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+
+    private static string RenderTable(PgTable table)
+    {
+        var qualified = $"{Quote(table.Schema)}.{Quote(table.Name)}";
+        var sql = new StringBuilder();
+
+        if (table.Columns.Count == 0)
+        {
+            sql.Append("CREATE TABLE ").Append(qualified).AppendLine(" ();");
+        }
+        else
+        {
+            sql.Append("CREATE TABLE ").Append(qualified).AppendLine(" (");
+            for (var i = 0; i < table.Columns.Count; i++)
+            {
+                var column = table.Columns[i];
+                sql.Append("    ").Append(Quote(column.Name)).Append(' ').Append(column.DataType);
+                if (column.NotNull) sql.Append(" NOT NULL");
+                if (column.Default is not null) sql.Append(" DEFAULT ").Append(column.Default);
+                sql.AppendLine(i == table.Columns.Count - 1 ? "" : ",");
+            }
+            sql.AppendLine(");");
+        }
+
+        foreach (var constraint in table.Constraints)
+        {
+            sql.AppendLine()
+               .Append("ALTER TABLE ").Append(qualified)
+               .Append(" ADD CONSTRAINT ").Append(Quote(constraint.Name)).Append(' ')
+               .Append(constraint.Definition).AppendLine(";");
+        }
+
+        foreach (var index in table.Indexes)
+        {
+            sql.AppendLine().Append(index.CreateStatement.TrimEnd(';', ' ', '\r', '\n')).AppendLine(";");
+        }
+
+        return sql.ToString();
+    }
+}
