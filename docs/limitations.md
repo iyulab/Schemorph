@@ -105,6 +105,6 @@ path.
 
 ## One database engine
 
-SQL Server only. PostgreSQL is a planned second provider ([ADR-0003](adr/0003-postgres-as-second-provider.md),
-[Roadmap Phase 4](../ROADMAP.md)) with no committed timeline; if you need Postgres
+SQL Server only. PostgreSQL is a planned second provider
+([ADR-0003](adr/0003-postgres-as-second-provider.md)) with no committed timeline; if you need Postgres
 today, Atlas, sqldef, or Flyway will serve you better.

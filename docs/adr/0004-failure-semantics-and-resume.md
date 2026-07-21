@@ -77,7 +77,7 @@ publish commits (decision 5 covers the residual window).
 
 Accepted residual risk: DacFx itself places operations it knows to be non-transactional
 outside the transaction; for the Phase-1 object surface none are expected, and the
-golden-corpus suite (ROADMAP § Phase 1) is the guard if a DacFx upgrade changes that.
+golden-corpus suite is the guard if a DacFx upgrade changes that.
 
 ### 4. Failures are recorded: `Succeeded = false` rows
 
