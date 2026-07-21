@@ -79,3 +79,33 @@ Two of the axes are no longer hypothetical:
   must be *declared* in the plan rather than left implicit, since this ADR forbids
   provider specifics leaking into the user-facing contract — is an open question for
   kickoff, not for now.
+  → **Resolved 2026-07-22** at [ADR-0007](./0007-postgres-engine-selection.md)'s acceptance:
+  declared capability (`atomicity: transactional | partial`), carried into ADR-0004.
+
+## Addendum (2026-07-22): the deferral is spent, and how demand is counted
+
+The engine deferral this ADR created has been paid out as designed. The candidates were
+scored at kickoff against the fixed axes, and the spike — not the feature lists — decided
+it ([ADR-0007](./0007-postgres-engine-selection.md), Accepted). The deferral was worth
+keeping: the defect that eliminated one candidate appears in no documentation, and only a
+run against an acceptance-shaped schema exposed it.
+
+Implementation proceeds in slices, each one releasable on its own, and **still without a
+date**. What replaces a date is a declared capability surface: the provider states what it
+can handle, refuses what it cannot rather than producing a plan it cannot stand behind, and
+that surface grows monotonically toward the SQL Server one. Progress is therefore readable
+from the tool itself instead of from a schedule.
+
+**How demand is counted, since this ADR made honesty its discipline.** Two kinds of signal
+exist and they are not interchangeable:
+
+- **Committed** — a consumer that has supplied behavioral requirements and the acceptance
+  scenarios it will judge adoption by. Still **N = 1**.
+- **Directional** — new projects expected to choose Postgres over SQL Server. Real, and
+  recorded, but it is a forecast. Promotion to committed requires the same thing the first
+  consumer supplied: requirements and acceptance criteria.
+
+Directional signal is a legitimate reason to **start**, and it is why the work is underway.
+It is not a reason to promise a date, and this ADR's stance is unchanged on that point:
+the README continues to point Postgres users at other tools until a slice actually ships,
+and then says what that slice covers — not when the next one arrives.

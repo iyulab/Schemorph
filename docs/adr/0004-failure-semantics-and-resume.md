@@ -147,3 +147,34 @@ because this is a product-behavior trade-off.
   connection/execution for the publish, and a single giant transaction across strategies
   would serialize everything behind the largest lock footprint while still not covering
   non-transactional statements.
+
+## Addendum (2026-07-22): apply atomicity becomes a declared capability
+
+Decision 5 above — fail-fast, no cross-stage rollback — was written when SQL Server was
+the only provider, and its reasoning is specific to that provider: DacFx owns the publish
+connection. A second provider can hold the whole pipeline in a transaction it owns, so the
+sentence "earlier stages stay applied" stops being universally true.
+
+Rather than let the same command mean different things depending on the database, the plan
+and status envelopes now **declare** what was guaranteed, in one provider-agnostic field
+(decided at [ADR-0007](./0007-postgres-engine-selection.md)'s acceptance):
+
+| Value | Meaning |
+|---|---|
+| `partial` | Stages commit independently; a failure leaves earlier stages applied. Decisions 1–6 above describe this mode exactly, and it stays the SQL Server behavior |
+| `transactional` | The apply is one unit: it lands whole or not at all. Statements the provider knows cannot run inside a transaction are marked in the plan, and their presence prevents the claim |
+
+Nothing about the SQL Server path changes; it declares `partial` and keeps the semantics
+this ADR already fixed. What changes is that **the resume story is now read from the plan
+instead of assumed from the tool**. Convergent re-run (decision 1) remains the resume model
+in both modes — under `transactional` there is simply less to converge from.
+
+Two consequences worth naming:
+
+- **The declaration must be earned.** A provider may claim `transactional` only where the
+  tool holds the transaction boundary — owning the connection, not merely observing that
+  something rolled back.
+- **`docs/failure-semantics.md` gains a second column, not a second document.** The
+  question it answers ("the 17th of 31 statements failed — what is in the database now?")
+  has two answers now, and a reader must be able to tell which one applies to the run in
+  front of them without knowing which engine produced it.

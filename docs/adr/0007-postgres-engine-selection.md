@@ -1,8 +1,9 @@
 # ADR-0007: PostgreSQL provider engine — native catalog comparison with shadow normalization
 
-- **Status:** Proposed — acceptance is a human decision, gated together with the
-  open apply-atomicity question from [ADR-0003](./0003-postgres-as-second-provider.md)'s addendum
-- **Date:** 2026-07 (candidate survey and spikes run 2026-07-21)
+- **Status:** **Accepted** (2026-07-22) — accepted together with the open apply-atomicity
+  question from [ADR-0003](./0003-postgres-as-second-provider.md)'s addendum, which is
+  resolved below and carried into [ADR-0004](./0004-failure-semantics-and-resume.md)
+- **Date:** 2026-07 (candidate survey and spikes run 2026-07-21; accepted 2026-07-22)
 
 ## Context
 
@@ -83,3 +84,31 @@ splitting, fingerprinting) if the synthesis work wants one.
   (the spike used string substitution) and cross-schema references are untested.
 - The catalog queries are version-sensitive surface area across Postgres majors; the
   integration suite must run against every supported major.
+
+## The atomicity question, resolved (2026-07-22)
+
+ADR-0003's addendum left one question for this ADR's acceptance: if Postgres can make an
+apply atomic and SQL Server cannot, does the guarantee become a per-provider difference —
+and how does that not violate "the user-facing contract must not leak provider specifics"?
+
+**Resolved as declared capability, not silent divergence.** The plan and status envelopes
+carry an explicit `atomicity` field: `transactional` when the whole apply is one unit that
+either lands or does not, `partial` when it is not.
+
+This is not a leak, because the field is provider-*agnostic* in shape: it is a statement
+the tool makes about what it can guarantee for *this* run, in the core's own vocabulary.
+A consumer reads one field rather than knowing which database it is talking to. The
+alternative — flattening to the lowest common denominator — would discard a real property
+of the target database and make the tool describe itself less accurately than it could.
+
+The distinction is precise, and ADR-0004 already fixed both ends of it:
+
+| | Scope of the guarantee |
+|---|---|
+| SQL Server → `partial` | Each stage is transactional (ADR-0004 §3), but the pipeline is fail-fast with **no cross-stage rollback** (§5). Wrapping the pipeline in one transaction was rejected there on the grounds that DacFx owns its own connection — so this is a settled property, not an omission |
+| Postgres → `transactional` | The spike measured what makes this reachable: with native execution Schemorph owns the transaction, so the plan-hash re-verification, the DDL, and the ledger write can share it. Non-transactional exceptions (`CREATE INDEX CONCURRENTLY` and kin) are marked in the plan rather than silently degrading the claim |
+
+The field must be *earned*, not asserted: a provider declares `transactional` only where
+the tool holds the transaction boundary. This is why the guarantee was scored as
+*control* over atomicity rather than its mere presence — psqldef had the rollback and
+not the boundary.
