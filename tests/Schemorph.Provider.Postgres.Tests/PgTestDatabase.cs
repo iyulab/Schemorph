@@ -38,6 +38,14 @@ public sealed class PgTestSchema : IAsyncDisposable
         await Execute(connection, $"DROP SCHEMA IF EXISTS \"{Name}\" CASCADE");
     }
 
+    /// <summary>Runs raw SQL on the test server — used to prove rendered output executes.</summary>
+    public static async Task ExecuteAsync(string sql)
+    {
+        await using var connection = new NpgsqlConnection(ServerUrl);
+        await connection.OpenAsync();
+        await Execute(connection, sql);
+    }
+
     private static async Task Execute(NpgsqlConnection connection, string sql)
     {
         await using var command = new NpgsqlCommand(sql, connection);

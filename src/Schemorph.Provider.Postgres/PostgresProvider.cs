@@ -1,3 +1,4 @@
+using Npgsql;
 using Schemorph.Core.Ledger;
 using Schemorph.Core.Providers;
 
@@ -22,8 +23,28 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     public string Name => ProviderName;
 
-    public Task<InspectResult> InspectAsync(InspectRequest request, CancellationToken cancellationToken = default)
-        => throw Refuse("inspect");   // Task 4 implements this.
+    public async Task<InspectResult> InspectAsync(InspectRequest request, CancellationToken cancellationToken = default)
+    {
+        var tables = await CatalogReader.ReadTablesAsync(
+            request.ConnectionString, TargetSchemaOf(request.ConnectionString), cancellationToken);
+        return new InspectResult(DesiredStateRenderer.Render(tables));
+    }
+
+    /// <summary>
+    /// The schema to read. InspectRequest carries only a connection string (a core
+    /// record this slice does not change), so the target comes from the connection's
+    /// own search path — the same place a psql session would take it from. Reading
+    /// several schemas in one pass would need a new field on the core request, which
+    /// belongs to a later slice.
+    /// </summary>
+    private static string TargetSchemaOf(string connectionString)
+    {
+        var searchPath = new NpgsqlConnectionStringBuilder(connectionString).SearchPath;
+        if (string.IsNullOrWhiteSpace(searchPath)) return "public";
+
+        var first = searchPath.Split(',')[0].Trim().Trim('"');
+        return first.Length == 0 ? "public" : first;
+    }
 
     public Task<IDesiredState> LoadDesiredStateAsync(string desiredStateDirectory, CancellationToken cancellationToken = default)
         => throw Refuse("desired-state loading");
