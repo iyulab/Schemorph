@@ -179,9 +179,14 @@ public sealed class RedefineRunnerTests
             Obj("dbo.ZZZ", "View", "FAILING"));
         var provider = new FakeProvider { Ledger = _ledger, FailOnScriptContaining = "FAILING" };
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<RedefineExecutionException>(
             () => new RedefineRunner(provider, _ledger).RunAsync(analysis, "conn"));
 
+        // The failure names the object and carries what had already committed —
+        // only this frame knows it, so a bare rethrow would lose it for good.
+        Assert.Equal("dbo.ZZZ", ex.ObjectName);
+        Assert.Empty(ex.Redefined);
+        Assert.IsType<InvalidOperationException>(ex.InnerException);   // the engine's error, preserved
         Assert.Empty(provider.ExecutedScripts);   // dbo.ZZZ failed first; dbo.AAA never ran
         var failure = Assert.Single(_ledger.Entries, e => !e.Succeeded);
         Assert.Equal("dbo.ZZZ", failure.ObjectName);

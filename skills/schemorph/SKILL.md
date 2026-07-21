@@ -76,11 +76,17 @@ and surfaced as messages; include them only with an explicit
 ## Machine contracts (parse these, not console text)
 
 - JSON is the default whenever stdout is redirected; `--format json` forces it.
+- `diff --format sql` is the *human* artifact, not a machine one: the whole plan as
+  one read-only document with the `planHash` in its header. Hand it to a person for
+  approval, then apply with that hash — never execute it with a SQL client.
 - `schemorph schema` prints a JSON manifest of every verb, flag and exit code.
 - Errors: one JSON envelope on stderr — `{error: {kind, code, message, hint}}`
   (`docs/errors.md`). Branch on `kind`: `usage` → fix invocation;
   `invalid_state` → fix files, retrying unchanged fails identically;
   `execution` → inspect and retry (apply is convergent and safe to re-run).
+- A failed `apply` adds `stage` and `committed{declarative, redefines, migrations}` —
+  read those instead of guessing what the database holds. Optional fields are
+  absent rather than null, and `hint` is omitted when no cause was established.
 
 ## MCP mode
 

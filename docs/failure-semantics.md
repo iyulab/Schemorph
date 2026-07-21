@@ -53,6 +53,21 @@ What is *not* safe is hand-editing the database to "finish" the apply, or deleti
 ledger rows to force a re-run. Both put the ledger and the database out of step, and
 the ledger is what makes the run-once guarantee work.
 
+## The failure itself tells you where it stopped
+
+Reading the ledger is the audit path, not the first step. A failed `apply` reports
+the stage it stopped in and how much of each stage had committed, so the common
+question is answered without querying anything:
+
+```json
+{ "error": { "code": "migration_execution_failed", "stage": "migration",
+             "committed": { "declarative": 8, "redefines": 23, "migrations": 0 } } }
+```
+
+In text mode the same counts appear in the hint. `stage` is absent on failures that
+never reached the database (see the last section). The full contract is in
+[errors.md](errors.md#a-failed-apply-stage-and-committed).
+
 ## Reading the ledger after a failure
 
 The ledger is Schemorph's audit trail, and this is the part most likely to be

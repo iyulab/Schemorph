@@ -109,7 +109,10 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
             {
                 await ledger.AppendFailureBestEffortAsync(
                     connectionString, entry with { Succeeded = false, Detail = ex.Message }, cancellationToken);
-                throw;
+                // Same reasoning as the redefine stage: the run-once contract makes
+                // "which ones already ran" the operator's first question, and only
+                // this frame knows the answer.
+                throw new MigrationExecutionException(script.FileName, applied.ToList(), ex);
             }
             applied.Add(script.FileName);
         }
@@ -132,3 +135,21 @@ public sealed record MigrationRunResult(
     IReadOnlyList<RawMessage> Warnings);
 
 public sealed class MigrationException(string message) : Exception(message);
+
+/// <summary>
+/// A migration script failed against the database. Distinct from
+/// <see cref="MigrationException"/>, which reports a desired-state problem found
+/// before anything runs (duplicate versions, an edited applied migration): this
+/// is an execution failure, and it names the script that failed plus the ones
+/// that had already run.
+/// </summary>
+public sealed class MigrationExecutionException(
+    string fileName, IReadOnlyList<string> applied, Exception inner)
+    : Exception($"Migration {fileName} failed: {inner.Message}", inner)
+{
+    /// <summary>The script that failed.</summary>
+    public string FileName { get; } = fileName;
+
+    /// <summary>Scripts that ran (and were recorded) before the failure — committed.</summary>
+    public IReadOnlyList<string> Applied { get; } = applied;
+}

@@ -12,6 +12,9 @@ public static partial class Redaction
 {
     public static string Redact(string text) => PasswordPattern().Replace(text, "$1=***");
 
+    /// <summary>Redaction over an absent value — absent stays absent.</summary>
+    public static string? RedactOrNull(string? text) => text is null ? null : Redact(text);
+
     [GeneratedRegex(@"\b(password|pwd)\s*=\s*[^;""'\s]+", RegexOptions.IgnoreCase)]
     private static partial Regex PasswordPattern();
 }

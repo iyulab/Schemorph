@@ -22,7 +22,12 @@ namespace Schemorph.Cli;
 [McpServerToolType]
 internal sealed class SchemorphTools
 {
-    private static readonly JsonSerializerOptions ErrorJson = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    private static readonly JsonSerializerOptions ErrorJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        // Optional envelope fields are absent, not null — see Program.Emit.
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
 
     [McpServerTool(Name = "schemorph_diff", ReadOnly = true, Idempotent = true)]
     [Description("Compute the schema change plan: desired-state SQL files vs the live database. " +
@@ -44,17 +49,32 @@ internal sealed class SchemorphTools
                 "Pass the directory that holds the desired-state .sql files.");
         }
 
-        var (provider, ledger) = ProviderSelection.Current;
-        var result = await DiffOperation.RunAsync(
-            provider, ledger, schemaDir, url, allowDestructive, cancellationToken);
-        if (!result.Success)
+        try
         {
-            var code = result.Stage == DiffOperation.FailureStage.DesiredState ? "invalid_desired_state" : "compare_failed";
-            return Error(code, string.Join("; ", result.Errors.Select(m => $"{m.Code}: {m.Text}")),
-                "Fix the desired-state files or verify the connection.");
-        }
+            var (provider, ledger) = ProviderSelection.Current;
+            var result = await DiffOperation.RunAsync(
+                provider, ledger, schemaDir, url, allowDestructive, cancellationToken);
+            if (!result.Success)
+            {
+                var badState = result.Stage == DiffOperation.FailureStage.DesiredState;
+                return Error(badState ? "invalid_desired_state" : "compare_failed",
+                    string.Join("; ", result.Errors.Select(m => $"{m.Code}: {m.Text}")),
+                    badState ? "Fix the desired-state files named in the message." : null);
+            }
 
-        return PlanRenderer.ToJson(result.Plan!);
+            return PlanRenderer.ToJson(result.Plan!);
+        }
+        catch (TemporaryWorkspaceException ex)
+        {
+            return TempWorkspaceError(ex);
+        }
+        catch (Exception ex)
+        {
+            // Without this the exception escapes into the MCP framework's own error
+            // shape, and the promise these tools make — one envelope everywhere —
+            // is false exactly when it matters.
+            return Error("compare_failed", ex.Message, hint: null);
+        }
     }
 
     [McpServerTool(Name = "schemorph_inspect", Idempotent = true)]
@@ -71,8 +91,19 @@ internal sealed class SchemorphTools
             return MissingUrl();
         }
 
-        var result = await InspectOperation.RunAsync(ProviderSelection.Current.Provider, url, outDir, cancellationToken);
-        return JsonSerializer.Serialize(new { files = result.WrittenFiles }, ErrorJson);
+        try
+        {
+            var result = await InspectOperation.RunAsync(ProviderSelection.Current.Provider, url, outDir, cancellationToken);
+            return JsonSerializer.Serialize(new { files = result.WrittenFiles }, ErrorJson);
+        }
+        catch (TemporaryWorkspaceException ex)
+        {
+            return TempWorkspaceError(ex);
+        }
+        catch (Exception ex)
+        {
+            return Error("inspect_failed", ex.Message, hint: null);
+        }
     }
 
     [McpServerTool(Name = "schemorph_status", ReadOnly = true, Idempotent = true)]
@@ -134,10 +165,18 @@ internal sealed class SchemorphTools
                 },
             }, ResultJson);
         }
+        catch (TemporaryWorkspaceException ex)
+        {
+            return TempWorkspaceError(ex);
+        }
         catch (Schemorph.Core.Migrations.MigrationException ex)
         {
             return Error("migration_failed", ex.Message,
                 "Applied migrations are immutable; add a new V####__*.sql instead of editing old ones.");
+        }
+        catch (Exception ex)
+        {
+            return Error("compare_failed", ex.Message, hint: null);
         }
     }
 
@@ -186,16 +225,37 @@ internal sealed class SchemorphTools
 
             if (!outcome.Success)
             {
+                var text = string.Join("; ", outcome.Errors.Select(m => $"{m.Code}: {m.Text}"));
+                // Stages that ran after the publish committed carry what they left
+                // behind — same envelope the CLI emits, so an agent reads one shape.
+                if (outcome.Stage is ApplyOperation.FailureStage.Redefine or ApplyOperation.FailureStage.Migration)
+                {
+                    var redefine = outcome.Stage == ApplyOperation.FailureStage.Redefine;
+                    var committed = new CommittedWork(
+                        outcome.Applied.Count,
+                        outcome.Redefines?.Redefined.Count ?? 0,
+                        outcome.Migrations?.Applied.Count ?? 0);
+                    return Error(
+                        redefine ? "redefine_execution_failed" : "migration_execution_failed", text,
+                        "Re-running is the resume path (apply is convergent); see docs/failure-semantics.md.",
+                        redefine ? "redefine" : "migration", committed);
+                }
+
                 var code = outcome.Stage switch
                 {
                     ApplyOperation.FailureStage.DesiredState => "invalid_desired_state",
                     ApplyOperation.FailureStage.PlanMismatch => "plan_mismatch",
                     _ => "apply_failed",
                 };
-                return Error(code, string.Join("; ", outcome.Errors.Select(m => $"{m.Code}: {m.Text}")),
-                    code == "plan_mismatch"
-                        ? "Re-run schemorph_diff, review the new plan, and retry with its planHash."
-                        : "Fix the desired-state files or verify the connection.");
+                return Error(code, text,
+                    code switch
+                    {
+                        "plan_mismatch" => "Re-run schemorph_diff, review the new plan, and retry with its planHash.",
+                        "invalid_desired_state" => "Fix the desired-state files named in the message.",
+                        // Publish is transactional — nothing committed — but the
+                        // cause is the engine's, so it is not guessed at here.
+                        _ => null,
+                    });
             }
 
             return JsonSerializer.Serialize(new
@@ -219,6 +279,10 @@ internal sealed class SchemorphTools
                 },
             }, ResultJson);
         }
+        catch (TemporaryWorkspaceException ex)
+        {
+            return TempWorkspaceError(ex);
+        }
         catch (Schemorph.Core.Migrations.MigrationException ex)
         {
             return Error("migration_failed", ex.Message,
@@ -228,6 +292,10 @@ internal sealed class SchemorphTools
         {
             return Error("redefine_failed", ex.Message,
                 "Break the cycle by extracting the shared logic into a separate object.");
+        }
+        catch (Exception ex)
+        {
+            return Error("apply_failed", ex.Message, hint: null);
         }
     }
 
@@ -244,7 +312,20 @@ internal sealed class SchemorphTools
         "Configure the connection string as an environment variable on the server entry " +
         "(e.g. \"env\": {\"SCHEMORPH_URL\": \"...\"}); it is never passed through the conversation.");
 
+    /// <summary>
+    /// The tool's own scratch directory could not be created — the same answer on
+    /// every tool, naming the directory and the variable that moves it. Here the
+    /// variable lives in the MCP server entry, not the caller's shell.
+    /// </summary>
+    private static string TempWorkspaceError(TemporaryWorkspaceException ex) =>
+        Error("temp_workspace_unavailable", ex.Message,
+            "Set TMP (or TEMP) in the MCP server's environment to a directory that exists and is writable.");
+
     /// <summary>The CLI's error envelope, verbatim — agents see one error shape everywhere.</summary>
-    private static string Error(string code, string message, string hint) =>
-        JsonSerializer.Serialize(new { error = SchemorphError.Create(code, Redaction.Redact(message), hint) }, ErrorJson);
+    private static string Error(
+        string code, string message, string? hint, string? stage = null, CommittedWork? committed = null) =>
+        JsonSerializer.Serialize(
+            new { error = SchemorphError.Create(code, Redaction.Redact(message), hint) with
+                { Stage = stage, Committed = committed } },
+            ErrorJson);
 }

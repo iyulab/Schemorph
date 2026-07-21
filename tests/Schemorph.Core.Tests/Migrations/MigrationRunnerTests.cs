@@ -126,9 +126,13 @@ public sealed class MigrationRunnerTests : IDisposable
         WriteMigration("V3__after.sql", "INSERT C;");
         var provider = new FakeProvider { Ledger = _ledger, FailOnScriptContaining = "FAILING" };
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<MigrationExecutionException>(
             () => new MigrationRunner(provider, _ledger).RunAsync(_dir, "conn"));
 
+        // Run-once makes "which ones already ran" the first question asked, and
+        // the answer exists only here.
+        Assert.Equal("V2__bad.sql", ex.FileName);
+        Assert.Equal(new[] { "V1__ok.sql" }, ex.Applied);
         Assert.Equal(new[] { "INSERT A;" }, provider.ExecutedScripts);   // fail-fast: V3 never ran
         var failure = Assert.Single(_ledger.Entries, e => !e.Succeeded);
         Assert.Equal("V2__bad.sql", failure.ObjectName);
@@ -142,10 +146,11 @@ public sealed class MigrationRunnerTests : IDisposable
         var provider = new FakeProvider { Ledger = _ledger, FailOnScriptContaining = "FAILING" };
         _ledger.AppendThrows = true;
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<MigrationExecutionException>(
             () => new MigrationRunner(provider, _ledger).RunAsync(_dir, "conn"));
 
         Assert.Contains("boom", ex.Message);   // the script error, not "ledger unavailable"
+        Assert.Contains("boom", ex.InnerException!.Message);   // and reachable unwrapped
     }
 
     [Fact]

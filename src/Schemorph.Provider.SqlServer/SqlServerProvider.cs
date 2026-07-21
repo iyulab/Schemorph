@@ -326,7 +326,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
     private static InspectResult Inspect(InspectRequest request, CancellationToken cancellationToken)
     {
-        var dacpacPath = Path.Combine(Path.GetTempPath(), $"schemorph-inspect-{Guid.NewGuid():N}.dacpac");
+        var dacpacPath = TemporaryWorkspace.NewFile("inspect", ".dacpac");
         try
         {
             var databaseName = new SqlConnectionStringBuilder(request.ConnectionString).InitialCatalog;
@@ -339,7 +339,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
         }
         finally
         {
-            File.Delete(dacpacPath);
+            // Never speak over the failure being cleaned up after.
+            TemporaryWorkspace.TryDelete(dacpacPath);
         }
     }
 
@@ -475,7 +476,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
                 return new ComparisonSession { ModelErrors = errors };
             }
 
-            var dacpacPath = Path.Combine(Path.GetTempPath(), $"schemorph-{Guid.NewGuid():N}.dacpac");
+            var dacpacPath = TemporaryWorkspace.NewFile("compare", ".dacpac");
             DacPackageExtensions.BuildPackage(dacpacPath, model,
                 new PackageMetadata { Name = "SchemorphDesiredState", Version = "0.0.1" });
 
@@ -494,7 +495,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
         public void Dispose()
         {
-            if (_dacpacPath is not null) File.Delete(_dacpacPath);
+            if (_dacpacPath is not null) TemporaryWorkspace.TryDelete(_dacpacPath);
         }
     }
 

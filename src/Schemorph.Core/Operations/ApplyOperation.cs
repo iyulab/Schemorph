@@ -25,7 +25,13 @@ public static class ApplyOperation
         string? MigrationsDir = null,
         string? ExpectedPlanHash = null);
 
-    public enum FailureStage { None, DesiredState, PlanMismatch, Publish }
+    /// <summary>
+    /// Where an apply stopped. The strategy order (ADR-0002) is also the order of
+    /// this enum, so the stage says what came before it — and everything before it
+    /// committed. There is no cross-stage rollback (ADR-0004), which is exactly why
+    /// the stage has to be reported rather than folded into a generic failure.
+    /// </summary>
+    public enum FailureStage { None, DesiredState, PlanMismatch, Publish, Redefine, Migration }
 
     public sealed record Outcome(
         bool Success,
@@ -134,13 +140,50 @@ public static class ApplyOperation
         // re-adding an identical file later still re-creates the object. Executes
         // the SAME redefine plan that was fingerprinted above.
         await redefineRunner.RecordDropsAsync(request.ConnectionString, result.AppliedChanges, cancellationToken);
-        var redefineRun = await redefineRunner.RunAsync(programmables, redefinePlan, request.ConnectionString, cancellationToken);
+
+        // From here on the declarative changes are committed and there is no
+        // rollback across stages, so an execution failure below is reported WITH
+        // what it left behind — never as a bare error that implies nothing ran.
+        // Only execution failures are caught: RedefineException (dependency cycle)
+        // and MigrationException (duplicate version / edited migration) describe an
+        // invalid desired state, are raised before their stage executes anything,
+        // and keep propagating to the invalid_state mapping they always had.
+        RedefineRunResult redefineRun;
+        try
+        {
+            redefineRun = await redefineRunner.RunAsync(programmables, redefinePlan, request.ConnectionString, cancellationToken);
+        }
+        catch (RedefineExecutionException ex)
+        {
+            return Failure(FailureStage.Redefine,
+                new[] { new RawMessage("Error", "redefine_execution_failed", ex.Message) }) with
+            {
+                Plan = plan,
+                Applied = result.AppliedChanges,
+                Redefines = new RedefineRunResult(ex.Redefined, 0, Array.Empty<string>()),
+            };
+        }
 
         // Strategy 3: versioned migrations run after the declarative apply.
         MigrationRunResult? migrationRun = null;
         if (request.MigrationsDir is { } migrationsDir)
         {
-            migrationRun = await new MigrationRunner(provider, ledger).RunAsync(migrationsDir, request.ConnectionString, cancellationToken);
+            try
+            {
+                migrationRun = await new MigrationRunner(provider, ledger).RunAsync(migrationsDir, request.ConnectionString, cancellationToken);
+            }
+            catch (MigrationExecutionException ex)
+            {
+                return Failure(FailureStage.Migration,
+                    new[] { new RawMessage("Error", "migration_execution_failed", ex.Message) }) with
+                {
+                    Plan = plan,
+                    Applied = result.AppliedChanges,
+                    Redefines = redefineRun,
+                    Migrations = new MigrationRunResult(
+                        ex.Applied, 0, Array.Empty<string>(), Array.Empty<RawMessage>()),
+                };
+            }
         }
 
         // Schemorph's own bookkeeping stays invisible in user-facing output, and

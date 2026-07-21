@@ -13,7 +13,10 @@ namespace Schemorph.Cli;
 /// </summary>
 internal static class CliManifest
 {
-    public const string ManifestVersion = "1.1";   // 1.1: docs.failureSemantics (additive)
+    // 1.1: docs.failureSemantics · 1.2: the apply-only stage/committed envelope
+    // fields · 1.3: diff --format sql (the review document). All additive;
+    // consumers ignore properties they do not know.
+    public const string ManifestVersion = "1.3";
 
     public static string ToJson(string toolVersion) => JsonSerializer.Serialize(new
     {
@@ -32,9 +35,13 @@ internal static class CliManifest
         },
         outputConventions = new
         {
-            formats = new[] { "text", "json" },
+            formats = new[] { "text", "json", "sql" },
             defaultFormat = "text on a terminal; json when stdout is redirected",
-            errorEnvelope = "errors are one JSON object {error:{kind,code,message,hint}} on stderr with --format json (docs/errors.md)",
+            sqlFormat = "diff only: the whole plan as one review document in execution order, " +
+                "planHash in the header. Read-only — apply it with --expect-plan, not with a SQL client",
+            errorEnvelope = "errors are one JSON object {error:{kind,code,message,hint}} on stderr with --format json; " +
+                "a failed apply adds stage and committed{declarative,redefines,migrations}. " +
+                "Optional fields are absent, not null; hint is omitted when no cause was established (docs/errors.md)",
             redaction = "passwords are redacted from every output channel",
         },
         exitCodes = new[]
@@ -66,7 +73,7 @@ internal static class CliManifest
                     new { flag = "--url", value = "connection-string", required = false, description = "Target database; SCHEMORPH_URL is used when omitted." },
                     new { flag = "--schema", value = "dir", required = true, description = "Desired-state SQL directory; non-model .sql files (deploy scripts, seed DML) are skipped with a warning." },
                     new { flag = "--allow-destructive", value = (string?)null, required = false, description = "Include destructive changes in the plan." },
-                    new { flag = "--format", value = "json|text", required = false, description = "Output form; json is the plan format (docs/plan-format.md)." },
+                    new { flag = "--format", value = "json|text|sql", required = false, description = "Output form; json is the plan format (docs/plan-format.md); sql is the human-review document (read-only, planHash in its header)." },
                 },
                 exitCodes = new[] { 0, 1, 2 },
             },

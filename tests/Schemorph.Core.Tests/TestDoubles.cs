@@ -42,17 +42,38 @@ internal sealed class FakeProvider : IDatabaseProvider
     public Task<InspectResult> InspectAsync(InspectRequest request, CancellationToken ct = default)
         => throw new NotSupportedException();
 
+    // The three below are seeded only by tests that drive a whole operation
+    // (ApplyOperation); left unseeded they keep the narrower contract the
+    // strategy-level tests rely on — an unexpected call is a test bug, not a
+    // silent empty result.
+
+    /// <summary>Returned by <see cref="LoadDesiredStateAsync"/> when set.</summary>
+    public IDesiredState? DesiredState { get; init; }
+
+    /// <summary>Returned by <see cref="AnalyzeProgrammablesAsync"/> when set.</summary>
+    public ProgrammableAnalysis? Programmables { get; init; }
+
+    /// <summary>Returned by <see cref="ApplyAsync"/> when set, after announcing <see cref="Computed"/>.</summary>
+    public ApplyResult? ApplyOutcome { get; init; }
+
+    /// <summary>The comparison <see cref="ApplyAsync"/> announces through its hook.</summary>
+    public CompareResult? Computed { get; init; }
+
     public Task<IDesiredState> LoadDesiredStateAsync(string desiredStateDirectory, CancellationToken ct = default)
-        => throw new NotSupportedException();
+        => DesiredState is null ? throw new NotSupportedException() : Task.FromResult(DesiredState);
 
     public Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken ct = default)
         => throw new NotSupportedException();
 
     public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, bool> include, Action<CompareResult>? onChangesComputed = null, CancellationToken ct = default)
-        => throw new NotSupportedException();
+    {
+        if (ApplyOutcome is null) throw new NotSupportedException();
+        if (Computed is not null) onChangesComputed?.Invoke(Computed);
+        return Task.FromResult(ApplyOutcome);
+    }
 
     public Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(IDesiredState desiredState, CancellationToken ct = default)
-        => throw new NotSupportedException();
+        => Programmables is null ? throw new NotSupportedException() : Task.FromResult(Programmables);
 
     /// <summary>Object names whose live definition "matches" the file (brownfield reconciliation).</summary>
     public HashSet<string> MatchingLiveObjects { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -67,6 +88,15 @@ internal sealed class FakeProvider : IDatabaseProvider
         return Task.FromResult<IReadOnlyList<ProgrammableObjectInfo>>(
             objects.Where(o => MatchingLiveObjects.Contains(o.ObjectName)).ToList());
     }
+}
+
+/// <summary>A loaded desired state with nothing to complain about (or the warnings/errors given).</summary>
+internal sealed record FakeDesiredState(
+    IReadOnlyList<RawMessage>? WarningList = null,
+    IReadOnlyList<RawMessage>? ErrorList = null) : IDesiredState
+{
+    public IReadOnlyList<RawMessage> Warnings => WarningList ?? Array.Empty<RawMessage>();
+    public IReadOnlyList<RawMessage> Errors => ErrorList ?? Array.Empty<RawMessage>();
 }
 
 /// <summary>In-memory ledger; entry order stands in for the persisted insertion order.</summary>

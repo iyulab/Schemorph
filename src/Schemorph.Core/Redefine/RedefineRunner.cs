@@ -101,7 +101,10 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
             {
                 await ledger.AppendFailureBestEffortAsync(
                     connectionString, entry with { Succeeded = false, Detail = ex.Message }, cancellationToken);
-                throw;
+                // What already committed is known HERE and nowhere else — a bare
+                // rethrow discards it, and the caller then cannot say what the
+                // database holds. Carry it out with the failure.
+                throw new RedefineExecutionException(obj.ObjectName, redefined.ToList(), ex);
             }
             redefined.Add(obj.ObjectName);
         }
@@ -275,3 +278,21 @@ public sealed record RedefineRunResult(
     IReadOnlyList<string> Redefined, int Skipped, IReadOnlyList<string> Reconciled);
 
 public sealed class RedefineException(string message) : Exception(message);
+
+/// <summary>
+/// A re-definition script failed against the database. Distinct from
+/// <see cref="RedefineException"/>, which is a dependency cycle in the desired
+/// state (an <c>invalid_state</c> discovered before anything runs): this is an
+/// execution failure, and it carries what had already committed so the caller
+/// can say so instead of reporting a bare error.
+/// </summary>
+public sealed class RedefineExecutionException(
+    string objectName, IReadOnlyList<string> redefined, Exception inner)
+    : Exception($"Re-defining {objectName} failed: {inner.Message}", inner)
+{
+    /// <summary>The object whose script failed.</summary>
+    public string ObjectName { get; } = objectName;
+
+    /// <summary>Objects re-defined (and recorded) before the failure — committed.</summary>
+    public IReadOnlyList<string> Redefined { get; } = redefined;
+}

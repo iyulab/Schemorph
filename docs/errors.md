@@ -30,11 +30,49 @@ With `--format json`, every failure writes exactly one JSON object to **stderr**
 }
 ```
 
-In text mode the same information renders as `error[<code>]: <message> (<hint>)`.
+In text mode the same information renders as `error[<code>]: <message> (<hint>)`,
+or `error[<code>]: <message>` when there is no hint.
 
 - **`kind`** — stable coarse category. Branch on this.
 - **`code`** — the specific failure. Stable, but new codes appear as features do.
 - **`message`** / **`hint`** — human-oriented; no stability guarantee, never parse.
+
+Optional fields are **absent, not null**, so an error that has none renders exactly
+the four-field object above.
+
+- **`hint`** is omitted when the tool has not established a cause. This is
+  deliberate: a hint that names something never checked sends the reader after the
+  wrong thing, which is worse than saying nothing.
+
+### A failed `apply`: `stage` and `committed`
+
+`apply` runs three strategies in order and does **not** roll back across them
+([ADR-0004](adr/0004-failure-semantics-and-resume.md)), so what already committed
+depends on where it stopped. A failed apply says so:
+
+```json
+{
+  "error": {
+    "kind": "execution",
+    "code": "migration_execution_failed",
+    "message": "Migration V7__backfill.sql failed: Invalid object name 'dbo.NoSuchTable'.",
+    "hint": "Committed before the failure: 8 declarative change(s), 23 re-definition(s), 0 migration(s). Fix the failing object and re-run — apply is convergent; see docs/failure-semantics.md.",
+    "stage": "migration",
+    "committed": { "declarative": 8, "redefines": 23, "migrations": 0 }
+  }
+}
+```
+
+- **`stage`** — `desiredState` failures and `planMismatch` never reach the database,
+  so they carry no stage; `redefine` and `migration` are the stages that can leave
+  work behind. The declarative publish is one transaction: it commits fully or not
+  at all.
+- **`committed`** — counts, not names. The ledger is the per-object record
+  ([failure-semantics.md](failure-semantics.md) explains how to read it); this
+  exists so a caller can learn *whether anything changed* without querying.
+
+Re-running is the resume path — apply converges. Never finish a failed apply by
+hand: the ledger is what makes the run-once and redefine contracts hold.
 
 ## Kinds
 
@@ -53,13 +91,17 @@ In text mode the same information renders as `error[<code>]: <message> (<hint>)`
 | `invalid_arguments` | `usage` | Required options missing |
 | `schema_dir_not_found` | `usage` | `--schema` directory does not exist |
 | `migrations_dir_not_found` | `usage` | `--migrations` directory does not exist |
+| `temp_workspace_unavailable` | `usage` | Schemorph could not create the directory it keeps its own intermediate files in (`<TMP>/schemorph`). Point `TMP`/`TEMP` at a writable directory — these files are the tool's, not yours, and it never names them in an error |
 | `invalid_desired_state` | `invalid_state` | Desired-state files fail to load or validate (e.g. `SCHEMORPH003/004/007`) — same code on every verb, `diff`/`status`/`apply` alike |
-| `migration_failed` | `invalid_state` | Duplicate versions, or an applied migration was edited (tamper detection) |
-| `redefine_failed` | `invalid_state` | Dependency cycle among programmable objects |
+| `migration_failed` | `invalid_state` | Duplicate versions, or an applied migration was edited (tamper detection) — found before any migration runs |
+| `redefine_failed` | `invalid_state` | Dependency cycle among programmable objects — found before any re-definition runs |
+| `redefine_execution_failed` | `execution` | A re-definition script failed against the database. Carries `stage` and `committed`; the declarative publish had already committed |
+| `migration_execution_failed` | `execution` | A migration script failed against the database. Carries `stage` and `committed` |
 | `plan_mismatch` | `invalid_state` | `apply --expect-plan` (or MCP `expectedPlanHash`): the plan computed at apply time differs from the reviewed fingerprint — nothing was applied; re-run `diff`, review, retry with the new hash |
 | `compare_failed` | `execution` | `diff` could not compare (connection, engine error) |
 | `apply_failed` | `execution` | `apply` failed (publish errors, script failure, connection) |
 | `inspect_failed` | `execution` | `inspect` failed |
+| `review_script_unavailable` | `execution` | `diff --format sql`: the plan has declarative changes but the engine could not generate their update script (`SCHEMORPH002`). No document is emitted — a partial approval artifact is worse than none |
 | `not_implemented` | `unsupported` | The verb exists but is not implemented yet |
 
 ## Provider messages

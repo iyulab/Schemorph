@@ -16,7 +16,18 @@ public static class DiffOperation
     /// <summary>Which stage produced the errors — callers map this to their error vocabulary.</summary>
     public enum FailureStage { None, Compare, DesiredState }
 
-    public sealed record DiffResult(Plan? Plan, IReadOnlyList<RawMessage> Errors, FailureStage Stage = FailureStage.None)
+    /// <param name="UpdateScript">
+    /// The declarative stage's update script exactly as the provider generated it —
+    /// the text a publish would execute, not a reassembly of the per-change slices
+    /// the plan carries for explanation. A reviewable artifact has to be the
+    /// executed artifact, so this is deliberately the raw script. Null when the
+    /// provider could not generate it (SCHEMORPH002) or there is nothing to publish.
+    /// </param>
+    public sealed record DiffResult(
+        Plan? Plan,
+        IReadOnlyList<RawMessage> Errors,
+        FailureStage Stage = FailureStage.None,
+        string? UpdateScript = null)
     {
         public bool Success => Plan is not null;
     }
@@ -57,6 +68,7 @@ public static class DiffOperation
         return new DiffResult(
             PlanBuilder.Build(compared with { Messages = messages }, allowDestructive,
                 redefinePlan.Pending.Select(p => p.ToPlanAction()).ToList()),
-            Array.Empty<RawMessage>());
+            Array.Empty<RawMessage>(),
+            UpdateScript: compared.UpdateScript);
     }
 }

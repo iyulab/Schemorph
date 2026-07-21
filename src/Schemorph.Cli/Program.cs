@@ -80,8 +80,12 @@ switch (verb)
               --url <connection-string>   target database (required)
               --schema <dir>              desired-state SQL directory (required)
               --allow-destructive         include destructive changes in the plan
-              --format json|text          output form (default: text on a terminal,
-                                          json when stdout is redirected)
+              --format json|text|sql      output form (default: text on a terminal,
+                                          json when stdout is redirected). sql renders
+                                          the whole plan as one review document, in
+                                          execution order, with the planHash in its
+                                          header — read-only; apply it with
+                                          --expect-plan, never with a SQL client
 
             apply options:
               --url <connection-string>   target database (required)
@@ -173,15 +177,18 @@ async Task<int> RunApply(string[] args, string format)
 
         if (!outcome.Success)
         {
-            foreach (var m in outcome.Errors) EchoMessage(m);
             return outcome.Stage switch
             {
                 ApplyOperation.FailureStage.DesiredState =>
-                    Fail(format, "invalid_desired_state", "Desired state is invalid.", "See messages above."),
+                    Fail(format, "invalid_desired_state",
+                        Detail(format, outcome.Errors, "Desired state is invalid."), SeeMessages(format)),
                 ApplyOperation.FailureStage.PlanMismatch =>
                     Fail(format, "plan_mismatch", outcome.Errors[0].Text,
                         "Re-run diff, review the new plan, and pass its hash with --expect-plan."),
-                _ => Fail(format, "apply_failed", "Apply reported errors.", "See messages above."),
+                ApplyOperation.FailureStage.Redefine or ApplyOperation.FailureStage.Migration =>
+                    FailApplyStage(format, outcome),
+                _ => Fail(format, "apply_failed",
+                    Detail(format, outcome.Errors, "Apply reported errors."), SeeMessages(format)),
             };
         }
 
@@ -239,6 +246,10 @@ async Task<int> RunApply(string[] args, string format)
         }
         return ExitNoChanges;
     }
+    catch (TemporaryWorkspaceException ex)
+    {
+        return FailTempWorkspace(format, ex);
+    }
     catch (MigrationException ex)
     {
         return Fail(format, "migration_failed", ex.Message,
@@ -251,7 +262,10 @@ async Task<int> RunApply(string[] args, string format)
     }
     catch (Exception ex)
     {
-        return Fail(format, "apply_failed", ex.Message, "Verify the connection string and schema directory.");
+        // No hint: the tool has not established a cause here, and a guess that
+        // names the connection string or the schema directory sends the operator
+        // to check something it never checked.
+        return Fail(format, "apply_failed", ex.Message, hint: null);
     }
 }
 
@@ -286,10 +300,12 @@ async Task<int> RunStatus(string[] args, string format)
 
         if (!result.Success)
         {
-            foreach (var m in result.Errors) EchoMessage(m);
-            return result.Stage == DiffOperation.FailureStage.DesiredState
-                ? Fail(format, "invalid_desired_state", "Desired state is invalid.", "See messages above.")
-                : Fail(format, "compare_failed", "Comparison reported errors.", "See messages above.");
+            var badState = result.Stage == DiffOperation.FailureStage.DesiredState;
+            return Fail(format,
+                badState ? "invalid_desired_state" : "compare_failed",
+                Detail(format, result.Errors,
+                    badState ? "Desired state is invalid." : "Comparison reported errors."),
+                SeeMessages(format));
         }
 
         var status = result.Status!;
@@ -340,6 +356,10 @@ async Task<int> RunStatus(string[] args, string format)
         // Same convention as diff: pending work = exit 2, so scripts/agents can branch.
         return status.HasPendingWork ? ExitChangesPending : ExitNoChanges;
     }
+    catch (TemporaryWorkspaceException ex)
+    {
+        return FailTempWorkspace(format, ex);
+    }
     catch (MigrationException ex)
     {
         return Fail(format, "migration_failed", ex.Message,
@@ -352,7 +372,7 @@ async Task<int> RunStatus(string[] args, string format)
     }
     catch (Exception ex)
     {
-        return Fail(format, "compare_failed", ex.Message, "Verify the connection string and schema directory.");
+        return Fail(format, "compare_failed", ex.Message, hint: null);   // cause not established — see apply's note
     }
 }
 
@@ -382,9 +402,16 @@ async Task<int> RunInspect(string[] args, string format)
         }
         return ExitNoChanges;
     }
+    catch (TemporaryWorkspaceException ex)
+    {
+        return FailTempWorkspace(format, ex);
+    }
     catch (Exception ex)
     {
-        return Fail(format, "inspect_failed", ex.Message, "Verify the connection string and output directory.");
+        // The hint used to name "the connection string and output directory"; a
+        // consumer chased both and neither was the cause (the throw came from a
+        // temp-workspace write). Silence beats a confident wrong direction.
+        return Fail(format, "inspect_failed", ex.Message, hint: null);
     }
 }
 
@@ -415,15 +442,37 @@ async Task<int> RunDiff(string[] args, string format)
 
         if (!result.Success)
         {
-            foreach (var m in result.Errors) EchoMessage(m);
-            return result.Stage == DiffOperation.FailureStage.DesiredState
-                ? Fail(format, "invalid_desired_state", "Desired state is invalid.", "See messages above.")
-                : Fail(format, "compare_failed", "Comparison reported errors.", "See messages above.");
+            var badState = result.Stage == DiffOperation.FailureStage.DesiredState;
+            return Fail(format,
+                badState ? "invalid_desired_state" : "compare_failed",
+                Detail(format, result.Errors,
+                    badState ? "Desired state is invalid." : "Comparison reported errors."),
+                SeeMessages(format));
         }
 
         var plan = result.Plan!;
-        Console.WriteLine(format == "json" ? PlanRenderer.ToJson(plan) : PlanRenderer.ToText(plan));
+        if (format == "sql")
+        {
+            try
+            {
+                Console.WriteLine(ReviewScriptRenderer.Render(plan, result.UpdateScript, url, DateTimeOffset.UtcNow));
+            }
+            catch (ReviewScriptRenderer.ScriptUnavailableException ex)
+            {
+                // A partial approval artifact is worse than none (Y6): the reviewer
+                // would sign a document that silently omits a stage.
+                return Fail(format, "review_script_unavailable", ex.Message, hint: null);
+            }
+        }
+        else
+        {
+            Console.WriteLine(format == "json" ? PlanRenderer.ToJson(plan) : PlanRenderer.ToText(plan));
+        }
         return plan.HasChanges ? ExitChangesPending : ExitNoChanges;
+    }
+    catch (TemporaryWorkspaceException ex)
+    {
+        return FailTempWorkspace(format, ex);
     }
     catch (RedefineException ex)
     {
@@ -432,7 +481,7 @@ async Task<int> RunDiff(string[] args, string format)
     }
     catch (Exception ex)
     {
-        return Fail(format, "compare_failed", ex.Message, "Verify the connection string and schema directory.");
+        return Fail(format, "compare_failed", ex.Message, hint: null);   // cause not established — see apply's note
     }
 }
 
@@ -457,25 +506,100 @@ static string InformationalVersion()
 static string? ResolveUrl(string[] args)
     => ParseOption(args, "--url") ?? Environment.GetEnvironmentVariable("SCHEMORPH_URL");
 
+/// <summary>
+/// Renders the provider messages behind a failure, and returns the text the
+/// envelope should carry. In text mode they are echoed and the envelope keeps
+/// its summary; in JSON mode nothing else may share stderr — the contract is one
+/// JSON object (docs/errors.md) — so they go INTO the message instead. The old
+/// shape did both wrong at once: it echoed in JSON mode too, and then pointed the
+/// reader at "messages above" that were not in the JSON at all.
+/// </summary>
+static string Detail(string format, IReadOnlyList<RawMessage> messages, string summary)
+{
+    if (format != "json")
+    {
+        foreach (var m in messages) EchoMessage(m);
+        return summary;
+    }
+    return messages.Count == 0 ? summary : string.Join("; ", messages.Select(m => $"{m.Code}: {m.Text}"));
+}
+
+/// <summary>
+/// The tool's own scratch directory could not be created. Every verb that touches
+/// a database can hit this, and it is the same answer everywhere — so the code and
+/// hint follow the exception, not the verb that happened to raise it.
+/// </summary>
+static int FailTempWorkspace(string format, TemporaryWorkspaceException ex) =>
+    Fail(format, "temp_workspace_unavailable", ex.Message,
+        "Set TMP (or TEMP) to a directory that exists and is writable, then re-run.");
+
+/// <summary>"See messages above" is true only where there are messages above.</summary>
+static string? SeeMessages(string format) => format == "json" ? null : "See messages above.";
+
 static void EchoMessage(RawMessage m, bool toError = true)
 {
     var line = Redaction.Redact($"[{m.Severity}] {m.Code}: {m.Text}");
     if (toError) Console.Error.WriteLine(line); else Console.WriteLine($"  {line}");
 }
 
-// The error envelope contract ({kind, code, message, hint}) lives in the core
-// (SchemorphError, docs/errors.md); this is only its rendering.
-static int Fail(string format, string code, string message, string hint)
+// The error envelope contract ({kind, code, message, hint} + the optional
+// apply-only stage/committed) lives in the core (SchemorphError, docs/errors.md);
+// this is only its rendering.
+static int Fail(string format, string code, string message, string? hint)
+    => Emit(format, SchemorphError.Create(code, Redaction.Redact(message), Redaction.RedactOrNull(hint)));
+
+/// <summary>
+/// An apply that failed after the declarative publish committed. The code follows
+/// the stage rather than the verb, and the envelope carries what the stage left
+/// behind — a generic apply_failed here would say the one thing that is not true,
+/// that nothing happened.
+/// </summary>
+static int FailApplyStage(string format, ApplyOperation.Outcome outcome)
 {
-    var error = SchemorphError.Create(code, Redaction.Redact(message), Redaction.Redact(hint));
+    var message = Detail(format, outcome.Errors, outcome.Errors[0].Text);
+    var redefine = outcome.Stage == ApplyOperation.FailureStage.Redefine;
+    var code = redefine ? "redefine_execution_failed" : "migration_execution_failed";
+    var committed = new CommittedWork(
+        outcome.Applied.Count,
+        outcome.Redefines?.Redefined.Count ?? 0,
+        outcome.Migrations?.Applied.Count ?? 0);
+
+    // Re-running is the resume path (ADR-0004): apply converges, so the fix is to
+    // correct the source and run it again — never to finish the job by hand.
+    var hint = $"{Describe(committed)} Fix the failing object and re-run — apply is convergent; " +
+        "see docs/failure-semantics.md.";
+
+    return Emit(format, SchemorphError.Create(code, Redaction.Redact(message), hint) with
+    {
+        Stage = redefine ? "redefine" : "migration",
+        Committed = committed,
+    });
+}
+
+static string Describe(CommittedWork c) =>
+    c is { Declarative: 0, Redefines: 0, Migrations: 0 }
+        ? "Nothing was committed."
+        : $"Committed before the failure: {c.Declarative} declarative change(s), " +
+          $"{c.Redefines} re-definition(s), {c.Migrations} migration(s).";
+
+static int Emit(string format, SchemorphError error)
+{
     if (format == "json")
     {
         Console.Error.WriteLine(JsonSerializer.Serialize(new { error },
-            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                // Absent, not null: an error without a stage renders exactly the
+                // shape consumers parsed before these fields existed.
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            }));
     }
     else
     {
-        Console.Error.WriteLine($"error[{error.Code}]: {error.Message} ({error.Hint})");
+        Console.Error.WriteLine(error.Hint is null
+            ? $"error[{error.Code}]: {error.Message}"
+            : $"error[{error.Code}]: {error.Message} ({error.Hint})");
     }
     return (int)ExitCode.Error;
 }
