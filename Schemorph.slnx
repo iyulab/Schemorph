@@ -3,10 +3,12 @@
     <Project Path="src/Schemorph.Cli/Schemorph.Cli.csproj" />
     <Project Path="src/Schemorph.Core/Schemorph.Core.csproj" />
     <Project Path="src/Schemorph.Provider.SqlServer/Schemorph.Provider.SqlServer.csproj" />
+    <Project Path="src/Schemorph.Provider.Postgres/Schemorph.Provider.Postgres.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Schemorph.Core.Tests/Schemorph.Core.Tests.csproj" />
     <Project Path="tests/Schemorph.Provider.SqlServer.Tests/Schemorph.Provider.SqlServer.Tests.csproj" />
     <Project Path="tests/Schemorph.IntegrationTests/Schemorph.IntegrationTests.csproj" />
+    <Project Path="tests/Schemorph.Provider.Postgres.Tests/Schemorph.Provider.Postgres.Tests.csproj" />
   </Folder>
 </Solution>
