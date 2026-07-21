@@ -27,6 +27,16 @@ var verb = args.Length > 0 ? args[0].ToLowerInvariant() : null;
 // default there; a terminal gets text. --format always wins over the heuristic.
 var format = ParseOption(args, "--format") ?? (Console.IsOutputRedirected ? "json" : "text");
 
+// sql is the review document, and only diff produces one. Accepting it elsewhere
+// and quietly rendering text would be the tool saying something untrue about
+// itself — the failure this whole error surface exists to avoid.
+if (format == "sql" && verb != "diff")
+{
+    return Fail("text", "invalid_arguments",
+        $"--format sql is only available on diff; '{verb}' does not produce a review document.",
+        "Use --format json or text here, or run diff --format sql to get the reviewable plan.");
+}
+
 switch (verb)
 {
     case "diff":

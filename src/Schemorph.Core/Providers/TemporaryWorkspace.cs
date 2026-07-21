@@ -28,9 +28,15 @@ public static class TemporaryWorkspace
     /// this returns.
     /// </summary>
     /// <param name="purpose">Short tag for the artifact, e.g. "inspect".</param>
-    public static string NewFile(string purpose, string extension)
+    /// <param name="root">
+    /// Where the workspace lives. Defaults to <see cref="Path.GetTempPath"/>, which is
+    /// what every caller uses; it is a parameter so a test can exercise an unusable
+    /// location without reassigning TMP, which is process-global and would reach into
+    /// whatever else is running at that moment.
+    /// </param>
+    public static string NewFile(string purpose, string extension, string? root = null)
     {
-        var directory = Path.Combine(Path.GetTempPath(), DirectoryName);
+        var directory = Path.Combine(root ?? Path.GetTempPath(), DirectoryName);
         try
         {
             Directory.CreateDirectory(directory);

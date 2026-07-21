@@ -8,55 +8,53 @@ namespace Schemorph.Core.Tests.Providers;
 /// error must name the directory (and the lever that moves it) rather than an
 /// internal artifact, and cleanup must never speak over the failure it is
 /// cleaning up after.
+///
+/// Note what these tests do NOT do: reassign TMP. An earlier version did, and it
+/// broke an unrelated class that reads <see cref="Path.GetTempPath"/> in a field
+/// initializer — environment variables are process-global and xUnit runs classes
+/// in parallel, so the mutation reached into whatever happened to start at that
+/// moment. The root is a parameter for exactly this reason.
 /// </summary>
-public sealed class TemporaryWorkspaceTests : IDisposable
+public sealed class TemporaryWorkspaceTests
 {
-    private readonly string? _originalTmp = Environment.GetEnvironmentVariable("TMP");
-    private readonly string? _originalTemp = Environment.GetEnvironmentVariable("TEMP");
-
-    private static void PointTempAt(string path)
-    {
-        Environment.SetEnvironmentVariable("TMP", path);
-        Environment.SetEnvironmentVariable("TEMP", path);
-    }
-
     [Fact]
     public void The_workspace_directory_is_created_before_it_is_used()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"schemorph-ws-{Guid.NewGuid():N}");
-        PointTempAt(root);   // exists nowhere yet — several levels deep is the point
+        // Several levels deep and non-existent — the point is that nothing above
+        // it has to be there either.
+        var root = Path.Combine(Path.GetTempPath(), $"schemorph-ws-{Guid.NewGuid():N}", "a", "b");
         try
         {
-            var file = TemporaryWorkspace.NewFile("inspect", ".dacpac");
+            var file = TemporaryWorkspace.NewFile("inspect", ".dacpac", root);
 
             Assert.True(Directory.Exists(Path.GetDirectoryName(file)));
             Assert.EndsWith(".dacpac", file);
+            Assert.Contains(TemporaryWorkspace.DirectoryName, file);
         }
         finally
         {
-            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+            var top = Path.Combine(Path.GetTempPath(), Path.GetRelativePath(Path.GetTempPath(), root).Split(Path.DirectorySeparatorChar)[0]);
+            if (Directory.Exists(top)) Directory.Delete(top, recursive: true);
         }
     }
 
     [Fact]
-    public void An_unusable_temp_location_is_reported_as_itself_not_as_a_missing_dacpac()
+    public void An_unusable_location_is_reported_as_itself_not_as_a_missing_dacpac()
     {
-        // Reproduction of the reported failure (an unusable Path.GetTempPath()).
+        // Reproduction of the reported failure (an unusable temp location).
         // Before the fix this surfaced as "Could not find a part of the path
         // '…\schemorph-inspect-<guid>.dacpac'" — a file the user never asked for,
         // which is why they blamed --out and worked around the wrong thing.
         //
-        // Temp is made unusable by pointing it at a *file*: creating a directory
-        // there fails on every platform, so this needs no OS branch. (The field
-        // report came from an unmapped Windows drive; the class of failure is the
-        // same and it is the class this guards.)
+        // Unusable is produced by pointing at a *file*: creating a directory under
+        // it fails on every platform, so this needs no OS branch. (The field report
+        // came from an unmapped Windows drive; the class of failure is the same.)
         var blocker = Path.Combine(Path.GetTempPath(), $"schemorph-blocker-{Guid.NewGuid():N}");
         File.WriteAllText(blocker, "not a directory");
-        PointTempAt(blocker);
         try
         {
             var ex = Assert.Throws<TemporaryWorkspaceException>(
-                () => TemporaryWorkspace.NewFile("inspect", ".dacpac"));
+                () => TemporaryWorkspace.NewFile("inspect", ".dacpac", blocker));
 
             Assert.Contains(blocker, ex.Message);          // names the location…
             Assert.Contains("TMP", ex.Message);            // …and the lever that moves it
@@ -64,8 +62,6 @@ public sealed class TemporaryWorkspaceTests : IDisposable
         }
         finally
         {
-            Environment.SetEnvironmentVariable("TMP", _originalTmp);
-            Environment.SetEnvironmentVariable("TEMP", _originalTemp);
             File.Delete(blocker);
         }
     }
@@ -90,11 +86,5 @@ public sealed class TemporaryWorkspaceTests : IDisposable
         TemporaryWorkspace.TryDelete(file);
 
         Assert.False(File.Exists(file));
-    }
-
-    public void Dispose()
-    {
-        Environment.SetEnvironmentVariable("TMP", _originalTmp);
-        Environment.SetEnvironmentVariable("TEMP", _originalTemp);
     }
 }

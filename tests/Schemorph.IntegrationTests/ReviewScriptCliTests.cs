@@ -103,6 +103,23 @@ public sealed class ReviewScriptCliTests : IDisposable
         Assert.Contains("No changes.", sql.StdOut);
     }
 
+    [SkippableFact]
+    public void Sql_is_refused_on_the_verbs_that_produce_no_document()
+    {
+        SeedSchema();
+
+        foreach (var verb in new[] { "apply", "status", "inspect" })
+        {
+            var result = Run($"{verb} --url \"{_db.Url}\" --schema \"{SchemaDir}\" " +
+                             $"--out \"{Path.Combine(_dir, "o")}\" --format sql");
+
+            // Accepting the flag and silently rendering text would advertise an
+            // output this verb cannot produce.
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("only available on diff", result.StdErr);
+        }
+    }
+
     public void Dispose()
     {
         _db.Dispose();

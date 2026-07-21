@@ -48,6 +48,9 @@ Recommended next version: **0.4.0** (minor — new CLI output format and new err
   asked for. Cleanup can no longer throw over the failure it is cleaning up after
   (`File.Delete` raises when the directory is gone, which is exactly when something has
   already gone wrong).
+- **`--format sql` is refused where it means nothing.** Only `diff` produces a review
+  document; the other verbs used to accept the flag and quietly render text, which is the
+  tool advertising an output it cannot produce.
 - **Every MCP tool answers a failure with the same envelope.** `schemorph_diff` and
   `schemorph_inspect` had no error handling at all, so their failures surfaced in the
   MCP framework's shape instead of Schemorph's; `schemorph_status` and `schemorph_apply`
