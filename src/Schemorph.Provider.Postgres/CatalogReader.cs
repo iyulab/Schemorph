@@ -71,7 +71,7 @@ internal static class CatalogReader
         FROM pg_constraint con
         JOIN pg_class c ON c.oid = con.conrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = @schema
+        WHERE n.nspname = @schema AND c.relkind = 'r'
         ORDER BY c.relname, con.conname
         """;
 

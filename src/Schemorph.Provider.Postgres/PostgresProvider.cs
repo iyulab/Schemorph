@@ -36,8 +36,13 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// own search path — the same place a psql session would take it from. Reading
     /// several schemas in one pass would need a new field on the core request, which
     /// belongs to a later slice.
+    ///
+    /// Known limitation (recorded, not fixed, in this slice): a <c>$user</c> entry in
+    /// the search path is returned literally, matching no real schema and yielding an
+    /// empty inspect; P1 adds unit tests pinning this alongside the empty and
+    /// quoted/multi-schema forms.
     /// </summary>
-    private static string TargetSchemaOf(string connectionString)
+    internal static string TargetSchemaOf(string connectionString)
     {
         var searchPath = new NpgsqlConnectionStringBuilder(connectionString).SearchPath;
         if (string.IsNullOrWhiteSpace(searchPath)) return "public";
