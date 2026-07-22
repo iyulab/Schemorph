@@ -34,6 +34,11 @@ internal static class CliManifest
                 name = "SCHEMORPH_URL",
                 description = "Connection string; preferred over --url (keeps credentials out of shell history).",
             },
+            new
+            {
+                name = "SCHEMORPH_PROVIDER",
+                description = "Database provider: sqlserver (default) or postgres. The provider block below reflects the selection.",
+            },
         },
         outputConventions = new
         {

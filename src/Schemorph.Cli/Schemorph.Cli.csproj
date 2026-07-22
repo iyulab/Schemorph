@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Schemorph.Core\Schemorph.Core.csproj" />
     <ProjectReference Include="..\Schemorph.Provider.SqlServer\Schemorph.Provider.SqlServer.csproj" />
+    <ProjectReference Include="..\Schemorph.Provider.Postgres\Schemorph.Provider.Postgres.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

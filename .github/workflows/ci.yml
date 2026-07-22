@@ -42,8 +42,8 @@ jobs:
       - name: Test
         run: dotnet test --no-build -c Release --logger "console;verbosity=normal"
 
-  # Real-database integration tests. The SA password is a throwaway credential
-  # scoped to the job's service container — not a secret.
+  # Real-database integration tests. The passwords are throwaway credentials
+  # scoped to the job's service containers — not secrets.
   integration:
     runs-on: ubuntu-latest
     services:
@@ -56,6 +56,17 @@ jobs:
           - 1433:1433
         options: >-
           --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Schemorph_CI_2026!' -C -Q 'SELECT 1' || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: Schemorph_CI_2026
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
@@ -73,7 +84,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
+      # The Postgres tests must run under the R1 baseline — a DB owner WITHOUT
+      # CREATEDB (dev plan §7): with a permissive superuser the scratch-schema
+      # path the provider actually ships would never be exercised in CI.
+      - name: Create the restricted Postgres role
+        run: >-
+          docker exec ${{ job.services.postgres.id }} psql -U postgres
+          -c "CREATE ROLE schemorph_ci LOGIN PASSWORD 'ci' NOSUPERUSER NOCREATEDB NOCREATEROLE;"
+          -c "CREATE DATABASE schemorph_ci OWNER schemorph_ci;"
+
+      - name: Postgres provider tests (live)
+        env:
+          SCHEMORPH_PG_TEST_URL: Host=localhost;Port=5432;Username=schemorph_ci;Password=ci;Database=schemorph_ci
+        run: dotnet test tests/Schemorph.Provider.Postgres.Tests -c Release --logger "console;verbosity=normal"
+
       - name: Integration tests
         env:
           SCHEMORPH_TEST_URL: Server=localhost,1433;User ID=sa;Password=Schemorph_CI_2026!;Encrypt=False;TrustServerCertificate=True
+          SCHEMORPH_PG_TEST_URL: Host=localhost;Port=5432;Username=schemorph_ci;Password=ci;Database=schemorph_ci
         run: dotnet test tests/Schemorph.IntegrationTests -c Release --logger "console;verbosity=normal"

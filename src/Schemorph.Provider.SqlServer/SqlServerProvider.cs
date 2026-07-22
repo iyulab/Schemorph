@@ -21,7 +21,9 @@ public sealed class SqlServerProvider : IDatabaseProvider
     // TODO(schemorph.json): make the model version configurable per project.
     private const SqlServerVersion ModelVersion = SqlServerVersion.Sql150;
 
-    public string Name => "sqlserver";
+    public const string ProviderName = "sqlserver";
+
+    public string Name => ProviderName;
 
     /// <summary>
     /// The full capability surface — this list is the parity yardstick a second

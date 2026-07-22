@@ -81,7 +81,7 @@ A provider supplies, at minimum:
 
 The core owns everything else. A provider should never need to know about the ledger format, the plan format, the CLI, or the MCP surface.
 
-The SQL Server provider wraps DacFx in-process (see [ADR-0001](./adr/0001-csharp-dacfx-foundation.md)). The PostgreSQL provider's engine choice — wrap an existing tool, bind a parser library, or build native comparison — is explicitly deferred until that work begins (see [ADR-0003](./adr/0003-postgres-as-second-provider.md)).
+The SQL Server provider wraps DacFx in-process (see [ADR-0001](./adr/0001-csharp-dacfx-foundation.md)). The PostgreSQL provider compares natively over `pg_catalog` with shadow normalization — the desired state is applied to a scratch schema and both sides are read back in the engine's own canonical rendering (see [ADR-0007](./adr/0007-postgres-engine-selection.md)); it declares the capability slices it has earned and refuses the rest (see [ADR-0003](./adr/0003-postgres-as-second-provider.md)). Providers are selected once, at the composition root, via `SCHEMORPH_PROVIDER`.
 
 ## Interfaces
 

@@ -109,3 +109,26 @@ Directional signal is a legitimate reason to **start**, and it is why the work i
 It is not a reason to promise a date, and this ADR's stance is unchanged on that point:
 the README continues to point Postgres users at other tools until a slice actually ships,
 and then says what that slice covers — not when the next one arrives.
+
+## Addendum (2026-07-22): the selection surface, shaped by the second implementation
+
+This ADR deliberately left the provider-selection surface unspecified "until a second
+implementation exists to shape it". It exists (slice P1), and shaped it thus: the
+composition root reads **`SCHEMORPH_PROVIDER`** (`sqlserver`, the default, or
+`postgres`) and hands every surface the provider paired with its own ledger store.
+
+Why an environment variable and not the alternatives it displaced:
+
+- **Not connection-string sniffing** — the two ADO.NET dialects overlap enough
+  (`Server=`, `Database=`, key-value pairs) that inference would misroute someone's
+  connection precisely when it matters most, silently.
+- **Not a per-verb flag** — the provider is a property of the environment a command
+  runs in, exactly like `SCHEMORPH_URL`; MCP servers are configured that way already,
+  and a flag would have to be repeated on every verb and mirrored into every MCP tool.
+- **Default unchanged** — existing consumers see nothing move. The CLI manifest's
+  `provider` block reflects the selection, so an agent can verify what it is talking
+  to instead of assuming.
+
+An unrecognized value fails loudly with the valid set named. The surface stays this
+small on purpose; a config-file home for it belongs to the multi-environment decision
+(Phase 3, demand-gated) if that ever lands.

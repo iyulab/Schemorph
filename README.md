@@ -95,7 +95,7 @@ An AI agent manages a schema change end-to-end — inspect, plan, review, apply 
 ## Database Support
 
 - **SQL Server** — initial target. The diff engine builds on [DacFx](https://github.com/microsoft/DacFx) (Microsoft's schema comparison framework, the same engine behind SSDT), giving full-fidelity handling of T-SQL objects from day one.
-- **PostgreSQL** — planned, with no committed timeline. The provider boundary is designed in from the start and a first consumer has supplied its requirements, but the engine choice is still deliberately open; see [ADR-0003](./docs/adr/0003-postgres-as-second-provider.md). **If you need PostgreSQL today, Atlas, sqldef, or Flyway will serve you better** — that is a more useful answer than a date we cannot keep.
+- **PostgreSQL** — in progress, with no committed timeline. The engine is decided ([ADR-0007](./docs/adr/0007-postgres-engine-selection.md): native `pg_catalog` comparison with shadow normalization) and implementation proceeds in releasable slices that declare what they can handle and refuse the rest ([ADR-0003](./docs/adr/0003-postgres-as-second-provider.md)). Nothing is released yet. **If you need PostgreSQL today, Atlas, sqldef, or Flyway will serve you better** — that is a more useful answer than a date we cannot keep.
 
 ## Installation
 
