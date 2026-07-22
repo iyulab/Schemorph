@@ -43,9 +43,13 @@ internal static class CatalogReader
         var constraints = await ReadConstraintsAsync(connection, schema, cancellationToken);
         var indexes = await ReadIndexesAsync(connection, schema, cancellationToken);
 
+        // Self-exclusion: Schemorph's own bookkeeping is invisible to inspect
+        // and comparison alike — the same rule the SQL Server provider applies
+        // (a desired state must never describe the tool's ledger).
         var tableNames = columns.Keys
             .Union(constraints.Keys, StringComparer.Ordinal)
             .Union(indexes.Keys, StringComparer.Ordinal)
+            .Where(n => !Schemorph.Core.Ledger.LedgerObjects.IsLedgerObject(n))
             .OrderBy(n => n, StringComparer.Ordinal);
 
         return tableNames
