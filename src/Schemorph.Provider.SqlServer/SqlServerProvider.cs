@@ -409,7 +409,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
                     }
                 }
 
-                rendered.Add(new DesiredStateFile($"{directory}/{fullName}.sql", content.ToString()));
+                rendered.Add(new DesiredStateFile(
+                    $"{directory}/{DesiredStateFile.SafeSegment(fullName)}.sql", content.ToString()));
             }
         }
 

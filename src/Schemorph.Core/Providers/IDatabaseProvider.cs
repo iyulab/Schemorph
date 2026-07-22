@@ -140,7 +140,32 @@ public interface IDesiredState
 public sealed record InspectRequest(string ConnectionString);
 
 /// <summary>One rendered desired-state file, e.g. ("tables/dbo.Orders.sql", "CREATE TABLE ...").</summary>
-public sealed record DesiredStateFile(string RelativePath, string Content);
+public sealed record DesiredStateFile(string RelativePath, string Content)
+{
+    private static readonly char[] InvalidChars =
+        System.IO.Path.GetInvalidFileNameChars().Union(new[] { '/', '\\' }).ToArray();
+
+    /// <summary>
+    /// An object name as a usable file-name segment. Database identifiers admit
+    /// characters no file system does (<c>we"ird</c>, <c>a/b</c>, quoted
+    /// mixed-case with separators), and every provider that renders inspect
+    /// output hits the same wall — so the rule lives here once. Offending
+    /// characters become <c>_</c>, and a sanitized name carries a short content
+    /// hash of the original so two different identifiers can never collapse
+    /// into the same file. Names that are already clean pass through verbatim.
+    /// </summary>
+    public static string SafeSegment(string objectName)
+    {
+        var sanitized = new string(objectName
+            .Select(c => Array.IndexOf(InvalidChars, c) >= 0 || char.IsControl(c) ? '_' : c)
+            .ToArray())
+            .TrimEnd(' ', '.');
+
+        return sanitized == objectName
+            ? objectName
+            : $"{(sanitized.Length == 0 ? "object" : sanitized)}-{ContentChecksum.Compute(objectName)[..8]}";
+    }
+}
 
 public sealed record InspectResult(IReadOnlyList<DesiredStateFile> Files);
 
