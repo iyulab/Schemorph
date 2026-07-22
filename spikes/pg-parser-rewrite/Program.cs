@@ -84,4 +84,46 @@ Console.WriteLine("=== 5. Error reporting on broken SQL ===");
 var broken = Parser.Parse("CREATE TABLE \"X\" (\"a\" int,,);");
 Console.WriteLine(broken.Error?.ToString() ?? "no error reported (!)");
 
+Console.WriteLine();
+Console.WriteLine("=== 6. AST mutation: generic protobuf walk + deparse ===");
+// The rewriter's core move: descend every message field, retarget schema names,
+// deparse. Generic descent (IMessage descriptors) is what makes coverage
+// independent of statement-type knowledge.
+var ast = Parser.Parse(Cross).Value!;
+Console.WriteLine($"AST CLR type: {ast.GetType().FullName}");
+var rewritten = 0;
+void Walk(Google.Protobuf.IMessage message)
+{
+    foreach (var field in message.Descriptor.Fields.InDeclarationOrder())
+    {
+        var value = field.Accessor.GetValue(message);
+        if (field.FieldType == Google.Protobuf.Reflection.FieldType.Message)
+        {
+            if (field.IsRepeated)
+            {
+                foreach (var item in ((System.Collections.IEnumerable)value).OfType<Google.Protobuf.IMessage>()) Walk(item);
+            }
+            else if (value is Google.Protobuf.IMessage child)
+            {
+                Walk(child);
+            }
+        }
+        else if (field.FieldType == Google.Protobuf.Reflection.FieldType.String
+                 && field.Name is "schemaname"
+                 && (string)value == "SrcTest")
+        {
+            field.Accessor.SetValue(message, "shadow_x");
+            rewritten++;
+        }
+    }
+}
+Walk(ast);
+Console.WriteLine($"schemaname fields rewritten: {rewritten}");
+var mutated = Parser.Deparse(ast);
+Console.WriteLine(mutated.Value);
+Console.WriteLine($"no SrcTest RangeVar left:  {!mutated.Value!.Contains("\"SrcTest\".\"Members\"")}");
+Console.WriteLine($"shadow target present:     {mutated.Value!.Contains("\"shadow_x\".\"Members\"")}");
+Console.WriteLine($"NOTE type/func lists are String nodes, not schemaname fields: " +
+    $"{mutated.Value!.Contains("\"SrcTest\".\"MemberRole\"")}");
+
 return 0;
