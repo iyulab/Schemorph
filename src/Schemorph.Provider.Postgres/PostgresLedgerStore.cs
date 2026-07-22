@@ -16,6 +16,13 @@ public sealed class PostgresLedgerStore : ILedgerStore
         var schema = PostgresProvider.TargetSchemaOf(connectionString);
         await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
+        // The apply initializes the ledger BEFORE anything runs (ADR-0004), and
+        // on a fresh database the target schema may not exist yet either.
+        await using (var schemaCommand = new NpgsqlCommand(
+            $"CREATE SCHEMA IF NOT EXISTS {DesiredStateRenderer.Quote(schema)}", connection))
+        {
+            await schemaCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
         await using var command = new NpgsqlCommand(PgLedgerSql.CreateTableSql(schema), connection);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }

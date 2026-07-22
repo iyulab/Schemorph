@@ -66,7 +66,28 @@ internal static class SchemaRewriter
             combined.Stmts.AddRange(parsed.Value.Stmts);
         }
 
+        foreach (var statement in combined.Stmts)
+        {
+            if (statement.Stmt?.CreateSchemaStmt is not { } createSchema) continue;
+
+            // The target schema's own CREATE SCHEMA is legitimate model content
+            // ("schemas" capability line); the scratch schema already exists, so
+            // it becomes idempotent. Any OTHER schema would be created for real
+            // by a shadow apply — outside the sandbox — so it is refused.
+            if (createSchema.Schemaname == shadowSchema)
+            {
+                createSchema.IfNotExists = true;
+            }
+            else
+            {
+                throw new SchemaRewriteException(
+                    $"CREATE SCHEMA {createSchema.Schemaname}: only the target schema's own " +
+                    "CREATE SCHEMA belongs to this slice (cross-schema DDL is a later slice).", 0);
+            }
+        }
+
         var ordered = combined.Stmts.OrderBy(OrderClass).ToList();   // OrderBy is stable
+        ordered = OrderCreatesByInlineForeignKeys(ordered);
         combined.Stmts.Clear();
         combined.Stmts.AddRange(ordered);
 
@@ -89,6 +110,87 @@ internal static class SchemaRewriter
 
     private static bool IsForeignKeyAdd(Node command)
         => command.AlterTableCmd?.Def?.Constraint?.Contype == ConstrType.ConstrForeign;
+
+    /// <summary>
+    /// Statement-class ordering is not enough for the most common file shape:
+    /// a CREATE TABLE with its FOREIGN KEY declared INLINE references a table
+    /// that must already exist. The creates are therefore topologically sorted
+    /// by those inline references (self-references are fine; a reference to a
+    /// table this set does not create is left to the engine). Mutual foreign
+    /// keys cannot be solved by ordering whole statements — that shape needs
+    /// ALTER-separated constraints, and the error says so.
+    /// </summary>
+    private static List<RawStmt> OrderCreatesByInlineForeignKeys(List<RawStmt> statements)
+    {
+        var creates = statements.Where(s => s.Stmt?.CreateStmt is not null).ToList();
+        if (creates.Count <= 1) return statements;
+
+        var byName = creates.ToDictionary(s => s.Stmt.CreateStmt.Relation.Relname, StringComparer.Ordinal);
+        var sorted = new List<RawStmt>();
+        var visiting = new HashSet<string>(StringComparer.Ordinal);
+        var done = new HashSet<string>(StringComparer.Ordinal);
+
+        void Visit(RawStmt statement)
+        {
+            var name = statement.Stmt.CreateStmt.Relation.Relname;
+            if (done.Contains(name)) return;
+            if (!visiting.Add(name))
+            {
+                throw new SchemaRewriteException(
+                    $"Tables reference each other in a cycle around {name}; mutual foreign keys " +
+                    "must be declared as separate ALTER TABLE ... ADD CONSTRAINT statements.", 0);
+            }
+            foreach (var referenced in InlineForeignKeyTargets(statement))
+            {
+                if (referenced != name && byName.TryGetValue(referenced, out var dependency))
+                {
+                    Visit(dependency);
+                }
+            }
+            visiting.Remove(name);
+            done.Add(name);
+            sorted.Add(statement);
+        }
+
+        foreach (var create in creates) Visit(create);
+
+        // Splice the sorted creates back over the original create positions;
+        // everything else keeps its place.
+        var queue = new Queue<RawStmt>(sorted);
+        return statements.Select(s => s.Stmt?.CreateStmt is null ? s : queue.Dequeue()).ToList();
+    }
+
+    private static IEnumerable<string> InlineForeignKeyTargets(RawStmt statement)
+        => CollectForeignKeyTables(statement).Distinct(StringComparer.Ordinal);
+
+    private static IEnumerable<string> CollectForeignKeyTables(IMessage message)
+    {
+        if (message.Descriptor.Name == "Constraint")
+        {
+            var constraint = (Constraint)message;
+            if (constraint.Contype == ConstrType.ConstrForeign && constraint.Pktable is not null)
+            {
+                yield return constraint.Pktable.Relname;
+            }
+        }
+
+        foreach (var field in message.Descriptor.Fields.InDeclarationOrder())
+        {
+            if (field.FieldType != FieldType.Message) continue;
+            var value = field.Accessor.GetValue(message);
+            if (field.IsRepeated)
+            {
+                foreach (var item in ((System.Collections.IEnumerable)value).OfType<IMessage>())
+                {
+                    foreach (var name in CollectForeignKeyTables(item)) yield return name;
+                }
+            }
+            else if (value is IMessage child)
+            {
+                foreach (var name in CollectForeignKeyTables(child)) yield return name;
+            }
+        }
+    }
 
     // Node types whose first list element is a schema qualifier when the list
     // has more than one part. Keyed by (message type, field name) so a String
@@ -113,8 +215,12 @@ internal static class SchemaRewriter
             {
                 // Every field the grammar calls "schemaname" is a schema
                 // reference by construction (RangeVar, and with it every
-                // table/index/ALTER target and FK pktable).
-                if (field.Name == "schemaname" && (string)value == source)
+                // table/index/ALTER target and FK pktable). An UNQUALIFIED
+                // RangeVar in single-schema model DDL is target-relative —
+                // left alone it would land wherever the connection's
+                // search_path points, which is precisely not the sandbox.
+                if (field.Name == "schemaname"
+                    && ((string)value == source || (typeName == "RangeVar" && (string)value == "")))
                 {
                     field.Accessor.SetValue(message, shadow);
                 }

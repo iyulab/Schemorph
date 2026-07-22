@@ -15,15 +15,13 @@ public class ProviderBoundaryTests
     // Walks the whole surface rather than checking capabilities one at a time.
     // Per-member tests are what let schemorph_diff and schemorph_inspect ship
     // with no error handling at all (cycle 73) — a new member added without a
-    // refusal must fail here, not be discovered by a user.
+    // refusal must fail here, not be discovered by a user. P1 moved load,
+    // compare, apply and programmable analysis off this list; what remains is
+    // the P3/P4 machinery (redefine script execution, migrations).
     public static TheoryData<string, Func<PostgresProvider, Task>> UndeclaredCapabilities => new()
     {
-        { "desired-state loading", p => p.LoadDesiredStateAsync("any") },
-        { "compare", p => p.CompareAsync(new CompareRequest(new StubDesiredState(), "any")) },
-        { "apply", p => p.ApplyAsync(new ApplyRequest(new StubDesiredState(), "any"), _ => true) },
         { "script execution", p => p.ExecuteScriptAsync("any", "SELECT 1") },
         { "script execution with ledger", p => p.ExecuteScriptAsync("any", "SELECT 1", []) },
-        { "programmable analysis", p => p.AnalyzeProgrammablesAsync(new StubDesiredState()) },
         { "live-definition matching", p => p.FilterMatchingLiveDefinitionsAsync("any", []) },
         { "migration lint", p => p.LintMigrationScriptAsync("SELECT 1") },
     };
@@ -47,7 +45,7 @@ public class ProviderBoundaryTests
         // The declaration and the refusals pin each other: adding a capability
         // without moving it out of the refusal list breaks this.
         var ex = await Assert.ThrowsAsync<UnsupportedByProviderException>(
-            () => Provider.ApplyAsync(new ApplyRequest(new StubDesiredState(), "any"), _ => true));
+            () => Provider.ExecuteScriptAsync("any", "SELECT 1"));
 
         foreach (var declared in Provider.Capabilities.Declared)
         {
@@ -56,14 +54,27 @@ public class ProviderBoundaryTests
     }
 
     [Fact]
-    public void P0_declares_reading_and_no_apply_guarantee()
+    public void P1_declares_the_table_core_and_earns_transactional()
     {
-        // Slice P0: `inspect` only, and atomicity stays undeclared — a provider
-        // with no apply must not claim what an apply would guarantee. P1 turns
-        // this test around when it earns `transactional` (ADR-0007).
-        Assert.Equal(new[] { "inspect" }, Provider.Capabilities.Declared);
-        Assert.Null(Provider.Capabilities.Atomicity);
-        Assert.Throws<InvalidOperationException>(() => Provider.Capabilities.PlanAtomicity);
+        // Slice P1: the table core, and with it the apply guarantee — earned
+        // by the tool-owned transaction (ADR-0007, ADR-0004 addendum), not
+        // asserted. P0 declared `inspect` alone with NO atomicity, because a
+        // provider without an apply must not claim what one would guarantee.
+        Assert.Equal(
+            new[] { "inspect", "tables", "columns", "constraints", "schemas" },
+            Provider.Capabilities.Declared);
+        Assert.Equal(ApplyAtomicity.Transactional, Provider.Capabilities.Atomicity);
+        Assert.Equal(ApplyAtomicity.Transactional, Provider.Capabilities.PlanAtomicity);
+    }
+
+    [Fact]
+    public async Task A_foreign_desired_state_is_rejected_with_a_real_error()
+    {
+        // Load/compare/apply are implemented now, so the guard that matters is
+        // the SQL Server provider's own: a desired state loaded elsewhere is an
+        // argument error, not a refusal.
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => Provider.CompareAsync(new CompareRequest(new StubDesiredState(), "any")));
     }
 
     private sealed class StubDesiredState : IDesiredState
