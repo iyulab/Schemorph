@@ -112,3 +112,36 @@ The field must be *earned*, not asserted: a provider declares `transactional` on
 the tool holds the transaction boundary. This is why the guarantee was scored as
 *control* over atomicity rather than its mere presence — psqldef had the rollback and
 not the boundary.
+
+## Addendum (2026-07-22): the parser question, answered by the work that needed it
+
+The decision above deferred a parser binding ("not adopted now") on two grounds: shadow
+normalization removed the need for parser-based *expression comparison*, and the .NET
+bindings' maintenance level was unverified. Both grounds have since been tested by the
+work the deferral pointed at.
+
+The need arrived first, and it was measured rather than assumed. The scratch-schema
+shadow variant requires retargeting desired-state DDL into the scratch schema, and string
+substitution was refuted with a concrete counterexample before any parser was considered:
+`pg_get_indexdef` renders fold-safe schema qualifiers **unquoted** (`src_test."Workspaces"`),
+so quoted-form substitution misses them and the statement silently lands in the source
+schema (cycle-76 — the first hard evidence that the rewrite step must be parser-based,
+exactly as this ADR's risk list anticipated).
+
+The maintenance question was then answered by measurement (`spikes/pg-parser-rewrite/`):
+**`pgsqlparser` 1.0.0** (libpg_query, PostgreSQL 17 grammar) parses the quoted-PascalCase
+corpus shapes, exposes every schema-bearing position as a structured field (`RangeVar`,
+FK `pktable`, qualified `TypeName`, qualified `funcname`), ships natives for exactly the
+release RIDs (win-x64, linux-x64, osx-arm64) — and its **deparse preserves identifier
+quoting**, the precise synthesis defect that eliminated psqldef.
+
+**Adopted, narrowly**: `pgsqlparser` becomes the shadow harness's rewriter — AST rewrite
+of the schema fields plus deparse, executed only against the scratch schema. Deparse
+normalizes formatting, and that is acceptable *there specifically* because the shadow text
+is never compared as text: both sides are read back from `pg_catalog` in the engine's own
+canonical rendering. Verbatim remains the rule wherever text is the artifact (inspect
+output, redefine scripts). The comparison layer still contains no parser.
+
+Risk posture: exact version pin with corpus-gated upgrades — the DacFx policy, reused.
+If the binding goes unmaintained, the replacement surface is three functions over a
+pinned libpg_query (vendored P/Invoke), recorded in the spike README as the fallback.
