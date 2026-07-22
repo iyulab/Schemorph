@@ -36,7 +36,8 @@ public sealed class PostgresProvider : IDatabaseProvider
     public async Task<InspectResult> InspectAsync(InspectRequest request, CancellationToken cancellationToken = default)
     {
         var tables = await CatalogReader.ReadTablesAsync(
-            request.ConnectionString, TargetSchemaOf(request.ConnectionString), cancellationToken);
+            request.ConnectionString, TargetSchemaOf(request.ConnectionString),
+            cancellationToken: cancellationToken);
         return new InspectResult(DesiredStateRenderer.Render(tables));
     }
 

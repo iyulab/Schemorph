@@ -39,14 +39,15 @@ internal sealed class ShadowSchema : IAsyncDisposable
     }
 
     /// <summary>
-    /// Retarget one desired-state text from <paramref name="sourceSchema"/>
-    /// into this schema and execute it, all statements in one transaction —
-    /// a desired state that half-applies is not a comparison side.
+    /// Retarget the whole desired-state set from <paramref name="sourceSchema"/>
+    /// into this schema and execute it in dependency-safe statement order
+    /// (<see cref="SchemaRewriter.RetargetSet"/>), all in one transaction — a
+    /// desired state that half-applies is not a comparison side.
     /// </summary>
     public async Task ApplyAsync(
-        string sql, string sourceSchema, CancellationToken cancellationToken = default)
+        IReadOnlyList<string> sqlTexts, string sourceSchema, CancellationToken cancellationToken = default)
     {
-        var rewritten = SchemaRewriter.Retarget(sql, sourceSchema, Name);
+        var rewritten = SchemaRewriter.RetargetSet(sqlTexts, sourceSchema, Name);
 
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);

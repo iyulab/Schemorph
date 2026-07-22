@@ -34,18 +34,43 @@ internal static class SchemaRewriter
     /// </summary>
     /// <exception cref="SchemaRewriteException">The text is not valid PostgreSQL.</exception>
     public static string Retarget(string sql, string sourceSchema, string shadowSchema)
+        => RetargetSet([sql], sourceSchema, shadowSchema);
+
+    /// <summary>
+    /// Retarget a whole desired-state set and put its statements into a
+    /// dependency-safe order: tables first, then non-FK constraints, then
+    /// foreign keys, then indexes. Desired-state files carry no reliable
+    /// order of their own — the first live corpus applied its files
+    /// alphabetically and the FK arrived before the table it references.
+    /// The classes mirror pg_dump's pre-data/post-data split; ordering
+    /// *within* a class is preserved. A cross-table FK declared inline in a
+    /// later CREATE TABLE is out of this slice's reach (statement-level
+    /// reordering cannot split a statement) and surfaces as the engine's own
+    /// error rather than being silently reshuffled.
+    /// </summary>
+    public static string RetargetSet(
+        IReadOnlyList<string> sqlTexts, string sourceSchema, string shadowSchema)
     {
-        var parsed = Parser.Parse(sql);
-        if (parsed.Error is not null || parsed.Value is null)
+        var combined = new ParseResult();
+        foreach (var sql in sqlTexts)
         {
-            throw new SchemaRewriteException(
-                parsed.Error?.Message ?? "The parser returned no tree.",
-                parsed.Error?.CursorPos ?? 0);
+            var parsed = Parser.Parse(sql);
+            if (parsed.Error is not null || parsed.Value is null)
+            {
+                throw new SchemaRewriteException(
+                    parsed.Error?.Message ?? "The parser returned no tree.",
+                    parsed.Error?.CursorPos ?? 0);
+            }
+            Walk(parsed.Value, sourceSchema, shadowSchema);
+            combined.Version = parsed.Value.Version;
+            combined.Stmts.AddRange(parsed.Value.Stmts);
         }
 
-        Walk(parsed.Value, sourceSchema, shadowSchema);
+        var ordered = combined.Stmts.OrderBy(OrderClass).ToList();   // OrderBy is stable
+        combined.Stmts.Clear();
+        combined.Stmts.AddRange(ordered);
 
-        var deparsed = Parser.Deparse(parsed.Value);
+        var deparsed = Parser.Deparse(combined);
         if (deparsed.Error is not null || deparsed.Value is null)
         {
             throw new SchemaRewriteException(
@@ -53,6 +78,17 @@ internal static class SchemaRewriter
         }
         return deparsed.Value;
     }
+
+    private static int OrderClass(RawStmt statement) => statement.Stmt switch
+    {
+        { CreateStmt: not null } => 0,
+        { AlterTableStmt: { } alter } when alter.Cmds.Any(IsForeignKeyAdd) => 2,
+        { IndexStmt: not null } => 3,
+        _ => 1,
+    };
+
+    private static bool IsForeignKeyAdd(Node command)
+        => command.AlterTableCmd?.Def?.Constraint?.Contype == ConstrType.ConstrForeign;
 
     // Node types whose first list element is a schema qualifier when the list
     // has more than one part. Keyed by (message type, field name) so a String

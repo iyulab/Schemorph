@@ -83,6 +83,31 @@ public class SchemaRewriterTests
     }
 
     [Fact]
+    public void A_set_is_ordered_tables_then_constraints_then_foreign_keys_then_indexes()
+    {
+        // Desired-state files carry no reliable order (the first live corpus
+        // arrived alphabetically: Members before the Workspaces it references).
+        // The set is reordered like pg_dump's pre-data/post-data split.
+        var members = """
+            CREATE TABLE "Src"."Members" ("Id" uuid, "W" uuid);
+            ALTER TABLE "Src"."Members" ADD CONSTRAINT "PK_M" PRIMARY KEY ("Id");
+            ALTER TABLE "Src"."Members" ADD CONSTRAINT "FK_M_W" FOREIGN KEY ("W") REFERENCES "Src"."Workspaces" ("Id");
+            CREATE INDEX "IX_M" ON "Src"."Members" ("W");
+            """;
+        var workspaces = """
+            CREATE TABLE "Src"."Workspaces" ("Id" uuid);
+            ALTER TABLE "Src"."Workspaces" ADD CONSTRAINT "PK_W" PRIMARY KEY ("Id");
+            """;
+
+        var sql = SchemaRewriter.RetargetSet([members, workspaces], "Src", "shadow_x");
+
+        int Position(string marker) => sql.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(Position("CREATE TABLE shadow_x.\"Workspaces\"") < Position("\"PK_M\""));
+        Assert.True(Position("\"PK_W\"") < Position("\"FK_M_W\""));
+        Assert.True(Position("\"FK_M_W\"") < Position("CREATE INDEX"));
+    }
+
+    [Fact]
     public void Invalid_sql_throws_with_the_parsers_position()
     {
         var ex = Assert.Throws<SchemaRewriteException>(

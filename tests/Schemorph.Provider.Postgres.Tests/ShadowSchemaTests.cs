@@ -31,10 +31,8 @@ public class ShadowSchemaTests
         var rendered = DesiredStateRenderer.Render(sourceTables);
 
         await using var shadow = await ShadowSchema.CreateAsync(PgTestSchema.ServerUrl!);
-        foreach (var file in rendered)
-        {
-            await shadow.ApplyAsync(file.Content, sourceSchema: source.Name);
-        }
+        await shadow.ApplyAsync(
+            rendered.Select(f => f.Content).ToList(), sourceSchema: source.Name);
 
         var shadowTables = await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, shadow.Name);
 
@@ -81,7 +79,7 @@ public class ShadowSchemaTests
         var sabotaged = rendered[0].Content + "\nCREATE INDEX \"IX_Dup\" ON \"Missing\" (\"x\");";
 
         await Assert.ThrowsAsync<Npgsql.PostgresException>(
-            () => shadow.ApplyAsync(sabotaged, sourceSchema: source.Name));
+            () => shadow.ApplyAsync([sabotaged], sourceSchema: source.Name));
 
         // One transaction per desired-state text: nothing from it may survive.
         Assert.Empty(await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, shadow.Name));
