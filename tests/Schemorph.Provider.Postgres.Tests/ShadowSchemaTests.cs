@@ -58,6 +58,9 @@ public class ShadowSchemaTests
     [SkippableFact]
     public async Task The_scratch_schema_is_gone_after_disposal()
     {
+        Skip.If(PgTestSchema.ServerUrl is null,
+            "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+
         string name;
         await using (var shadow = await ShadowSchema.CreateAsync(PgTestSchema.ServerUrl!))
         {

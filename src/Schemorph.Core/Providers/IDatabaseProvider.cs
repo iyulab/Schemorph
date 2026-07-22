@@ -142,8 +142,13 @@ public sealed record InspectRequest(string ConnectionString);
 /// <summary>One rendered desired-state file, e.g. ("tables/dbo.Orders.sql", "CREATE TABLE ...").</summary>
 public sealed record DesiredStateFile(string RelativePath, string Content)
 {
+    // A FIXED set — deliberately not Path.GetInvalidFileNameChars(), which is
+    // platform-dependent (on Linux it is only '/' and NUL). A desired-state
+    // tree is checked out across operating systems, so the same database must
+    // render the same file names everywhere; the strictest common denominator
+    // is the Windows set.
     private static readonly char[] InvalidChars =
-        System.IO.Path.GetInvalidFileNameChars().Union(new[] { '/', '\\' }).ToArray();
+        { '<', '>', ':', '"', '/', '\\', '|', '?', '*' };
 
     /// <summary>
     /// An object name as a usable file-name segment. Database identifiers admit
