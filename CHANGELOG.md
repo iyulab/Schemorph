@@ -5,9 +5,33 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
-## Unreleased
+## 0.5.0 — 2026-07-22
 
-Recommended next version: **0.4.0** (minor — new CLI output format and new error codes).
+### Added
+
+- **PostgreSQL provider — first slice: the table core.** `SCHEMORPH_PROVIDER=postgres`
+  selects it (default stays `sqlserver`; existing consumers are unaffected). Declared
+  capabilities: `inspect`, `tables`, `columns`, `constraints`, `schemas` — inspect,
+  diff and apply over those, with the declarative apply running as **one tool-owned
+  transaction** (applied entirely or not at all). Everything outside the declared list
+  is refused with an explicit error naming what the provider does support, rather than
+  half-planned. Comparison is native `pg_catalog` with shadow-schema normalization
+  (ADR-0007); the migration ledger lives inside the target schema. A database-owner
+  role with `CREATE SCHEMA` suffices — no superuser, no `CREATEDB`, no extensions.
+- **Plan format 1.3** — a plan now declares its `atomicity` (`transactional` |
+  `partial`; additive, excluded from `planHash`). **CLI manifest 1.4** — a `provider`
+  block carries the active provider's name and capability list.
+- CI runs the Postgres provider tests against a live `postgres:16` container under a
+  deliberately restricted role (`NOSUPERUSER NOCREATEDB`), so the permission baseline
+  above is exercised on every commit, not assumed.
+
+### Changed
+
+- Self-contained binaries grow by the Postgres stack: win-x64 measured
+  188,877,831 bytes vs 181,835,572 in 0.4.0 (+7.0 MB, +3.9%; Npgsql + the pinned
+  `pgsqlparser` native used for shadow rewriting).
+
+## 0.4.0 — 2026-07-21
 
 ### Added
 

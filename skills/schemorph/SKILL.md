@@ -1,9 +1,9 @@
 ---
 name: schemorph
-description: Manage a SQL Server schema declaratively with Schemorph — edit desired-state .sql files, compute a reviewable plan (diff), and execute it through the fingerprint-gated apply. Use when asked to change database schema (tables, views, procedures, functions, triggers), add versioned data migrations, check schema drift or migration status, or adopt an existing database into declarative management. Covers both the schemorph CLI and its MCP server.
+description: Manage a database schema declaratively with Schemorph — edit desired-state .sql files, compute a reviewable plan (diff), and execute it through the fingerprint-gated apply. SQL Server is the full-surface default; PostgreSQL is supported for the table core (SCHEMORPH_PROVIDER=postgres). Use when asked to change database schema (tables, views, procedures, functions, triggers), add versioned data migrations, check schema drift or migration status, or adopt an existing database into declarative management. Covers both the schemorph CLI and its MCP server.
 ---
 
-# Schemorph: declarative SQL Server schema changes
+# Schemorph: declarative database schema changes
 
 Schemorph treats a directory of `.sql` files as the desired state. You never
 write ALTER statements for structure — you edit the CREATE, and Schemorph plans
@@ -17,6 +17,15 @@ versioned migration files, never in the desired state.
 - Connection string in the `SCHEMORPH_URL` environment variable. Never pass
   credentials as arguments or through an MCP conversation; password material is
   redacted from all output, but the environment variable is the contract.
+- Provider: SQL Server by default; `SCHEMORPH_PROVIDER=postgres` targets
+  PostgreSQL. The Postgres provider covers the **table core** — tables, columns,
+  constraints and the target schema, applied in a single transaction — and
+  **refuses** anything outside that list (indexes, programmable objects,
+  migrations) with an explicit error naming what it does support. A refusal
+  means "not this provider yet", not "fix your files": don't retry, don't route
+  the DDL around Schemorph — report the gap to the human. The CLI manifest
+  (`schemorph schema`) carries the current capability list in its `provider`
+  block.
 
 ## Repository layout
 
