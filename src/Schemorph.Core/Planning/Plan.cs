@@ -1,3 +1,5 @@
+using Schemorph.Core.Providers;
+
 namespace Schemorph.Core.Planning;
 
 /// <summary>What an action does to a database object.</summary>
@@ -34,10 +36,19 @@ public sealed record PlanMessage(string Severity, string Code, string Text);
 /// The plan: every mutating operation is expressible as one of these before execution.
 /// <c>diff</c> produces a plan and stops; <c>apply</c> produces a plan and executes it.
 /// </summary>
+/// <param name="Atomicity">
+/// What an apply of this plan guarantees on partial failure (ADR-0004
+/// addendum): the provider's declared mode, carried in the document so the
+/// resume story is read from the plan instead of assumed from the tool.
+/// Defaults to the weakest claim — a plan may under-claim, never over-claim.
+/// Excluded from <see cref="PlanFingerprint"/>: it is a static property of the
+/// provider, not part of which changes execute.
+/// </param>
 public sealed record Plan(
     string FormatVersion,
     IReadOnlyList<PlanAction> Actions,
-    IReadOnlyList<PlanMessage> Messages)
+    IReadOnlyList<PlanMessage> Messages,
+    ApplyAtomicity Atomicity = ApplyAtomicity.Partial)
 {
     /// <summary>
     /// Version of the machine-readable plan format (docs/plan-format.md), following
@@ -45,7 +56,7 @@ public sealed record Plan(
     /// additions (consumers must ignore unknown properties); the major version
     /// increments for breaking changes. Independent of the product version.
     /// </summary>
-    public const string CurrentFormatVersion = "1.2";   // 1.2: sql/explanation populated (additive; reserved since 1.0)
+    public const string CurrentFormatVersion = "1.3";   // 1.3: atomicity declared (additive; excluded from planHash)
 
     public bool HasChanges => Actions.Count > 0;
 

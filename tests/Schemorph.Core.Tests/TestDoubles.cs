@@ -18,6 +18,10 @@ internal sealed class FakeProvider : IDatabaseProvider
 
     public string Name => "fake";
 
+    /// <summary>Overridable so operation tests can exercise the declared atomicity flowing into plans.</summary>
+    public ProviderCapabilities Capabilities { get; init; } =
+        new(new[] { "fake" }, ApplyAtomicity.Partial);
+
     public Task ExecuteScriptAsync(string connectionString, string script, CancellationToken ct = default)
         => ExecuteScriptAsync(connectionString, script, Array.Empty<LedgerEntry>(), ct);
 

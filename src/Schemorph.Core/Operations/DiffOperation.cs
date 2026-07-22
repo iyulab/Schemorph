@@ -67,7 +67,8 @@ public static class DiffOperation
 
         return new DiffResult(
             PlanBuilder.Build(compared with { Messages = messages }, allowDestructive,
-                redefinePlan.Pending.Select(p => p.ToPlanAction()).ToList()),
+                redefinePlan.Pending.Select(p => p.ToPlanAction()).ToList(),
+                provider.Capabilities.PlanAtomicity),
             Array.Empty<RawMessage>(),
             UpdateScript: compared.UpdateScript);
     }

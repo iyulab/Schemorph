@@ -30,6 +30,14 @@ resolves to:
 is deliberate: undoing a committed structural change is itself a destructive
 operation, and the tool does not perform destructive operations you did not ask for.
 
+**Which of these behaviours applies to the run in front of you is declared in the
+plan itself**: the `atomicity` field ([plan format 1.3](plan-format.md)). Everything
+on this page describes `atomicity: "partial"` — stages commit independently — and
+that is what SQL Server declares. A provider that owns the whole transaction boundary
+declares `transactional` instead: the apply lands whole or not at all, and "part-way,
+on purpose" cannot happen. Read the field, not the engine name
+([ADR-0004 addendum](adr/0004-failure-semantics-and-resume.md)).
+
 Stage 3's atomicity is per script, and the run-once record commits *in the same
 transaction as the script itself*, so a crash can never leave a migration applied but
 unrecorded — the case that would silently run it twice.

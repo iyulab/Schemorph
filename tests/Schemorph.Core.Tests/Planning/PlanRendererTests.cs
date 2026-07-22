@@ -18,7 +18,7 @@ public class PlanRendererTests
     {
         var json = PlanRenderer.ToJson(Sample);
 
-        Assert.Contains("\"formatVersion\": \"1.2\"", json);
+        Assert.Contains("\"formatVersion\": \"1.3\"", json);
         Assert.Contains("\"hasChanges\": true", json);
         Assert.Contains("\"hasDestructiveChanges\": true", json);
         Assert.Contains("\"changes\"", json);
@@ -93,13 +93,39 @@ public class PlanRendererTests
     }
 
     [Fact]
-    public void Json_planHash_matches_the_computed_fingerprint_and_version_is_1_1()
+    public void Json_planHash_matches_the_computed_fingerprint()
     {
         var json = PlanRenderer.ToJson(Sample);
 
         using var doc = System.Text.Json.JsonDocument.Parse(json);
-        Assert.Equal("1.2", doc.RootElement.GetProperty("formatVersion").GetString());
+        Assert.Equal("1.3", doc.RootElement.GetProperty("formatVersion").GetString());
         Assert.Equal(PlanFingerprint.Compute(Sample), doc.RootElement.GetProperty("planHash").GetString());
+    }
+
+    // ------------------------------------------------------------- atomicity
+    // Format 1.3 (ADR-0004 addendum): the plan declares what an apply of it
+    // guarantees, so the resume story is read from the document, not assumed
+    // from the tool.
+
+    [Fact]
+    public void Json_declares_the_apply_atomicity()
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(PlanRenderer.ToJson(Sample));
+        Assert.Equal("partial", doc.RootElement.GetProperty("atomicity").GetString());
+
+        using var transactional = System.Text.Json.JsonDocument.Parse(
+            PlanRenderer.ToJson(Sample with { Atomicity = Core.Providers.ApplyAtomicity.Transactional }));
+        Assert.Equal("transactional", transactional.RootElement.GetProperty("atomicity").GetString());
+    }
+
+    [Fact]
+    public void Fingerprint_ignores_atomicity()
+    {
+        // The hash covers exactly what executes; atomicity is the provider's
+        // static guarantee. A 1.2-era reviewed hash must still gate a 1.3 apply.
+        var transactional = Sample with { Atomicity = Core.Providers.ApplyAtomicity.Transactional };
+
+        Assert.Equal(PlanFingerprint.Compute(Sample), PlanFingerprint.Compute(transactional));
     }
 
     [Fact]

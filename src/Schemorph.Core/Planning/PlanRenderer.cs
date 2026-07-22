@@ -30,6 +30,7 @@ public static class PlanRenderer
     {
         plan.FormatVersion,
         PlanHash = PlanFingerprint.Compute(plan),   // pass to apply --expect-plan / MCP apply
+        plan.Atomicity,                             // the apply guarantee (ADR-0004 addendum); not part of the hash
         plan.HasChanges,
         plan.HasDestructiveChanges,
         Changes = plan.Actions.Select(a => new

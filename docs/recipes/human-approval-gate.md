@@ -54,7 +54,8 @@ directly makes the tool's own record of the change wrong.
 
 ## What the document contains
 
-- A header: `planHash`, generation time, the redacted target, the copy-paste
+- A header: `planHash`, generation time, the redacted target, the apply's
+  declared `atomicity` (what a partial failure leaves behind), the copy-paste
   `apply --expect-plan` command, and the read-only warning.
 - Any plan messages, including the safety-lint band (`SCHEMORPH1xx`) — a reviewer
   sees the same warnings an automated policy gate would.

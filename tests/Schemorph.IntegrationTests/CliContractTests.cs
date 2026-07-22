@@ -81,6 +81,23 @@ public sealed class CliContractTests : IDisposable
     }
 
     [Fact]
+    public void Manifest_carries_the_provider_declaration()
+    {
+        // Manifest 1.4: the provider block is the canonical capability layer
+        // (dev plan §2) — sourced from the provider's own declaration, so what
+        // the manifest claims and what the provider refuses cannot drift apart.
+        var provider = JsonDocument.Parse(Run("schema").StdOut).RootElement
+            .GetProperty("provider");
+
+        Assert.Equal("sqlserver", provider.GetProperty("name").GetString());
+        Assert.Equal("partial", provider.GetProperty("atomicity").GetString());
+        var capabilities = provider.GetProperty("capabilities").EnumerateArray()
+            .Select(c => c.GetString()).ToArray();
+        Assert.Contains("tables", capabilities);
+        Assert.Contains("migrations", capabilities);
+    }
+
+    [Fact]
     public void Redirected_stdout_defaults_to_the_json_error_envelope()
     {
         // No --format given; stdout is redirected (this process), so the

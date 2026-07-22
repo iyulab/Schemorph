@@ -14,7 +14,8 @@ public static class PlanBuilder
     public static Plan Build(
         CompareResult compareResult,
         bool allowDestructive,
-        IReadOnlyList<PlanAction>? redefineActions = null)
+        IReadOnlyList<PlanAction>? redefineActions = null,
+        ApplyAtomicity atomicity = ApplyAtomicity.Partial)
     {
         var actions = new List<PlanAction>();
         var messages = compareResult.Messages
@@ -57,7 +58,7 @@ public static class PlanBuilder
 
         messages.AddRange(PlanLinter.Lint(actions, scripts));
 
-        return new Plan(Plan.CurrentFormatVersion, actions, messages);
+        return new Plan(Plan.CurrentFormatVersion, actions, messages, atomicity);
     }
 
     /// <summary>

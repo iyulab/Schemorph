@@ -18,20 +18,22 @@ independent of the product version:
 - **Major** increments are breaking changes to existing properties. These are
   rare and deliberate.
 
-Current version: **`1.2`**.
+Current version: **`1.3`**.
 
 | Version | Change |
 |---|---|
 | `1.0` | Initial stable shape: `changes[]` with per-change `actions` lists |
 | `1.1` | Added `planHash` (additive) — the apply-gate fingerprint |
 | `1.2` | `explanation` populated on every change; `sql` populated on `redefine` changes (the exact idempotent script) and on declarative changes whose slice of the update script is attributable (additive — both fields were reserved as `null` since 1.0 and stay excluded from `planHash`) |
+| `1.3` | Added `atomicity` (additive) — the apply guarantee the provider declares ([ADR-0004 addendum](adr/0004-failure-semantics-and-resume.md)). Excluded from `planHash`, so a hash reviewed under 1.2 still gates a 1.3 apply |
 
 ## Shape
 
 ```json
 {
-  "formatVersion": "1.2",
+  "formatVersion": "1.3",
   "planHash": "bd270dd7f6ba…(64 hex)",
+  "atomicity": "partial",
   "hasChanges": true,
   "hasDestructiveChanges": false,
   "changes": [
@@ -64,6 +66,7 @@ Current version: **`1.2`**.
 |---|---|---|
 | `formatVersion` | string | Format version (see Versioning above) |
 | `planHash` | string | SHA-256 fingerprint of exactly what would execute (each change's name, type, actions, risk, in plan order; messages and descriptive fields excluded). Pass to `apply --expect-plan <hash>` (or MCP `schemorph_apply.expectedPlanHash`) to guarantee the apply runs the reviewed plan or refuses (`plan_mismatch`) |
+| `atomicity` | string | What an apply of this plan guarantees on partial failure: `partial` (stages commit independently; a failure leaves earlier stages applied — SQL Server's mode) or `transactional` (the apply lands whole or not at all; only claimed where the tool owns the transaction boundary). See [failure-semantics.md](failure-semantics.md). Excluded from `planHash` |
 | `hasChanges` | bool | `true` when `changes` is non-empty; pairs with exit code 2 on `diff` |
 | `hasDestructiveChanges` | bool | `true` when any change carries `risk: "destructive"` |
 | `changes` | array | One entry per planned change, in plan order (redefines last — they execute after the declarative publish) |

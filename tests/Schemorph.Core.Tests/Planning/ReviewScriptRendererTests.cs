@@ -74,6 +74,22 @@ public sealed class ReviewScriptRendererTests
     }
 
     [Fact]
+    public void The_header_states_what_the_apply_guarantees()
+    {
+        // The signer must know the failure mode without knowing the engine
+        // (ADR-0004 addendum): a partial apply and a transactional one leave
+        // different databases behind the same failed command.
+        var plan = PlanOf(Redefine("dbo.V", "CREATE OR ALTER VIEW dbo.V AS SELECT 1 AS X;"));
+
+        Assert.Contains("atomicity: partial",
+            ReviewScriptRenderer.Render(plan, updateScript: null, "conn", At));
+        Assert.Contains("atomicity: transactional",
+            ReviewScriptRenderer.Render(
+                plan with { Atomicity = Core.Providers.ApplyAtomicity.Transactional },
+                updateScript: null, "conn", At));
+    }
+
+    [Fact]
     public void The_target_is_redacted()
     {
         var plan = PlanOf(Redefine("dbo.V", "CREATE OR ALTER VIEW dbo.V AS SELECT 1 AS X;"));

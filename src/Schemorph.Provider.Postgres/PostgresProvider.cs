@@ -16,12 +16,22 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     /// <summary>
     /// What this provider can do today. Slice P0: reading a live database.
-    /// Every capability absent from this string must throw from
-    /// <see cref="Refuse"/> — ProviderBoundaryTests pins the symmetry.
+    /// Every capability absent from this list must throw from
+    /// <see cref="Refuse"/> — ProviderBoundaryTests pins the symmetry, and the
+    /// refusal hint quotes exactly these lines.
     /// </summary>
-    internal const string DeclaredCapabilities = "inspect";
+    internal static readonly string[] DeclaredCapabilities = { "inspect" };
 
     public string Name => ProviderName;
+
+    /// <summary>
+    /// Slice P0 declares only reading. Atomicity stays undeclared: this
+    /// provider has no apply, so it must not claim what an apply would
+    /// guarantee — P1 declares `transactional` together with the apply it
+    /// earns it with (tool-owned transaction, ADR-0007).
+    /// </summary>
+    public ProviderCapabilities Capabilities { get; } = new(
+        DeclaredCapabilities, Atomicity: null);
 
     public async Task<InspectResult> InspectAsync(InspectRequest request, CancellationToken cancellationToken = default)
     {
@@ -37,18 +47,39 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// several schemas in one pass would need a new field on the core request, which
     /// belongs to a later slice.
     ///
-    /// Known limitation (recorded, not fixed, in this slice): a <c>$user</c> entry in
-    /// the search path is returned literally, matching no real schema and yielding an
-    /// empty inspect; P1 adds unit tests pinning this alongside the empty and
-    /// quoted/multi-schema forms.
+    /// Resolution follows the engine's own rules for a search_path entry:
+    /// <c>$user</c> — quoted or not, because the server default is literally
+    /// <c>"$user", public</c> — means the connection's user name; unquoted names
+    /// fold to lower case; quoted names are taken verbatim (with <c>""</c>
+    /// unescaped); empty entries are skipped. Purely lexical on purpose: whether
+    /// the schema actually exists is the reader's business, not this function's.
     /// </summary>
     internal static string TargetSchemaOf(string connectionString)
     {
-        var searchPath = new NpgsqlConnectionStringBuilder(connectionString).SearchPath;
-        if (string.IsNullOrWhiteSpace(searchPath)) return "public";
+        var builder = new NpgsqlConnectionStringBuilder(connectionString);
+        if (string.IsNullOrWhiteSpace(builder.SearchPath)) return "public";
 
-        var first = searchPath.Split(',')[0].Trim().Trim('"');
-        return first.Length == 0 ? "public" : first;
+        foreach (var raw in builder.SearchPath.Split(','))
+        {
+            var entry = raw.Trim();
+            if (entry.Length == 0) continue;
+
+            var quoted = entry.Length >= 2 && entry.StartsWith('"') && entry.EndsWith('"');
+            var name = quoted
+                ? entry[1..^1].Replace("\"\"", "\"", StringComparison.Ordinal)
+                : entry.ToLowerInvariant();
+            if (name.Length == 0) continue;
+
+            if (name == "$user")
+            {
+                if (!string.IsNullOrWhiteSpace(builder.Username)) return builder.Username;
+                continue;   // nothing to resolve it to — the engine would skip a missing schema too
+            }
+
+            return name;
+        }
+
+        return "public";
     }
 
     public Task<IDesiredState> LoadDesiredStateAsync(string desiredStateDirectory, CancellationToken cancellationToken = default)
@@ -82,5 +113,5 @@ public sealed class PostgresProvider : IDatabaseProvider
         => throw Refuse("migration lint");
 
     private static UnsupportedByProviderException Refuse(string capability)
-        => new(ProviderName, capability, DeclaredCapabilities);
+        => new(ProviderName, capability, string.Join(", ", DeclaredCapabilities));
 }

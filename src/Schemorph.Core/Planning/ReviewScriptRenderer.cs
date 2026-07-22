@@ -53,6 +53,7 @@ public static class ReviewScriptRenderer
         sb.AppendLine($" * planHash:  {hash}");
         sb.AppendLine($" * generated: {generatedAt.ToUniversalTime():yyyy-MM-dd HH:mm:ss} UTC");
         sb.AppendLine($" * target:    {Redaction.Redact(target)}");
+        sb.AppendLine($" * atomicity: {AtomicityLine(plan)}");
         sb.AppendLine(" *");
         sb.AppendLine($" * {Summary(declarative.Count, redefines.Count)}");
         sb.AppendLine(" *");
@@ -116,6 +117,15 @@ public static class ReviewScriptRenderer
 
         return sb.ToString();
     }
+
+    // The signer should know what the apply guarantees on failure without
+    // knowing which engine runs it (ADR-0004 addendum, plan format 1.3).
+    private static string AtomicityLine(Plan plan) => plan.Atomicity switch
+    {
+        Core.Providers.ApplyAtomicity.Transactional =>
+            "transactional (the apply lands whole or not at all — docs/failure-semantics.md)",
+        _ => "partial (stages commit independently on failure — docs/failure-semantics.md)",
+    };
 
     private static string Summary(int declarative, int redefines) => (declarative, redefines) switch
     {

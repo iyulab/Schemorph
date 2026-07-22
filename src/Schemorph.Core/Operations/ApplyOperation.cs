@@ -96,7 +96,8 @@ public static class ApplyOperation
                         basePlan, programmables, computed.TablesWithColumnChanges);
                     plan = PlanBuilder.Build(
                         computed, request.AllowDestructive,
-                        redefinePlan.Pending.Select(p => p.ToPlanAction()).ToList());
+                        redefinePlan.Pending.Select(p => p.ToPlanAction()).ToList(),
+                        provider.Capabilities.PlanAtomicity);
                     if (request.ExpectedPlanHash is { } expected)
                     {
                         var actual = PlanFingerprint.Compute(plan);

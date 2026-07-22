@@ -14,6 +14,15 @@ public interface IDatabaseProvider
     string Name { get; }
 
     /// <summary>
+    /// The declared surface: capability lines plus the apply-atomicity
+    /// guarantee (ADR-0004 addendum). The canonical source for the CLI
+    /// manifest's provider block and the plan envelope's <c>atomicity</c>
+    /// field; anything absent from it must refuse with
+    /// <see cref="UnsupportedByProviderException"/>.
+    /// </summary>
+    ProviderCapabilities Capabilities { get; }
+
+    /// <summary>
     /// Read a live database into rendered desired-state files (relative path +
     /// content, conventional kind layout). Rendering only — the caller chooses
     /// the sink (disk via InspectOperation, MCP resource, ...).

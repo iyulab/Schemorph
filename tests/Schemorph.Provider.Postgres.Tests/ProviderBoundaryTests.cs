@@ -42,14 +42,28 @@ public class ProviderBoundaryTests
     }
 
     [Fact]
-    public void The_declared_surface_is_what_the_refusals_point_at()
+    public async Task The_declared_surface_is_what_the_refusals_point_at()
     {
         // The declaration and the refusals pin each other: adding a capability
         // without moving it out of the refusal list breaks this.
-        var hint = new UnsupportedByProviderException("postgres", "apply", PostgresProvider.DeclaredCapabilities)
-            .ToError().Hint;
+        var ex = await Assert.ThrowsAsync<UnsupportedByProviderException>(
+            () => Provider.ApplyAsync(new ApplyRequest(new StubDesiredState(), "any"), _ => true));
 
-        Assert.Contains("inspect", hint);
+        foreach (var declared in Provider.Capabilities.Declared)
+        {
+            Assert.Contains(declared, ex.ToError().Hint);
+        }
+    }
+
+    [Fact]
+    public void P0_declares_reading_and_no_apply_guarantee()
+    {
+        // Slice P0: `inspect` only, and atomicity stays undeclared — a provider
+        // with no apply must not claim what an apply would guarantee. P1 turns
+        // this test around when it earns `transactional` (ADR-0007).
+        Assert.Equal(new[] { "inspect" }, Provider.Capabilities.Declared);
+        Assert.Null(Provider.Capabilities.Atomicity);
+        Assert.Throws<InvalidOperationException>(() => Provider.Capabilities.PlanAtomicity);
     }
 
     private sealed class StubDesiredState : IDesiredState

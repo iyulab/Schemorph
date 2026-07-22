@@ -14,9 +14,10 @@ namespace Schemorph.Cli;
 internal static class CliManifest
 {
     // 1.1: docs.failureSemantics · 1.2: the apply-only stage/committed envelope
-    // fields · 1.3: diff --format sql (the review document). All additive;
-    // consumers ignore properties they do not know.
-    public const string ManifestVersion = "1.3";
+    // fields · 1.3: diff --format sql (the review document) · 1.4: the provider
+    // block (capability lines + apply atomicity, sourced from the provider's own
+    // declaration). All additive; consumers ignore properties they do not know.
+    public const string ManifestVersion = "1.4";
 
     public static string ToJson(string toolVersion) => JsonSerializer.Serialize(new
     {
@@ -25,6 +26,7 @@ internal static class CliManifest
         version = toolVersion,
         description = "Declarative, SQL-first schema management for humans and AI agents.",
         planFormatVersion = Plan.CurrentFormatVersion,
+        provider = ProviderBlock(),
         environment = new[]
         {
             new
@@ -135,4 +137,20 @@ internal static class CliManifest
             repository = "https://github.com/iyulab/Schemorph",
         },
     }, new JsonSerializerOptions { WriteIndented = true });
+
+    /// <summary>
+    /// The provider's declared surface, sourced from the declaration itself
+    /// (the canonical layer — dev plan §2) so the manifest cannot drift from
+    /// what the provider actually claims and refuses.
+    /// </summary>
+    private static object ProviderBlock()
+    {
+        var provider = ProviderSelection.Current.Provider;
+        return new
+        {
+            name = provider.Name,
+            capabilities = provider.Capabilities.Declared,
+            atomicity = provider.Capabilities.Atomicity?.ToString().ToLowerInvariant(),
+        };
+    }
 }
