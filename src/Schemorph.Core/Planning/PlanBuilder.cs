@@ -58,7 +58,9 @@ public static class PlanBuilder
 
         messages.AddRange(PlanLinter.Lint(actions, scripts));
 
-        return new Plan(Plan.CurrentFormatVersion, actions, messages, atomicity);
+        // The executed declarative script rides the plan so its fingerprint binds
+        // exactly what runs, not just the object-level action shape (PlanFingerprint).
+        return new Plan(Plan.CurrentFormatVersion, actions, messages, atomicity, compareResult.UpdateScript);
     }
 
     /// <summary>

@@ -18,20 +18,21 @@ independent of the product version:
 - **Major** increments are breaking changes to existing properties. These are
   rare and deliberate.
 
-Current version: **`1.3`**.
+Current version: **`1.4`**.
 
 | Version | Change |
 |---|---|
 | `1.0` | Initial stable shape: `changes[]` with per-change `actions` lists |
 | `1.1` | Added `planHash` (additive) — the apply-gate fingerprint |
-| `1.2` | `explanation` populated on every change; `sql` populated on `redefine` changes (the exact idempotent script) and on declarative changes whose slice of the update script is attributable (additive — both fields were reserved as `null` since 1.0 and stay excluded from `planHash`) |
+| `1.2` | `explanation` populated on every change; `sql` populated on `redefine` changes (the exact idempotent script) and on declarative changes whose slice of the update script is attributable (additive — both fields were reserved as `null` since 1.0) |
 | `1.3` | Added `atomicity` (additive) — the apply guarantee the provider declares ([ADR-0004 addendum](adr/0004-failure-semantics-and-resume.md)). Excluded from `planHash`, so a hash reviewed under 1.2 still gates a 1.3 apply |
+| `1.4` | `planHash` now binds the **executed script text** — the declarative update script the apply runs and each `redefine` change's `sql` — in addition to the action shape. Bugfix: the action tuples are an object-level summary, so two plans that touch the same objects with the same operations but different DDL (a column added vs. only a constraint re-added) used to share a hash; the gate now tells them apart. No JSON field changed — the plan document is byte-identical to 1.3 — but the same plan hashes to a new value, so a hash captured under ≤1.3 no longer matches (it fails closed: the apply refuses rather than running unreviewed DDL). The update-script text itself is not embedded in the JSON; reviewers read it via the review script / `diff --format sql` |
 
 ## Shape
 
 ```json
 {
-  "formatVersion": "1.3",
+  "formatVersion": "1.4",
   "planHash": "bd270dd7f6ba…(64 hex)",
   "atomicity": "partial",
   "hasChanges": true,
@@ -65,7 +66,7 @@ Current version: **`1.3`**.
 | Field | Type | Meaning |
 |---|---|---|
 | `formatVersion` | string | Format version (see Versioning above) |
-| `planHash` | string | SHA-256 fingerprint of exactly what would execute (each change's name, type, actions, risk, in plan order; messages and descriptive fields excluded). Pass to `apply --expect-plan <hash>` (or MCP `schemorph_apply.expectedPlanHash`) to guarantee the apply runs the reviewed plan or refuses (`plan_mismatch`) |
+| `planHash` | string | SHA-256 fingerprint of exactly what would execute: each change's name, type, actions and risk in plan order, **plus the executed script** — the declarative update script and each `redefine` change's `sql` (since 1.4). Messages, `explanation` and `atomicity` are excluded (they describe a plan, they are not what it runs). Pass to `apply --expect-plan <hash>` (or MCP `schemorph_apply.expectedPlanHash`) to guarantee the apply runs the reviewed plan or refuses (`plan_mismatch`) |
 | `atomicity` | string | What an apply of this plan guarantees on partial failure: `partial` (stages commit independently; a failure leaves earlier stages applied — SQL Server's mode) or `transactional` (the apply lands whole or not at all; only claimed where the tool owns the transaction boundary). See [failure-semantics.md](failure-semantics.md). Excluded from `planHash` |
 | `hasChanges` | bool | `true` when `changes` is non-empty; pairs with exit code 2 on `diff` |
 | `hasDestructiveChanges` | bool | `true` when any change carries `risk: "destructive"` |

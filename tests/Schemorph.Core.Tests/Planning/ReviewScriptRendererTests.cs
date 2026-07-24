@@ -6,7 +6,9 @@ namespace Schemorph.Core.Tests.Planning;
 /// The review document a person signs. Its whole value is that the text reviewed
 /// and the text executed are the same artifact, tied to the fingerprint the apply
 /// gate enforces — so these tests pin verbatim inclusion, execution order, the
-/// header's contents, and the refusal to emit a partial document.
+/// header's contents, and the refusal to emit a partial document. The executed
+/// text now rides the plan itself (<see cref="Plan.UpdateScript"/>), the same
+/// field the fingerprint binds.
 /// </summary>
 public sealed class ReviewScriptRendererTests
 {
@@ -21,12 +23,17 @@ public sealed class ReviewScriptRendererTests
     private static Plan PlanOf(params PlanAction[] actions) =>
         new(Plan.CurrentFormatVersion, actions, Array.Empty<PlanMessage>());
 
+    private static Plan PlanOf(string? updateScript, params PlanAction[] actions) =>
+        new(Plan.CurrentFormatVersion, actions, Array.Empty<PlanMessage>(),
+            Core.Providers.ApplyAtomicity.Partial, updateScript);
+
     [Fact]
     public void The_declarative_script_is_the_engines_own_text_not_a_reassembly()
     {
-        var plan = PlanOf(Declarative("dbo.Orders"), Declarative("dbo.Items"));
+        var plan = PlanOf("ALTER TABLE dbo.Orders ADD Note NVARCHAR(50);",
+            Declarative("dbo.Orders"), Declarative("dbo.Items"));
 
-        var doc = ReviewScriptRenderer.Render(plan, "ALTER TABLE dbo.Orders ADD Note NVARCHAR(50);", "conn", At);
+        var doc = ReviewScriptRenderer.Render(plan, "conn", At);
 
         Assert.Contains("ALTER TABLE dbo.Orders ADD Note NVARCHAR(50);", doc);
         // The per-change slices exist for explanation only. Reviewing a reassembly
@@ -37,12 +44,12 @@ public sealed class ReviewScriptRendererTests
     [Fact]
     public void Stages_appear_in_execution_order_with_redefines_verbatim()
     {
-        var plan = PlanOf(
+        var plan = PlanOf("ALTER TABLE dbo.Orders ADD Note INT;",
             Declarative("dbo.Orders"),
             Redefine("dbo.VOrders", "CREATE OR ALTER VIEW dbo.VOrders AS SELECT 1 AS X;"),
             Redefine("dbo.VItems", "CREATE OR ALTER VIEW dbo.VItems AS SELECT 2 AS Y;"));
 
-        var doc = ReviewScriptRenderer.Render(plan, "ALTER TABLE dbo.Orders ADD Note INT;", "conn", At);
+        var doc = ReviewScriptRenderer.Render(plan, "conn", At);
 
         Assert.Contains("CREATE OR ALTER VIEW dbo.VOrders AS SELECT 1 AS X;", doc);
         Assert.Contains("CREATE OR ALTER VIEW dbo.VItems AS SELECT 2 AS Y;", doc);
@@ -62,7 +69,7 @@ public sealed class ReviewScriptRendererTests
     {
         var plan = PlanOf(Redefine("dbo.V", "CREATE OR ALTER VIEW dbo.V AS SELECT 1 AS X;"));
 
-        var doc = ReviewScriptRenderer.Render(plan, updateScript: null, "conn", At);
+        var doc = ReviewScriptRenderer.Render(plan, "conn", At);
         var hash = PlanFingerprint.Compute(plan);
 
         // The paper a human signed and the fingerprint a machine enforces are one
@@ -82,11 +89,10 @@ public sealed class ReviewScriptRendererTests
         var plan = PlanOf(Redefine("dbo.V", "CREATE OR ALTER VIEW dbo.V AS SELECT 1 AS X;"));
 
         Assert.Contains("atomicity: partial",
-            ReviewScriptRenderer.Render(plan, updateScript: null, "conn", At));
+            ReviewScriptRenderer.Render(plan, "conn", At));
         Assert.Contains("atomicity: transactional",
             ReviewScriptRenderer.Render(
-                plan with { Atomicity = Core.Providers.ApplyAtomicity.Transactional },
-                updateScript: null, "conn", At));
+                plan with { Atomicity = Core.Providers.ApplyAtomicity.Transactional }, "conn", At));
     }
 
     [Fact]
@@ -95,7 +101,7 @@ public sealed class ReviewScriptRendererTests
         var plan = PlanOf(Redefine("dbo.V", "CREATE OR ALTER VIEW dbo.V AS SELECT 1 AS X;"));
 
         var doc = ReviewScriptRenderer.Render(
-            plan, null, "Server=db;Database=Prod;User Id=svc;Password=hunter2", At);
+            plan, "Server=db;Database=Prod;User Id=svc;Password=hunter2", At);
 
         Assert.DoesNotContain("hunter2", doc);
         Assert.Contains("Database=Prod", doc);   // still identifies what was reviewed
@@ -104,9 +110,9 @@ public sealed class ReviewScriptRendererTests
     [Fact]
     public void Destructive_changes_are_marked_where_a_reviewer_reads()
     {
-        var plan = PlanOf(Declarative("dbo.Legacy", RiskLevel.Destructive));
+        var plan = PlanOf("DROP TABLE dbo.Legacy;", Declarative("dbo.Legacy", RiskLevel.Destructive));
 
-        var doc = ReviewScriptRenderer.Render(plan, "DROP TABLE dbo.Legacy;", "conn", At);
+        var doc = ReviewScriptRenderer.Render(plan, "conn", At);
 
         Assert.Contains("DESTRUCTIVE", doc);
     }
@@ -122,7 +128,7 @@ public sealed class ReviewScriptRendererTests
             Redefine("dbo.V", "CREATE OR ALTER VIEW dbo.V AS SELECT 1 AS X;"));
 
         var ex = Assert.Throws<ReviewScriptRenderer.ScriptUnavailableException>(
-            () => ReviewScriptRenderer.Render(plan, updateScript: null, "conn", At));
+            () => ReviewScriptRenderer.Render(plan, "conn", At));
 
         Assert.Contains("SCHEMORPH002", ex.Message);
     }
@@ -133,7 +139,7 @@ public sealed class ReviewScriptRendererTests
         // The absence is only dishonest when there is something it should have covered.
         var plan = PlanOf(Redefine("dbo.V", "CREATE OR ALTER VIEW dbo.V AS SELECT 1 AS X;"));
 
-        var doc = ReviewScriptRenderer.Render(plan, updateScript: null, "conn", At);
+        var doc = ReviewScriptRenderer.Render(plan, "conn", At);
 
         Assert.Contains("Stage 1 of 2", doc);   // re-definitions are the only stage present
         Assert.Contains("CREATE OR ALTER VIEW dbo.V", doc);
@@ -142,7 +148,7 @@ public sealed class ReviewScriptRendererTests
     [Fact]
     public void An_empty_plan_says_so_instead_of_rendering_an_empty_file()
     {
-        var doc = ReviewScriptRenderer.Render(PlanOf(), updateScript: null, "conn", At);
+        var doc = ReviewScriptRenderer.Render(PlanOf(), "conn", At);
 
         Assert.Contains("No changes.", doc);
     }

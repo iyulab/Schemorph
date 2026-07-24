@@ -19,9 +19,10 @@ public static class PlanRenderer
     };
 
     /// <summary>
-    /// The single serializable shape of a plan (format 1.0, docs/plan-format.md) —
-    /// every surface that embeds a plan (diff output, apply envelope) serializes
-    /// THIS model, so the contract cannot drift between commands. Each change
+    /// The single serializable shape of a plan (docs/plan-format.md; the version is
+    /// <see cref="Plan.CurrentFormatVersion"/>) — every surface that embeds a plan
+    /// (diff output, apply envelope) serializes THIS model, so the contract cannot
+    /// drift between commands. Each change
     /// carries an <c>actions</c> *list* (Terraform's convention): today every list
     /// has one verb, but composite operations (e.g. a rebuild = drop + create)
     /// become expressible without a breaking change.

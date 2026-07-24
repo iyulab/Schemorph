@@ -44,11 +44,24 @@ public sealed record PlanMessage(string Severity, string Code, string Text);
 /// Excluded from <see cref="PlanFingerprint"/>: it is a static property of the
 /// provider, not part of which changes execute.
 /// </param>
+/// <param name="UpdateScript">
+/// The declarative publish's executed text — exactly the SQL the reviewer reads
+/// in the review script and the apply runs (the provider's whole update script).
+/// Carried on the plan so <see cref="PlanFingerprint"/> can bind *what executes*,
+/// not just the per-object action tuples: two plans that touch the same objects
+/// with the same operations but different DDL are different plans, and the gate
+/// must tell them apart. Null when there is nothing declarative to publish
+/// (a programmable-only plan carries its scripts on the redefine actions
+/// instead). NOT part of the serialized JSON model — the full text reaches
+/// reviewers through the review script / <c>diff --format sql</c>; here it is a
+/// fingerprint input only.
+/// </param>
 public sealed record Plan(
     string FormatVersion,
     IReadOnlyList<PlanAction> Actions,
     IReadOnlyList<PlanMessage> Messages,
-    ApplyAtomicity Atomicity = ApplyAtomicity.Partial)
+    ApplyAtomicity Atomicity = ApplyAtomicity.Partial,
+    string? UpdateScript = null)
 {
     /// <summary>
     /// Version of the machine-readable plan format (docs/plan-format.md), following
@@ -56,7 +69,7 @@ public sealed record Plan(
     /// additions (consumers must ignore unknown properties); the major version
     /// increments for breaking changes. Independent of the product version.
     /// </summary>
-    public const string CurrentFormatVersion = "1.3";   // 1.3: atomicity declared (additive; excluded from planHash)
+    public const string CurrentFormatVersion = "1.4";   // 1.4: planHash binds the executed script text (bugfix — see PlanFingerprint)
 
     public bool HasChanges => Actions.Count > 0;
 

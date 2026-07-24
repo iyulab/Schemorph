@@ -465,7 +465,7 @@ async Task<int> RunDiff(string[] args, string format)
         {
             try
             {
-                Console.WriteLine(ReviewScriptRenderer.Render(plan, result.UpdateScript, url, DateTimeOffset.UtcNow));
+                Console.WriteLine(ReviewScriptRenderer.Render(plan, url, DateTimeOffset.UtcNow));
             }
             catch (ReviewScriptRenderer.ScriptUnavailableException ex)
             {

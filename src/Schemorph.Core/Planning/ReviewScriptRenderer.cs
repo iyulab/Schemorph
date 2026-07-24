@@ -30,8 +30,12 @@ public static class ReviewScriptRenderer
 
     /// <param name="target">Connection string; redacted before it is written.</param>
     /// <param name="generatedAt">Injected so the output is reproducible under test.</param>
-    public static string Render(Plan plan, string? updateScript, string target, DateTimeOffset generatedAt)
+    public static string Render(Plan plan, string target, DateTimeOffset generatedAt)
     {
+        // The executed declarative text is read from the plan — the same field the
+        // fingerprint binds — so the reviewed text, the hashed text and the applied
+        // text are one artifact by construction, not by the caller passing a match.
+        var updateScript = plan.UpdateScript;
         var declarative = plan.Actions.Where(a => a.Operation != PlanOperation.Redefine).ToList();
         var redefines = plan.Actions.Where(a => a.Operation == PlanOperation.Redefine).ToList();
 
