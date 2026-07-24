@@ -23,6 +23,16 @@ change **additively**: consumers must ignore properties they do not know.
   earlier format no longer matches and the apply refuses rather than running unreviewed
   DDL — it fails closed. The script text itself is not embedded in the plan JSON;
   reviewers read it through the review script / `diff --format sql`.
+- **The apply now populates the executed script for both providers, and the two
+  operations generate it the same way.** The SQL Server provider previously handed the
+  apply gate no script (only the object-level shape); it now generates the script and
+  its per-change attribution the same way `diff` does, so the gate compares like for like.
+- **The migration ledger table is created after the comparison, not before it** (SQL
+  Server). With `planHash` binding the script, a ledger table present in the target but
+  absent from the desired state made the generated script carry a spurious `DROP`,
+  diverging from the pristine target `diff` compared and tripping the gate on an
+  unchanged plan. Initializing it after the comparison keeps apply's target identical to
+  diff's; ledger recording is unaffected (the table exists before any row is written).
 
 ## 0.5.1 — 2026-07-23
 

@@ -87,6 +87,17 @@ future `status` — can then distinguish "never attempted" from "attempted and f
 Failure rows never affect resume logic (readers already filter on `Succeeded = 1`), and
 a failure while writing the failure row must never mask the original error.
 
+The ledger **table** is created after the comparison the apply gate runs on, not before
+it. An earlier design initialized it first ("the ledger exists before anything runs"),
+but once `planHash` binds the executed script (plan format 1.4), a ledger table present
+in the target but not the desired state makes the generated script carry a spurious
+`DROP` (`DropObjectsNotInSource`) — which differs from the pristine target diff compared,
+so the gate rejects a plan that never changed. Creating the table after the comparison
+keeps apply's target identical to diff's. The recording guarantee is unchanged: the
+table is initialized before any row is written (success or failure), so no `Succeeded`
+row is ever lost that was not already lost to the "process died before recording" window
+above.
+
 ### 5. Pipeline is fail-fast; no cross-stage rollback
 
 The pipeline stops at the first failed stage; earlier stages stay applied and recorded;

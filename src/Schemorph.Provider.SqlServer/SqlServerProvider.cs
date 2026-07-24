@@ -142,26 +142,38 @@ public sealed class SqlServerProvider : IDatabaseProvider
         }
 
         var changes = result.Differences.Select(ToRawChange).ToList();
+        var (script, changeScripts) = GenerateUpdateScript(result, request.ConnectionString, changes, messages);
 
-        string? script = null;
-        if (changes.Count > 0)
+        return new CompareResult(changes, messages, script, changeScripts,
+            TablesWithColumnChanges(result.Differences));
+    }
+
+    /// <summary>
+    /// Generates the deploy script and its per-change attribution for a comparison.
+    /// Shared by <see cref="Compare"/> and <see cref="Apply"/> so the CompareResult
+    /// the apply gate hashes is byte-identical to the one diff advertised — same
+    /// comparison, same generation, hence the same <c>planHash</c>. <paramref name="messages"/>
+    /// receives the SCHEMORPH002 warning on failure when the caller collects it
+    /// (diff); apply passes null (a failed generation there surfaces at deploy).
+    /// </summary>
+    private static (string? Script, IReadOnlyList<ChangeScript>? ChangeScripts) GenerateUpdateScript(
+        SchemaComparisonResult result, string connectionString, IReadOnlyList<RawChange> changes, List<RawMessage>? messages)
+    {
+        if (changes.Count == 0)
         {
-            var databaseName = new SqlConnectionStringBuilder(request.ConnectionString).InitialCatalog;
-            var scriptResult = result.GenerateScript(databaseName);
-            if (scriptResult.Success)
-            {
-                script = scriptResult.Script;
-            }
-            else
-            {
-                messages.Add(new RawMessage("Warning", "SCHEMORPH002",
-                    $"Update script generation failed: {scriptResult.Message}"));
-            }
+            return (null, null);
         }
 
-        return new CompareResult(changes, messages, script,
-            script is null ? null : UpdateScriptAttributor.Attribute(script, changes),
-            TablesWithColumnChanges(result.Differences));
+        var databaseName = new SqlConnectionStringBuilder(connectionString).InitialCatalog;
+        var scriptResult = result.GenerateScript(databaseName);
+        if (scriptResult.Success)
+        {
+            return (scriptResult.Script, UpdateScriptAttributor.Attribute(scriptResult.Script, changes));
+        }
+
+        messages?.Add(new RawMessage("Warning", "SCHEMORPH002",
+            $"Update script generation failed: {scriptResult.Message}"));
+        return (null, null);
     }
 
     // ------------------------------------------------------------------ apply
@@ -182,13 +194,20 @@ public sealed class SqlServerProvider : IDatabaseProvider
             return new ApplyResult(false, Array.Empty<RawChange>(), Array.Empty<RawChange>(), messages);
         }
 
+        // Generate the script and its attribution over the whole comparison —
+        // matching diff, which does the same — so the plan the gate recomputes here
+        // equals the one diff advertised. The ledger is not a factor: it is created
+        // only after this comparison returns (ApplyOperation), so the target compared
+        // here is the pristine schema diff saw.
+        var all = result.Differences.Select(ToRawChange).ToList();
+        var (script, changeScripts) = GenerateUpdateScript(result, request.ConnectionString, all, messages: null);
+        var tablesWithColumnChanges = TablesWithColumnChanges(result.Differences);
+
         var applied = new List<RawChange>();
         var excluded = new List<RawChange>();
-        var all = new List<RawChange>();
         foreach (var difference in result.Differences)
         {
             var change = ToRawChange(difference);
-            all.Add(change);
             if (includeChange(change))
             {
                 applied.Add(change);
@@ -200,8 +219,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
             }
         }
 
-        onChangesComputed?.Invoke(new CompareResult(all, Array.Empty<RawMessage>(), UpdateScript: null,
-            ChangeScripts: null, TablesWithColumnChanges(result.Differences)));
+        onChangesComputed?.Invoke(new CompareResult(all, Array.Empty<RawMessage>(), script,
+            changeScripts, tablesWithColumnChanges));
 
         if (applied.Count == 0)
         {

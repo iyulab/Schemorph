@@ -68,11 +68,9 @@ public static class ApplyOperation
             return Failure(FailureStage.DesiredState, programmables.Messages);
         }
 
-        // The ledger exists before anything runs, so failures are recordable too
-        // (ADR-0004). The table is self-excluded from comparison, so creating it
-        // here never perturbs the plan.
-        await ledger.EnsureInitializedAsync(request.ConnectionString, cancellationToken);
-
+        // The ledger is initialized AFTER the comparison, not before — see the note
+        // below. A missing ledger reads as "no history" (like diff), so the redefine
+        // plan is computed the same way in both operations.
         var redefineRunner = new RedefineRunner(provider, ledger);
         // The base plan is what the files alone imply; the comparison can add to
         // it (a column change invalidates what depends on that column), so the
@@ -115,6 +113,16 @@ public static class ApplyOperation
             return Failure(FailureStage.PlanMismatch,
                 new[] { new RawMessage("Error", "plan_mismatch", ex.Message) }) with { Plan = plan };
         }
+
+        // The ledger is created here — after the gate has recomputed and matched the
+        // plan, before anything is recorded. It must NOT exist during the comparison:
+        // a target the tool just wrote a ledger table into is no longer the pristine
+        // schema diff compared, and the generated update script would carry a spurious
+        // ledger DROP (DropObjectsNotInSource) that trips the fingerprint gate on a
+        // plan that never changed. Recording still precedes any user-visible success
+        // (ADR-0004): a publish failure below is appended to a ledger that exists by
+        // the time we reach it.
+        await ledger.EnsureInitializedAsync(request.ConnectionString, cancellationToken);
 
         // Classification skip warnings surface once per operation, ahead of the
         // provider's own messages (they used to ride the comparison session).
