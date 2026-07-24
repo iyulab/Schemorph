@@ -5,6 +5,37 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## 0.5.2 — 2026-07-24
+
+### Fixed
+
+- **The apply gate now binds what executes, not just an object-level summary of it.**
+  `planHash` hashed each change's name, type, operation and risk — but a change is
+  planned per object, so two plans that alter the same objects with the same operation
+  and risk but **different DDL** (a column added vs. only a constraint re-added) shared a
+  hash. A reviewer could sign one plan's hash and `apply --expect-plan` would pass a
+  materially different apply. The fingerprint now also covers the executed script — the
+  declarative update script and each re-definition's SQL. The exposure was widest on the
+  Postgres provider (its per-change `sql` is null), but the collision was
+  provider-agnostic; both are fixed.
+- **Plan format 1.4** — `planHash` now includes the executed script text (additive: no
+  JSON field changed, but the same plan hashes to a new value). A hash captured under an
+  earlier format no longer matches and the apply refuses rather than running unreviewed
+  DDL — it fails closed. The script text itself is not embedded in the plan JSON;
+  reviewers read it through the review script / `diff --format sql`.
+
+## 0.5.1 — 2026-07-23
+
+### Fixed
+
+- **Postgres `CHECK (col IN (...))` on a `varchar` column no longer drifts forever.**
+  The catalog re-renders such a constraint into a cast chain that reaches its fixed point
+  only in the second generation; the shadow pipeline read the desired side one generation
+  short, so every `diff` after an `apply` re-proposed the same constraint and `status`
+  never came clean. The shadow now normalizes CHECK constraints to the engine's fixed
+  point, so declarative loops with enum-style CHECKs converge. (`text` columns were never
+  affected — the cast chain is varchar-only.)
+
 ## 0.5.0 — 2026-07-22
 
 ### Added
