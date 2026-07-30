@@ -34,9 +34,11 @@ internal static class DdlSynthesizer
         string targetSchema, IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live)
     {
         var constraintDrops = new List<Statement>();
+        var indexDrops = new List<Statement>();
         var tableCreates = new List<Statement>();
         var columnChanges = new List<Statement>();
         var constraintAdds = new List<Statement>();
+        var indexCreates = new List<Statement>();
         var foreignKeyAdds = new List<Statement>();
         var tableDrops = new List<Statement>();
 
@@ -54,11 +56,16 @@ internal static class DdlSynthesizer
                 {
                     AddConstraint(want.Name, qualified, constraint, constraintAdds, foreignKeyAdds);
                 }
+                foreach (var index in want.Indexes)
+                {
+                    indexCreates.Add(CreateIndex(want.Name, index));
+                }
                 continue;
             }
 
             SynthesizeColumns(qualified, want, have, columnChanges);
             SynthesizeConstraints(qualified, want, have, constraintDrops, constraintAdds, foreignKeyAdds);
+            SynthesizeIndexes(targetSchema, want, have, indexDrops, indexCreates);
         }
 
         foreach (var have in live)
@@ -73,9 +80,11 @@ internal static class DdlSynthesizer
         return
         [
             .. constraintDrops,
+            .. indexDrops,
             .. tableCreates,
             .. columnChanges,
             .. constraintAdds,
+            .. indexCreates,
             .. foreignKeyAdds,
             .. tableDrops,
         ];
@@ -197,6 +206,51 @@ internal static class DdlSynthesizer
             }
         }
     }
+
+    /// <summary>
+    /// Indexes have no ALTER that changes what they index, so a definition
+    /// difference is a drop and a create — and a rename is one too, because the
+    /// name is part of what the desired state declares and nothing carries the
+    /// old index's identity to the new one.
+    ///
+    /// Nothing is emitted for a table the desired state no longer declares: its
+    /// indexes go with the DROP TABLE, and naming them again would drop what is
+    /// already gone.
+    /// </summary>
+    private static void SynthesizeIndexes(
+        string targetSchema, PgTable want, PgTable have,
+        List<Statement> drops, List<Statement> creates)
+    {
+        var haveByName = have.Indexes.ToDictionary(i => i.Name, StringComparer.Ordinal);
+        var wantByName = want.Indexes.ToDictionary(i => i.Name, StringComparer.Ordinal);
+
+        foreach (var index in have.Indexes)
+        {
+            var replaced = wantByName.TryGetValue(index.Name, out var target)
+                && target.Definition != index.Definition;
+            if (replaced || !wantByName.ContainsKey(index.Name))
+            {
+                drops.Add(new Statement(want.Name,
+                    $"DROP INDEX {Qualified(targetSchema, index.Name)};"));
+            }
+        }
+
+        foreach (var index in want.Indexes)
+        {
+            var unchanged = haveByName.TryGetValue(index.Name, out var existing)
+                && existing.Definition == index.Definition;
+            if (!unchanged)
+            {
+                creates.Add(CreateIndex(want.Name, index));
+            }
+        }
+    }
+
+    // The definition is the engine's own CREATE INDEX with the schema removed
+    // from its ON clause, so it lands in the target schema by the search_path
+    // the executor sets — the same contract the constraint definitions run under.
+    private static Statement CreateIndex(string objectName, PgIndex index)
+        => new(objectName, $"{index.Definition.TrimEnd(';', ' ', '\r', '\n')};");
 
     private static void AddConstraint(
         string objectName, string qualified, PgConstraint constraint,

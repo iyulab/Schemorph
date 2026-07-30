@@ -145,3 +145,24 @@ output, redefine scripts). The comparison layer still contains no parser.
 Risk posture: exact version pin with corpus-gated upgrades — the DacFx policy, reused.
 If the binding goes unmaintained, the replacement surface is three functions over a
 pinned libpg_query (vendored P/Invoke), recorded in the spike README as the fallback.
+
+## Addendum (2026-07-30): non-transactional index builds refuse rather than mark
+
+The atomicity table above says non-transactional exceptions — `CREATE INDEX CONCURRENTLY`
+and kin — are "marked in the plan rather than silently degrading the claim". The index
+slice implements the first half of that sentence and not the second, and the reason is
+that the second half has no place to live yet.
+
+`atomicity` on a plan is copied from the provider's declaration; nothing computes it per
+plan, and nothing splits an apply into a transactional part and a part that runs outside
+the transaction. Emitting a *mark* on a plan whose `atomicity` still reads
+`transactional` would be the degraded claim this ADR set out to prevent, only with a
+note attached — and a reviewer who reads the field rather than the note gets exactly the
+wrong answer about what a failure leaves behind.
+
+So a desired state containing `CONCURRENTLY` is **refused**, typed
+(`not_implemented`), naming the trade it will not make silently: the keyword avoids a
+lock, the apply is one transaction the tool owns, and a concurrent build cannot join
+one. Both are real and only the caller can choose between them. Marking becomes
+implementable when a plan can carry an atomicity of its own; until then the refusal is
+what this ADR's own standard requires — no plan the provider cannot stand behind.

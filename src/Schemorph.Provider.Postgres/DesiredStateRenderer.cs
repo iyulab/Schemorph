@@ -93,7 +93,7 @@ internal static class DesiredStateRenderer
 
         foreach (var index in table.Indexes)
         {
-            sql.AppendLine().Append(index.CreateStatement.TrimEnd(';', ' ', '\r', '\n')).AppendLine(";");
+            sql.AppendLine().Append(index.Definition.TrimEnd(';', ' ', '\r', '\n')).AppendLine(";");
         }
 
         return sql.ToString();

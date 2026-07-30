@@ -5,6 +5,50 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## 0.7.0 — unreleased
+
+### Added
+
+- **Indexes are declared state on PostgreSQL.** The provider plans and applies index
+  additions, removals and redefinitions, and `indexes` joins its declared capability
+  list; an index difference no longer refuses. An index change is reported as a change
+  to the table it is on, which is how the SQL Server provider has always reported it —
+  the two plans read the same. Because the desired state is now the whole truth about a
+  table's indexes, **an index the files do not declare is dropped**, and appears as a
+  `DROP INDEX` in the review script like any other planned statement. Indexes a
+  constraint owns stay out of it: they belong to the constraint that creates them.
+
+  Foreign keys are the case worth naming, because PostgreSQL creates no index for one on
+  its own. A foreign-key column without a supporting index is a table scan on every
+  lookup through that key, and until now the provider could not be asked to fix it.
+
+### Fixed
+
+- **An index whose definition drifted could be reported as no change at all**
+  (PostgreSQL). The comparison identified an index by a projection over its columns,
+  built from `pg_get_indexdef(oid, n, …)` — and that rendering carries only the bare
+  column or expression. Sort direction, `NULLS FIRST`/`LAST`, operator class and
+  collation are all absent from it, whatever the pretty flag says. Two indexes differing
+  only there were therefore equal to the tool: `diff` printed no changes, `status` came
+  clean, and the difference stayed in the database with nothing left to plan it away. It
+  is not a cosmetic set: an index is a set of columns *under an ordering*, and the four
+  aspects decide which queries the index can answer. The comparison now takes the
+  engine's whole `CREATE INDEX` rendering, exactly as constraint definitions are taken,
+  with the one qualifier that differs between two schemas removed from its `ON` clause.
+  Pinned by live tests that seed each aspect on one side only and require the plan to
+  see it and then converge.
+
+### Changed
+
+- **`CREATE INDEX CONCURRENTLY` in a desired state is refused** (PostgreSQL,
+  `not_implemented`) rather than silently serialized. A concurrent build cannot run
+  inside a transaction, and a PostgreSQL apply is one transaction the tool owns — the
+  guarantee it declares as `transactional`. Honoring the keyword would drop one of the
+  two without saying which, and both are the caller's to trade. See
+  [limitations.md](docs/limitations.md) for the two ways through it, and
+  [ADR-0007](docs/adr/0007-postgres-engine-selection.md)'s 2026-07-30 addendum for why
+  marking the plan is not yet an option.
+
 ## 0.6.0 — 2026-07-30
 
 ### Fixed

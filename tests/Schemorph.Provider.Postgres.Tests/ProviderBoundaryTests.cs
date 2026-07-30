@@ -54,14 +54,16 @@ public class ProviderBoundaryTests
     }
 
     [Fact]
-    public void P1_declares_the_table_core_and_earns_transactional()
+    public void The_declared_surface_is_the_table_core_with_indexes_and_earns_transactional()
     {
-        // The table core, and with it the apply guarantee — earned
-        // by the tool-owned transaction (ADR-0007, ADR-0004 addendum), not
-        // asserted. The read-only scope declared `inspect` alone with NO atomicity, because a
+        // The declaration is the promise, so it is spelled out here rather than
+        // derived: a capability appears on this line in the same change that
+        // makes it real. The apply guarantee is earned by the tool-owned
+        // transaction (ADR-0007, ADR-0004 addendum), not asserted — the
+        // read-only scope declared `inspect` alone with NO atomicity, because a
         // provider without an apply must not claim what one would guarantee.
         Assert.Equal(
-            new[] { "inspect", "tables", "columns", "constraints", "schemas" },
+            new[] { "inspect", "tables", "columns", "constraints", "indexes", "schemas" },
             Provider.Capabilities.Declared);
         Assert.Equal(ApplyAtomicity.Transactional, Provider.Capabilities.Atomicity);
         Assert.Equal(ApplyAtomicity.Transactional, Provider.Capabilities.PlanAtomicity);

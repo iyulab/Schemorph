@@ -124,12 +124,27 @@ a generated desired state never emits them, so treating their absence as "delete
 them" would destroy live principals. Manage them through a separate operational
 path.
 
+## A concurrent index build cannot join a transactional apply
+
+`CREATE INDEX CONCURRENTLY` exists to build an index without holding a write lock,
+and PostgreSQL charges a fixed price for that: the statement refuses to run inside
+a transaction. A PostgreSQL apply here *is* one transaction the tool owns — that is
+the `transactional` atomicity the provider declares, and what makes a failed apply
+leave nothing behind.
+
+The two cannot both hold, and which one to give up is a decision about your
+database, not about this tool. So a desired state containing `CONCURRENTLY` is
+refused (`not_implemented`) rather than quietly stripped of the keyword or quietly
+stripped of the guarantee. Declare the index without `CONCURRENTLY` to let Schemorph
+build it inside the apply, or build it by hand outside Schemorph and declare it
+plainly afterwards — the next diff will find it already there and plan nothing.
+
 ## Two database engines, and one of them is partial
 
 SQL Server is complete. PostgreSQL is released **up to a declared scope** — tables,
-columns, constraints and the target schema ([ADR-0003](adr/0003-postgres-as-second-provider.md),
+columns, constraints, indexes and the target schema ([ADR-0003](adr/0003-postgres-as-second-provider.md),
 [ADR-0007](adr/0007-postgres-engine-selection.md)). Everything outside that
-declaration — indexes, views, functions, procedures, triggers, versioned
+declaration — views, functions, procedures, triggers, versioned
 migrations — is **refused with an error naming what the provider does support**,
 never half-planned. The scope grows in releasable slices, with no committed
 timeline; if you need the refused parts on PostgreSQL today, Atlas, sqldef, or

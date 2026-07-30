@@ -43,8 +43,9 @@ public class RediffEmptyTests
         await shadow.ApplyAsync(
             rendered.Select(f => f.Content).ToList(), sourceSchema: live.Name);
 
-        // Both sides in comparison mode: same-schema FK targets, index ON
-        // clauses and regclass literals render UNQUALIFIED, so the shadow and
+        // Both sides in comparison mode: same-schema FK targets and
+        // regclass literals render UNQUALIFIED, and the index ON clause is
+        // unqualified by the reader, so the shadow and
         // the live schema produce byte-equal canonical texts.
         var desired = await CatalogReader.ReadTablesAsync(
             PgTestSchema.ServerUrl!, shadow.Name, normalizeSameSchemaReferences: true);
@@ -53,8 +54,7 @@ public class RediffEmptyTests
 
         var result = SnapshotComparer.Compare(desired, actual);
 
-        Assert.Empty(result.Changes);
-        Assert.Empty(result.OutOfScope);
+        Assert.Empty(result);
     }
 
     [SkippableFact]
@@ -76,7 +76,7 @@ public class RediffEmptyTests
         var actual = await CatalogReader.ReadTablesAsync(
             PgTestSchema.ServerUrl!, live.Name, normalizeSameSchemaReferences: true);
 
-        var change = Assert.Single(SnapshotComparer.Compare(desired, actual).Changes);
+        var change = Assert.Single(SnapshotComparer.Compare(desired, actual));
         Assert.Equal(new Core.Providers.RawChange("Change", "Table", "Members"), change);
     }
 }

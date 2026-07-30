@@ -10,22 +10,17 @@ namespace Schemorph.Provider.Postgres.Shadow;
 /// text here is the engine's canonical rendering with same-schema references
 /// unqualified, and equality is honest equality.
 ///
-/// Slice discipline (§2 of the dev plan): this slice compares tables, columns
-/// and constraints. An INDEX difference is real work the provider cannot plan
-/// yet, so it is reported as out of scope for the caller to refuse on —
-/// silently ignoring it would emit a plan that claims a sync it cannot see.
+/// An index difference is a change to the table it is on, not a change of its
+/// own. That is the first provider's shape — its plan folds an index addition
+/// into the table's entry — and the contract is required to read the same on
+/// both databases.
 /// </summary>
 internal static class SnapshotComparer
 {
-    public sealed record Comparison(
-        IReadOnlyList<RawChange> Changes,
-        IReadOnlyList<string> OutOfScope);
-
-    public static Comparison Compare(
+    public static IReadOnlyList<RawChange> Compare(
         IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live)
     {
         var changes = new List<RawChange>();
-        var outOfScope = new List<string>();
         var liveByName = live.ToDictionary(t => t.Name, StringComparer.Ordinal);
         var desiredNames = desired.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
 
@@ -37,14 +32,9 @@ internal static class SnapshotComparer
                 continue;
             }
 
-            if (!ColumnsEqual(want, have) || !ConstraintsEqual(want, have))
+            if (!ColumnsEqual(want, have) || !ConstraintsEqual(want, have) || !IndexesEqual(want, have))
             {
                 changes.Add(new RawChange("Change", "Table", want.Name));
-            }
-
-            if (!IndexesEqual(want, have))
-            {
-                outOfScope.Add($"index change on table {want.Name}");
             }
         }
 
@@ -56,7 +46,7 @@ internal static class SnapshotComparer
             }
         }
 
-        return new Comparison(changes, outOfScope);
+        return changes;
     }
 
     // Records compare by value, and no member's catalog order is part of a
@@ -82,17 +72,13 @@ internal static class SnapshotComparer
         => a.Constraints.OrderBy(c => c.Name, StringComparer.Ordinal)
             .SequenceEqual(b.Constraints.OrderBy(c => c.Name, StringComparer.Ordinal));
 
-    // NOT the CreateStatement: pg_get_indexdef(oid) always qualifies the table,
-    // so full-text comparison across two schemas never converges. The identity
-    // is the structural projection — the per-column renderings are the engine's
-    // own text and carry no qualifier.
+    // The whole definition, exactly as constraints are compared: the reader has
+    // already removed the one qualifier that differs between the two schemas, so
+    // what remains distinguishes everything the engine distinguishes — sort
+    // direction, NULLS placement, operator class, collation, INCLUDE columns and
+    // predicate alike. A projection over columns cannot do that, and reporting
+    // two such indexes as equal is drift the tool would never plan away.
     private static bool IndexesEqual(PgTable a, PgTable b)
-        => IndexIdentities(a).SequenceEqual(IndexIdentities(b));
-
-    private static IEnumerable<string> IndexIdentities(PgTable table)
-        => table.Indexes
-            .OrderBy(i => i.Name, StringComparer.Ordinal)
-            .Select(i => string.Join("|",
-                i.Name, i.Unique, i.Method, i.KeyCount, i.Predicate,
-                string.Join(",", i.Keys ?? [])));
+        => a.Indexes.OrderBy(i => i.Name, StringComparer.Ordinal)
+            .SequenceEqual(b.Indexes.OrderBy(i => i.Name, StringComparer.Ordinal));
 }

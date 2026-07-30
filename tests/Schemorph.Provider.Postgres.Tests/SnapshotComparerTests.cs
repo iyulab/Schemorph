@@ -13,10 +13,7 @@ public class SnapshotComparerTests
     [Fact]
     public void Identical_snapshots_compare_empty()
     {
-        var result = SnapshotComparer.Compare([Table("A")], [Table("A")]);
-
-        Assert.Empty(result.Changes);
-        Assert.Empty(result.OutOfScope);
+        Assert.Empty(SnapshotComparer.Compare([Table("A")], [Table("A")]));
     }
 
     [Fact]
@@ -24,9 +21,9 @@ public class SnapshotComparerTests
     {
         var result = SnapshotComparer.Compare([Table("New")], [Table("Old")]);
 
-        Assert.Equal(2, result.Changes.Count);
-        Assert.Contains(new RawChange("Add", "Table", "New"), result.Changes);
-        Assert.Contains(new RawChange("Delete", "Table", "Old"), result.Changes);
+        Assert.Equal(2, result.Count);
+        Assert.Contains(new RawChange("Add", "Table", "New"), result);
+        Assert.Contains(new RawChange("Delete", "Table", "Old"), result);
     }
 
     [Fact]
@@ -35,7 +32,7 @@ public class SnapshotComparerTests
         var want = Table("A", new PgColumn("Id", "uuid", true, null), new PgColumn("Note", "text", false, null));
         var have = Table("A", new PgColumn("Id", "uuid", true, null));
 
-        var change = Assert.Single(SnapshotComparer.Compare([want], [have]).Changes);
+        var change = Assert.Single(SnapshotComparer.Compare([want], [have]));
         Assert.Equal(new RawChange("Change", "Table", "A"), change);
     }
 
@@ -53,7 +50,7 @@ public class SnapshotComparerTests
         var declared = Table("A", id, note, stamp);
         var live = Table("A", id, stamp, note);
 
-        Assert.Empty(SnapshotComparer.Compare([declared], [live]).Changes);
+        Assert.Empty(SnapshotComparer.Compare([declared], [live]));
     }
 
     [Fact]
@@ -65,7 +62,7 @@ public class SnapshotComparerTests
         var declared = Table("A", id, new PgColumn("Note", "text", true, null));
         var live = Table("A", new PgColumn("Note", "text", false, null), id);
 
-        var change = Assert.Single(SnapshotComparer.Compare([declared], [live]).Changes);
+        var change = Assert.Single(SnapshotComparer.Compare([declared], [live]));
         Assert.Equal(new RawChange("Change", "Table", "A"), change);
     }
 
@@ -78,22 +75,49 @@ public class SnapshotComparerTests
         var same = Table("A") with { Constraints = [ck, pk] };
         var different = Table("A") with { Constraints = [pk] };
 
-        Assert.Empty(SnapshotComparer.Compare([want], [same]).Changes);
-        Assert.Single(SnapshotComparer.Compare([want], [different]).Changes);
+        Assert.Empty(SnapshotComparer.Compare([want], [same]));
+        Assert.Single(SnapshotComparer.Compare([want], [different]));
     }
 
     [Fact]
-    public void An_index_difference_is_out_of_scope_not_a_silent_pass()
+    public void An_index_difference_is_a_change_to_the_table_it_is_on()
     {
-        // Index planning is outside the declared capabilities. The provider must refuse, not emit a plan
-        // that cannot see the difference (§2: the backstop pins the manifest).
-        var want = Table("A") with { Indexes = [new PgIndex("IX", "CREATE INDEX \"IX\" ON \"A\" (\"x\")")] };
+        // Parity with the first provider, whose plan folds an index addition
+        // into the table's own entry rather than giving it a separate one.
+        var want = Table("A") with { Indexes = [new PgIndex("IX", """CREATE INDEX "IX" ON "A" ("x")""")] };
         var have = Table("A");
 
-        var result = SnapshotComparer.Compare([want], [have]);
+        var change = Assert.Single(SnapshotComparer.Compare([want], [have]));
+        Assert.Equal(new RawChange("Change", "Table", "A"), change);
+    }
 
-        Assert.Empty(result.Changes);
-        var reason = Assert.Single(result.OutOfScope);
-        Assert.Contains("A", reason);
+    [Fact]
+    public void Two_indexes_of_the_same_name_that_read_differently_are_a_change()
+    {
+        // The whole definition is the identity. A comparison over column names
+        // alone calls these equal, and then no plan ever removes the drift —
+        // which is why the reader keeps the engine's text instead of a projection.
+        var want = Table("A") with
+        {
+            Indexes = [new PgIndex("IX", """CREATE INDEX "IX" ON "A" USING btree ("x" DESC)""")],
+        };
+        var have = Table("A") with
+        {
+            Indexes = [new PgIndex("IX", """CREATE INDEX "IX" ON "A" USING btree ("x")""")],
+        };
+
+        Assert.Single(SnapshotComparer.Compare([want], [have]));
+    }
+
+    [Fact]
+    public void Indexes_that_differ_only_in_read_order_are_not_a_change()
+    {
+        var a = new PgIndex("IX_A", """CREATE INDEX "IX_A" ON "A" ("x")""");
+        var b = new PgIndex("IX_B", """CREATE INDEX "IX_B" ON "A" ("y")""");
+
+        var want = Table("A") with { Indexes = [a, b] };
+        var same = Table("A") with { Indexes = [b, a] };
+
+        Assert.Empty(SnapshotComparer.Compare([want], [same]));
     }
 }

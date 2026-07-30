@@ -51,8 +51,8 @@ public class ShadowSchemaTests
         // source schema because pg_get_indexdef renders that qualifier unquoted.
         var index = Assert.Single(actual.Indexes);
         Assert.Equal("IX_Workspaces_Lower", index.Name);
-        Assert.Contains(shadow.Name, index.CreateStatement);
-        Assert.DoesNotContain(source.Name, index.CreateStatement);
+        Assert.Contains(shadow.Name, index.Definition);
+        Assert.DoesNotContain(source.Name, index.Definition);
     }
 
     [SkippableFact]

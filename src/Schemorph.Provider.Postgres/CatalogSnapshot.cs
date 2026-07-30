@@ -49,29 +49,25 @@ public sealed record PgColumn(
 /// </param>
 public sealed record PgConstraint(string Name, string Definition);
 
-/// <param name="CreateStatement">
-/// From <c>pg_get_indexdef(oid)</c> — a complete CREATE INDEX statement, used
-/// verbatim by inspect rendering. NOT comparable across schemas: the function
-/// always schema-qualifies the table, search_path notwithstanding (measured
-/// 2026-07-22), which is why comparison uses the structural fields below.
+/// <param name="Definition">
+/// From <c>pg_get_indexdef(oid)</c> — a complete CREATE INDEX statement, taken
+/// whole for the same reason a constraint's definition is: it is the engine's
+/// own canonical form, so every aspect it distinguishes stays distinguished
+/// without a parser in the comparison layer.
+///
+/// One substitution makes it comparable across schemas. Unlike the other
+/// renderings, this one qualifies the table unconditionally — search_path does
+/// not unqualify it (measured 2026-07-22, re-measured 2026-07-30) — so
+/// comparison mode removes that qualifier and inspect keeps it.
+///
+/// The alternative, a per-column projection from
+/// <c>pg_get_indexdef(oid, n, …)</c>, was measured and is not sufficient: that
+/// form renders a key as the bare column or expression and carries no sort
+/// direction, NULLS placement, operator class or collation, whatever the pretty
+/// flag says. Two indexes differing only there answer different queries, and a
+/// comparison built on it calls them equal.
 /// </param>
-/// <param name="Keys">
-/// Per-column renderings from <c>pg_get_indexdef(oid, n, true)</c> — the
-/// engine's own text for each key/expression, free of any table qualifier,
-/// so shadow and live compare equal when the index is the same.
-/// </param>
-/// <param name="KeyCount">
-/// <c>indnkeyatts</c>: how many of <paramref name="Keys"/> are key columns —
-/// the rest are INCLUDE columns, and the split is part of index identity.
-/// </param>
-public sealed record PgIndex(
-    string Name,
-    string CreateStatement,
-    bool Unique = false,
-    string Method = "btree",
-    IReadOnlyList<string>? Keys = null,
-    int KeyCount = 0,
-    string? Predicate = null);
+public sealed record PgIndex(string Name, string Definition);
 
 public sealed record PgTable(
     string Schema,

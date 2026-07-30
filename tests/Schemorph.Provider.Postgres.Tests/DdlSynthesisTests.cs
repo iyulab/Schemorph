@@ -72,8 +72,7 @@ public class DdlSynthesisTests
             PgTestSchema.ServerUrl!, liveSchema.Name, normalizeSameSchemaReferences: true);
         var result = SnapshotComparer.Compare(desired, after);
 
-        Assert.Empty(result.Changes);
-        Assert.Empty(result.OutOfScope);
+        Assert.Empty(result);
     }
 
     [SkippableFact]

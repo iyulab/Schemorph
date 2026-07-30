@@ -16,11 +16,14 @@ internal static class CatalogReader
     /// <param name="normalizeSameSchemaReferences">
     /// Comparison mode: sets the connection's search_path to
     /// <paramref name="schema"/> before reading, so the engine renders
-    /// same-schema references (FK targets, index ON clauses, regclass
-    /// literals in defaults) UNQUALIFIED. Two snapshots read this way — the
-    /// shadow schema and the live one — become directly comparable text
-    /// without any parser in the comparison layer (ADR-0007). Inspect keeps
+    /// same-schema references (FK targets, regclass literals in defaults,
+    /// functions inside index expressions) UNQUALIFIED. Two snapshots read this
+    /// way — the shadow schema and the live one — become directly comparable
+    /// text without any parser in the comparison layer (ADR-0007). Inspect keeps
     /// the default: qualified, self-contained files.
+    ///
+    /// One rendering does not obey search_path and is normalized by hand
+    /// instead: an index's ON clause (see <see cref="UnqualifyTable"/>).
     /// </param>
     public static async Task<IReadOnlyList<PgTable>> ReadTablesAsync(
         string connectionString, string schema,
@@ -41,7 +44,8 @@ internal static class CatalogReader
 
         var columns = await ReadColumnsAsync(connection, schema, cancellationToken);
         var constraints = await ReadConstraintsAsync(connection, schema, cancellationToken);
-        var indexes = await ReadIndexesAsync(connection, schema, cancellationToken);
+        var indexes = await ReadIndexesAsync(
+            connection, schema, normalizeSameSchemaReferences, cancellationToken);
 
         // Self-exclusion: Schemorph's own bookkeeping is invisible to inspect
         // and comparison alike — the same rule the SQL Server provider applies
@@ -93,21 +97,17 @@ internal static class CatalogReader
     // separately would produce a file that cannot be applied twice — the
     // constraint creates it, then CREATE INDEX collides.
     //
-    // The full pg_get_indexdef(oid) serves inspect only: it always qualifies
-    // the table (search_path notwithstanding — measured), so comparison uses
-    // the structural columns: uniqueness, method, the engine's per-column
-    // renderings (qualifier-free), the key/INCLUDE split, and the predicate.
+    // The last two columns are the qualified and bare table names as
+    // pg_get_indexdef itself renders them (quote_ident is the function it uses),
+    // which is what lets comparison mode cut that one qualifier out of the
+    // definition without guessing at quoting or parsing the statement.
     private const string IndexesSql = """
         SELECT c.relname, i.relname, pg_get_indexdef(i.oid),
-               x.indisunique, am.amname,
-               (SELECT array_agg(pg_get_indexdef(i.oid, k.n, true) ORDER BY k.n)
-                  FROM generate_series(1, x.indnatts) AS k(n)),
-               x.indnkeyatts,
-               pg_get_expr(x.indpred, x.indrelid)
+               quote_ident(n.nspname) || '.' || quote_ident(c.relname),
+               quote_ident(c.relname)
         FROM pg_index x
         JOIN pg_class c ON c.oid = x.indrelid
         JOIN pg_class i ON i.oid = x.indexrelid
-        JOIN pg_am am ON am.oid = i.relam
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = @schema AND c.relkind = 'r'
           AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.oid)
@@ -203,21 +203,40 @@ internal static class CatalogReader
     }
 
     private static async Task<Dictionary<string, List<PgIndex>>> ReadIndexesAsync(
-        NpgsqlConnection connection, string schema, CancellationToken cancellationToken)
+        NpgsqlConnection connection, string schema, bool unqualifyTable,
+        CancellationToken cancellationToken)
     {
         var result = new Dictionary<string, List<PgIndex>>(StringComparer.Ordinal);
         await foreach (var row in QueryAsync(connection, IndexesSql, schema, cancellationToken))
         {
+            var definition = row.GetString(2);
             Bucket(result, row.GetString(0)).Add(new PgIndex(
                 row.GetString(1),
-                row.GetString(2),
-                Unique: row.GetBoolean(3),
-                Method: row.GetString(4),
-                Keys: row.GetFieldValue<string[]>(5),
-                KeyCount: row.GetInt16(6),
-                Predicate: row.IsDBNull(7) ? null : row.GetString(7)));
+                unqualifyTable
+                    ? UnqualifyTable(definition, row.GetString(3), row.GetString(4))
+                    : definition));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Removes the schema from the one place pg_get_indexdef puts it — the ON
+    /// clause — leaving the table bare so a shadow-schema definition and a live
+    /// one are the same text when they are the same index.
+    ///
+    /// The first occurrence is the ON clause in every statement this function
+    /// produces, because the qualified name is rendered nowhere earlier. If a
+    /// future rendering broke that, the two sides would stop matching and a plan
+    /// would refuse to converge — visibly — rather than quietly equate two
+    /// different indexes.
+    /// </summary>
+    private static string UnqualifyTable(string definition, string qualifiedTable, string bareTable)
+    {
+        var at = definition.IndexOf(qualifiedTable, StringComparison.Ordinal);
+        return at < 0
+            ? definition
+            : string.Concat(
+                definition.AsSpan(0, at), bareTable, definition.AsSpan(at + qualifiedTable.Length));
     }
 
     private static List<T> Bucket<T>(Dictionary<string, List<T>> map, string key)

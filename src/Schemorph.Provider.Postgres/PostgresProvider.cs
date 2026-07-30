@@ -16,14 +16,14 @@ public sealed class PostgresProvider : IDatabaseProvider
     public const string ProviderName = "postgres";
 
     /// <summary>
-    /// What this provider can do today: the table core — reading,
-    /// and diff/apply over tables, columns, constraints and the target
+    /// What this provider can do today: the table core — reading, and
+    /// diff/apply over tables, columns, constraints, indexes and the target
     /// schema itself. Every capability absent from this list must throw from
     /// <see cref="Refuse"/> — ProviderBoundaryTests pins the symmetry, and the
     /// refusal hint quotes exactly these lines.
     /// </summary>
     internal static readonly string[] DeclaredCapabilities =
-        { "inspect", "tables", "columns", "constraints", "schemas" };
+        { "inspect", "tables", "columns", "constraints", "indexes", "schemas" };
 
     public string Name => ProviderName;
 
@@ -91,7 +91,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     public async Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken cancellationToken = default)
     {
         var compared = await CompareCoreAsync(request.DesiredState, request.ConnectionString, cancellationToken);
-        return new CompareResult(compared.Comparison.Changes, compared.Messages,
+        return new CompareResult(compared.Changes, compared.Messages,
             compared.UpdateScript, compared.ChangeScripts);
     }
 
@@ -118,11 +118,11 @@ public sealed class PostgresProvider : IDatabaseProvider
         // binds both (plan format 1.5), so anything the gate hashes has to be
         // produced identically on this path — the asymmetry that broke the gate once.
         onChangesComputed?.Invoke(new CompareResult(
-            compared.Comparison.Changes, Array.Empty<RawMessage>(),
+            compared.Changes, Array.Empty<RawMessage>(),
             compared.UpdateScript, compared.ChangeScripts));
 
-        var included = compared.Comparison.Changes.Where(includeChange).ToList();
-        var excluded = compared.Comparison.Changes.Where(c => !includeChange(c)).ToList();
+        var included = compared.Changes.Where(includeChange).ToList();
+        var excluded = compared.Changes.Where(c => !includeChange(c)).ToList();
 
         // Exclusions are masked BEFORE synthesis: an excluded drop keeps its
         // table out of the script entirely, rather than being filtered out of
@@ -185,7 +185,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// messages that decide whether it may become a plan at all.
     /// </summary>
     private sealed record Compared(
-        SnapshotComparer.Comparison Comparison,
+        IReadOnlyList<RawChange> Changes,
         Snapshots Snapshots,
         string? UpdateScript,
         IReadOnlyList<ChangeScript> ChangeScripts,
@@ -194,8 +194,6 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// <summary>
     /// The shadow pipeline (ADR-0007): desired state applied to a scratch
     /// schema, both sides read back in comparison mode, compared structurally.
-    /// An index difference refuses, because a plan that cannot see a difference
-    /// must not claim a sync.
     /// </summary>
     private async Task<Compared> CompareCoreAsync(
         IDesiredState desiredState, string connectionString, CancellationToken cancellationToken)
@@ -213,12 +211,7 @@ public sealed class PostgresProvider : IDatabaseProvider
         var live = await CatalogReader.ReadTablesAsync(
             connectionString, schema, normalizeSameSchemaReferences: true, cancellationToken);
 
-        var comparison = SnapshotComparer.Compare(desired, live);
-        if (comparison.OutOfScope.Count > 0)
-        {
-            throw Refuse($"index changes ({string.Join("; ", comparison.OutOfScope)})");
-        }
-
+        var changes = SnapshotComparer.Compare(desired, live);
         var statements = DdlSynthesizer.Synthesize(schema, desired, live);
         var updateScript = statements.Count == 0 ? null : ComposeScript(schema, statements);
 
@@ -226,11 +219,11 @@ public sealed class PostgresProvider : IDatabaseProvider
         // missing explanation — it is a change that cannot happen. Reported as an
         // Error on the comparison, which fails every verb that reads it rather
         // than handing anyone a plan the provider cannot carry out.
-        var messages = SynthesisGap(comparison.Changes, statements) is { } gap
+        var messages = SynthesisGap(changes, statements) is { } gap
             ? new[] { gap }
             : Array.Empty<RawMessage>();
 
-        return new Compared(comparison, new Snapshots(desired, live), updateScript,
+        return new Compared(changes, new Snapshots(desired, live), updateScript,
             AttributeStatements(statements, desired, live), messages);
     }
 

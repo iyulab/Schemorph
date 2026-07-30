@@ -7,8 +7,8 @@ namespace Schemorph.Provider.Postgres;
 /// A desired-state directory, loaded and classified once (the provider
 /// boundary's single-load contract). Classification is parse-based, with the
 /// real PostgreSQL grammar: a file either belongs to the declared slice
-/// (tables, columns, constraints, schemas — plus the indexes inspect already
-/// renders), is imperative content that is not desired state (skipped loudly,
+/// (tables, columns, constraints, indexes, schemas), is imperative content
+/// that is not desired state (skipped loudly,
 /// the SQL Server convention), or demands a slice this provider has not
 /// earned yet — and that last case REFUSES rather than skips, because a plan
 /// that silently ignored a view file would claim a sync it cannot see.
@@ -65,10 +65,19 @@ internal sealed class PgDesiredState : IDesiredState
             {
                 // Not the user's error and not ignorable — the honest outcome is
                 // the provider's own refusal, naming what it does not handle.
-                throw new UnsupportedByProviderException(
-                    PostgresProvider.ProviderName,
-                    $"programmable objects ({relative}: {programmable})",
-                    string.Join(", ", PostgresProvider.DeclaredCapabilities));
+                throw Unsupported($"programmable objects ({relative}: {programmable})");
+            }
+
+            // CONCURRENTLY buys its lock-free build by refusing to run inside a
+            // transaction, and an apply here is one transaction the tool owns —
+            // that is the atomicity this provider declares. Honoring the file
+            // would mean dropping either the keyword or the guarantee without
+            // saying so, and both are the caller's to trade, not ours.
+            if (parsed.Value.Stmts.Any(s => s.Stmt is { IndexStmt.Concurrent: true }))
+            {
+                throw Unsupported(
+                    $"CONCURRENTLY index builds ({relative}) — an apply runs in one transaction, " +
+                    "which a concurrent build cannot join");
             }
 
             if (parsed.Value.Stmts.All(s => IsModelStatement(s.Stmt)))
@@ -85,6 +94,10 @@ internal sealed class PgDesiredState : IDesiredState
 
         return new PgDesiredState(modelTexts, warnings, errors);
     }
+
+    private static UnsupportedByProviderException Unsupported(string capability)
+        => new(PostgresProvider.ProviderName, capability,
+            string.Join(", ", PostgresProvider.DeclaredCapabilities));
 
     private static bool IsModelStatement(Node statement) => statement switch
     {
