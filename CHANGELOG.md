@@ -5,7 +5,7 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
-## 0.7.0 — unreleased
+## 0.7.0 — 2026-07-30
 
 ### Added
 
