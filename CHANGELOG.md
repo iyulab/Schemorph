@@ -5,6 +5,75 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## 0.6.0 — 2026-07-30
+
+### Fixed
+
+- **Adding a column to an existing table no longer drifts forever on PostgreSQL.**
+  The engine appends a new column whatever order the desired state lists it in, so a
+  file that places it ahead of trailing audit columns can never match the live table
+  positionally — and the comparison was treating ordinal position as state. Every
+  `diff` after the `apply` re-proposed the same table: the plan never emptied, `status`
+  never came clean, and any convergence gate built on them stayed red on a database
+  that was in fact correct. Column order is now excluded from the comparison, which is
+  the policy the project has stated since 0.3.0 — *Schemorph diffs state, not ordinal
+  position* — and which the SQL Server provider already implemented; the second
+  provider had not inherited it. Documented in [limitations.md](docs/limitations.md),
+  including what to do when column position is material to an application.
+- **A PostgreSQL `apply` no longer reports changes it did not execute.** The applied
+  list was computed from the comparison before any DDL was synthesized and returned
+  regardless of whether a statement existed, so a change the synthesizer could not
+  express was reported as applied — and recorded in the history ledger as a success
+  row, for work that never happened. The provider now checks its own two halves
+  against each other: every synthesized statement carries the table it belongs to, and
+  a change no statement carries fails the operation with **`SCHEMORPH009`**, naming
+  the change. Nothing is applied and no plan is emitted, so a caller cannot mistake it
+  for convergence. The check is per object rather than a count, so a gap beside a
+  change that *did* synthesize is caught too. Deliberately provider-local: on SQL
+  Server the update script is a review artifact and the publish is the execution path,
+  so a missing script there does not mean nothing ran.
+- **`diff --format sql` no longer blames a diagnostic that cannot have fired.** Its
+  refusal asserted `SCHEMORPH002` — a code only the SQL Server provider emits — so on
+  another provider it named a script-generation failure that never occurred while
+  hiding the real cause. The refusal now quotes the diagnostic codes the plan actually
+  carries, and says plainly when the plan carries none. Which diagnostic explains a
+  missing script is the provider's to report; the core no longer asserts one (the same
+  correction `SCHEMORPH008` needed in 0.3.1).
+
+### Added
+
+- **PostgreSQL plans explain themselves, and the safety lint has something to read.**
+  `changes[].sql` was reserved as `null` on this provider, so a plan named the objects
+  it would change without showing the DDL for any of them — and the two lint rules that
+  read those slices (`SCHEMORPH101`, `SCHEMORPH102`) could never fire, including on the
+  real hazard of adding a `NOT NULL` column with no default to a table that already
+  holds rows. The provider now attributes every synthesized statement to the object it
+  belongs to as it emits it, so attribution is exact rather than recovered by parsing
+  the script back. The `NOT NULL`-without-default judgment is made on the model, not on
+  the emitted text: it fires only for a table that already exists, and never for
+  identity or generated columns, where the engine supplies the value. A table rebuild
+  is never claimed — this provider alters in place and has no rebuild path.
+- **Plan format 1.5** — `changes[].sql` populated on every provider (additive; the field
+  has existed since 1.0). Two consequences are documented in
+  [plan-format.md](docs/plan-format.md): a plan can now carry lint warnings it did not
+  carry before, and because `planHash` binds each change's `sql` (since 1.4), the same
+  plan hashes to a new value wherever the field went from `null` to text. Earlier hashes
+  fail closed.
+
+### Changed
+
+- **[plan-format.md](docs/plan-format.md) no longer understates what `planHash` covers.**
+  It described `changes[].sql` as "excluded from `planHash`", which stopped being true in
+  0.5.2 when the fingerprint began binding the executed script. A consumer reading it
+  would have believed an attributed slice could change without invalidating a signed
+  hash — the exact false assurance the fingerprint exists to remove. The field row and
+  the `planHash` row now both state that every change's `sql` is bound, whatever its kind.
+- **[limitations.md](docs/limitations.md) describes two providers instead of one.** It
+  still said SQL Server was the only engine and PostgreSQL a plan, which stopped being
+  true at 0.5.0. It now states the declared PostgreSQL scope, that everything outside
+  it is refused rather than half-planned, and that parity means an identical contract —
+  not identical limitations.
+
 ## 0.5.2 — 2026-07-24
 
 ### Fixed

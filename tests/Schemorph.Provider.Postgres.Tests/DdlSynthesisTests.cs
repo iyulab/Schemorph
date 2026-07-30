@@ -58,10 +58,15 @@ public class DdlSynthesisTests
         var statements = DdlSynthesizer.Synthesize(liveSchema.Name, desired, live);
         Assert.NotEmpty(statements);
 
+        // Every statement names the table it carries, so the caller can check
+        // that each reported change actually got one.
+        Assert.All(statements, s => Assert.False(string.IsNullOrEmpty(s.ObjectName)));
+
         // Embedded expression texts are unqualified (comparison-mode snapshots),
         // so the executor sets search_path — the contract the synthesizer states.
         await PgTestSchema.ExecuteAsync(
-            $"SET search_path TO \"{liveSchema.Name}\";\n" + string.Join("\n", statements));
+            $"SET search_path TO \"{liveSchema.Name}\";\n"
+            + string.Join("\n", statements.Select(s => s.Sql)));
 
         var after = await CatalogReader.ReadTablesAsync(
             PgTestSchema.ServerUrl!, liveSchema.Name, normalizeSameSchemaReferences: true);

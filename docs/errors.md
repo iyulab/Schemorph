@@ -101,7 +101,7 @@ hand: the ledger is what makes the run-once and redefine contracts hold.
 | `compare_failed` | `execution` | `diff` could not compare (connection, engine error) |
 | `apply_failed` | `execution` | `apply` failed (publish errors, script failure, connection) |
 | `inspect_failed` | `execution` | `inspect` failed |
-| `review_script_unavailable` | `execution` | `diff --format sql`: the plan has declarative changes but the engine could not generate their update script (`SCHEMORPH002`). No document is emitted — a partial approval artifact is worse than none |
+| `review_script_unavailable` | `execution` | `diff --format sql`: the plan has declarative changes but no update script was produced for them. No document is emitted — a partial approval artifact is worse than none. The cause is provider-specific, so the message echoes the diagnostic codes the plan carries (e.g. `SCHEMORPH002`) rather than asserting one |
 | `not_implemented` | `unsupported` | The verb exists but is not implemented yet |
 
 ## Provider messages
@@ -120,6 +120,7 @@ Warnings never change the exit code.
 | `SCHEMORPH006` | Warning | File skipped: contains imperative statements (EXEC / DML) — not declarative DDL |
 | `SCHEMORPH007` | Error | A `.sql` file failed to parse (file, line, and column are named) |
 | `SCHEMORPH008` | Warning | The comparison could not read the target completely. The engine's own reason is echoed in the message. It accompanies an engine error, so the verb fails — see below |
+| `SCHEMORPH009` | Error | The comparison reported a change the provider produced no statement for, and names it. Nothing is applied and no plan is emitted — the verb fails. A disagreement inside the provider, not a fault in the desired state; please report it |
 
 #### An incomplete comparison is a failure, not a partial answer
 

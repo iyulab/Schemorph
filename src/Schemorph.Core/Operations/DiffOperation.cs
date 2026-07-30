@@ -20,8 +20,9 @@ public static class DiffOperation
     /// The declarative stage's update script exactly as the provider generated it —
     /// the text a publish would execute, not a reassembly of the per-change slices
     /// the plan carries for explanation. A reviewable artifact has to be the
-    /// executed artifact, so this is deliberately the raw script. Null when the
-    /// provider could not generate it (SCHEMORPH002) or there is nothing to publish.
+    /// executed artifact, so this is deliberately the raw script. Null when there is
+    /// nothing to publish, or when the provider produced no script for what it
+    /// planned — which diagnostic explains the latter is the provider's to report.
     /// </param>
     public sealed record DiffResult(
         Plan? Plan,

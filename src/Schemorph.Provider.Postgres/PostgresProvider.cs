@@ -90,8 +90,9 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     public async Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken cancellationToken = default)
     {
-        var (comparison, _, updateScript) = await CompareCoreAsync(request.DesiredState, request.ConnectionString, cancellationToken);
-        return new CompareResult(comparison.Changes, Array.Empty<RawMessage>(), updateScript);
+        var compared = await CompareCoreAsync(request.DesiredState, request.ConnectionString, cancellationToken);
+        return new CompareResult(compared.Comparison.Changes, compared.Messages,
+            compared.UpdateScript, compared.ChangeScripts);
     }
 
     public async Task<ApplyResult> ApplyAsync(
@@ -102,18 +103,40 @@ public sealed class PostgresProvider : IDatabaseProvider
     {
         // Same-snapshot invariant: the comparison announced through the hook is
         // the one this apply executes — no second comparison, no diff-apply race.
-        var (comparison, snapshots, updateScript) =
+        var compared =
             await CompareCoreAsync(request.DesiredState, request.ConnectionString, cancellationToken);
-        onChangesComputed?.Invoke(new CompareResult(comparison.Changes, Array.Empty<RawMessage>(), updateScript));
 
-        var included = comparison.Changes.Where(includeChange).ToList();
-        var excluded = comparison.Changes.Where(c => !includeChange(c)).ToList();
+        // A comparison this provider cannot carry out never becomes an announced
+        // plan: the hook is what the fingerprint gate and the caller's rendering
+        // are built from, so failing here keeps both from existing at all.
+        if (compared.Messages.Any(m => m.Severity == "Error"))
+        {
+            return new ApplyResult(false, Array.Empty<RawChange>(), Array.Empty<RawChange>(), compared.Messages);
+        }
+
+        // The same script AND the same attribution diff advertised: the fingerprint
+        // binds both (plan format 1.5), so anything the gate hashes has to be
+        // produced identically on this path — the asymmetry that broke the gate once.
+        onChangesComputed?.Invoke(new CompareResult(
+            compared.Comparison.Changes, Array.Empty<RawMessage>(),
+            compared.UpdateScript, compared.ChangeScripts));
+
+        var included = compared.Comparison.Changes.Where(includeChange).ToList();
+        var excluded = compared.Comparison.Changes.Where(c => !includeChange(c)).ToList();
 
         // Exclusions are masked BEFORE synthesis: an excluded drop keeps its
         // table out of the script entirely, rather than being filtered out of
         // statements after the fact.
-        var (desired, live) = MaskExclusions(snapshots.Desired, snapshots.Live, excluded);
+        var (desired, live) = MaskExclusions(compared.Snapshots.Desired, compared.Snapshots.Live, excluded);
         var statements = DdlSynthesizer.Synthesize(TargetSchemaOf(request.ConnectionString), desired, live);
+
+        // Masking removes work, so it can also remove the statement an included
+        // change needed — the pairing has to be re-checked against what will
+        // actually run, not only against the unmasked comparison above.
+        if (SynthesisGap(included, statements) is { } gap)
+        {
+            return new ApplyResult(false, Array.Empty<RawChange>(), excluded, new[] { gap });
+        }
 
         if (statements.Count > 0)
         {
@@ -158,12 +181,23 @@ public sealed class PostgresProvider : IDatabaseProvider
     private sealed record Snapshots(IReadOnlyList<PgTable> Desired, IReadOnlyList<PgTable> Live);
 
     /// <summary>
+    /// One comparison pass and everything derived from it — including the
+    /// messages that decide whether it may become a plan at all.
+    /// </summary>
+    private sealed record Compared(
+        SnapshotComparer.Comparison Comparison,
+        Snapshots Snapshots,
+        string? UpdateScript,
+        IReadOnlyList<ChangeScript> ChangeScripts,
+        IReadOnlyList<RawMessage> Messages);
+
+    /// <summary>
     /// The shadow pipeline (ADR-0007): desired state applied to a scratch
     /// schema, both sides read back in comparison mode, compared structurally.
     /// An index difference refuses — slice P2 — because a plan that cannot see
     /// a difference must not claim a sync (§2 of the dev plan).
     /// </summary>
-    private async Task<(SnapshotComparer.Comparison, Snapshots, string?)> CompareCoreAsync(
+    private async Task<Compared> CompareCoreAsync(
         IDesiredState desiredState, string connectionString, CancellationToken cancellationToken)
     {
         var state = PgDesiredState.From(desiredState);
@@ -188,7 +222,98 @@ public sealed class PostgresProvider : IDatabaseProvider
         var statements = DdlSynthesizer.Synthesize(schema, desired, live);
         var updateScript = statements.Count == 0 ? null : ComposeScript(schema, statements);
 
-        return (comparison, new Snapshots(desired, live), updateScript);
+        // Synthesis is what executes here, so an unsynthesized change is not a
+        // missing explanation — it is a change that cannot happen. Reported as an
+        // Error on the comparison, which fails every verb that reads it rather
+        // than handing anyone a plan the provider cannot carry out.
+        var messages = SynthesisGap(comparison.Changes, statements) is { } gap
+            ? new[] { gap }
+            : Array.Empty<RawMessage>();
+
+        return new Compared(comparison, new Snapshots(desired, live), updateScript,
+            AttributeStatements(statements, desired, live), messages);
+    }
+
+    /// <summary>
+    /// The per-change slices the plan carries to explain itself — descriptive only:
+    /// what executes is always the whole update script. Attribution is exact here
+    /// rather than inferred, because synthesis records the table each statement
+    /// belongs to as it emits it; there is no script to parse back.
+    ///
+    /// <c>Rebuild</c> is always false: this provider alters in place and has no
+    /// table-rebuild path, so claiming one would warn about a cost nobody pays.
+    /// </summary>
+    private static IReadOnlyList<ChangeScript> AttributeStatements(
+        IReadOnlyList<DdlSynthesizer.Statement> statements,
+        IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live)
+    {
+        var desiredByName = desired.ToDictionary(t => t.Name, StringComparer.Ordinal);
+        var liveByName = live.ToDictionary(t => t.Name, StringComparer.Ordinal);
+
+        return statements
+            .GroupBy(s => s.ObjectName, StringComparer.Ordinal)
+            .Select(g => new ChangeScript(
+                g.Key,
+                string.Join("\n", g.Select(s => s.Sql)),
+                Rebuild: false,
+                AddsNotNullWithoutDefault: AddsNotNullWithoutDefault(
+                    desiredByName.GetValueOrDefault(g.Key),
+                    liveByName.GetValueOrDefault(g.Key))))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Whether this table gains a NOT NULL column with nothing to fill it — the
+    /// hazard <c>SCHEMORPH101</c> exists for: the statement fails outright on a
+    /// table that already holds rows. Judged on the model rather than on the
+    /// emitted text, so it is proven, not pattern-matched.
+    ///
+    /// Only for a table that already exists: the same column in a fresh
+    /// <c>CREATE TABLE</c> is harmless, because there are no rows to violate it.
+    /// Identity and generated columns are excluded — the engine supplies their
+    /// values, so NOT NULL without a default is not a gap there.
+    /// </summary>
+    private static bool AddsNotNullWithoutDefault(PgTable? want, PgTable? have)
+    {
+        if (want is null || have is null) return false;
+
+        var existing = have.Columns.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
+
+        return want.Columns.Any(c =>
+            !existing.Contains(c.Name)
+            && c.NotNull
+            && c.Default is null
+            && c.Identity == PgIdentity.None
+            && c.GeneratedAs is null);
+    }
+
+    /// <summary>
+    /// The provider checking its own work: every change the comparison reported
+    /// must be carried by at least one synthesized statement. The two halves reach
+    /// their answers independently — the comparison over structural equality, the
+    /// synthesizer over per-member differences — so a disagreement is possible in
+    /// principle and must never be silent. Where it happens the apply would run
+    /// nothing and still report the change as done, writing a success row into the
+    /// audit trail for work that never happened; the plan would then come back
+    /// unchanged on the next diff, forever.
+    /// </summary>
+    internal static RawMessage? SynthesisGap(
+        IReadOnlyList<RawChange> changes, IReadOnlyList<DdlSynthesizer.Statement> statements)
+    {
+        if (changes.Count == 0) return null;
+
+        var carried = statements.Select(s => s.ObjectName).ToHashSet(StringComparer.Ordinal);
+        var uncarried = changes
+            .Where(c => !carried.Contains(c.ObjectName))
+            .Select(c => $"{c.Operation} {c.ObjectType} {c.ObjectName}")
+            .ToList();
+
+        return uncarried.Count == 0
+            ? null
+            : new RawMessage("Error", "SCHEMORPH009",
+                $"The comparison reported {uncarried.Count} change(s) that synthesis produced no " +
+                $"statement for ({string.Join(", ", uncarried)}). Nothing was applied. This is a " +
+                "disagreement inside the provider, not a fault in the desired state — please report it.");
     }
 
     /// <summary>
@@ -197,10 +322,11 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// embedded expression texts are unqualified (comparison-mode snapshots),
     /// and the setting must not outlive the transaction that needs it.
     /// </summary>
-    private static string ComposeScript(string schema, IReadOnlyList<string> statements) =>
+    private static string ComposeScript(
+        string schema, IReadOnlyList<DdlSynthesizer.Statement> statements) =>
         $"CREATE SCHEMA IF NOT EXISTS {DesiredStateRenderer.Quote(schema)};\n" +
         $"SET LOCAL search_path TO {DesiredStateRenderer.Quote(schema)};\n" +
-        string.Join("\n", statements);
+        string.Join("\n", statements.Select(s => s.Sql));
 
     private static (IReadOnlyList<PgTable> Desired, IReadOnlyList<PgTable> Live) MaskExclusions(
         IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live, IReadOnlyList<RawChange> excluded)

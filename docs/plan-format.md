@@ -18,7 +18,7 @@ independent of the product version:
 - **Major** increments are breaking changes to existing properties. These are
   rare and deliberate.
 
-Current version: **`1.4`**.
+Current version: **`1.5`**.
 
 | Version | Change |
 |---|---|
@@ -26,13 +26,14 @@ Current version: **`1.4`**.
 | `1.1` | Added `planHash` (additive) — the apply-gate fingerprint |
 | `1.2` | `explanation` populated on every change; `sql` populated on `redefine` changes (the exact idempotent script) and on declarative changes whose slice of the update script is attributable (additive — both fields were reserved as `null` since 1.0) |
 | `1.3` | Added `atomicity` (additive) — the apply guarantee the provider declares ([ADR-0004 addendum](adr/0004-failure-semantics-and-resume.md)). Excluded from `planHash`, so a hash reviewed under 1.2 still gates a 1.3 apply |
-| `1.4` | `planHash` now binds the **executed script text** — the declarative update script the apply runs and each `redefine` change's `sql` — in addition to the action shape. Bugfix: the action tuples are an object-level summary, so two plans that touch the same objects with the same operations but different DDL (a column added vs. only a constraint re-added) used to share a hash; the gate now tells them apart. No JSON field changed — the plan document is byte-identical to 1.3 — but the same plan hashes to a new value, so a hash captured under ≤1.3 no longer matches (it fails closed: the apply refuses rather than running unreviewed DDL). The update-script text itself is not embedded in the JSON; reviewers read it via the review script / `diff --format sql` |
+| `1.4` | `planHash` now binds the **executed script text** — the declarative update script the apply runs, plus each change's `sql` — in addition to the action shape. Bugfix: the action tuples are an object-level summary, so two plans that touch the same objects with the same operations but different DDL (a column added vs. only a constraint re-added) used to share a hash; the gate now tells them apart. No JSON field changed — the plan document is byte-identical to 1.3 — but the same plan hashes to a new value, so a hash captured under ≤1.3 no longer matches (it fails closed: the apply refuses rather than running unreviewed DDL). The update-script text itself is not embedded in the JSON; reviewers read it via the review script / `diff --format sql` |
+| `1.5` | `changes[].sql` is populated on **every** provider's declarative changes (additive — the field was reserved as `null` since 1.0 and stayed null wherever a provider had no attribution). Two consequences worth stating: the safety lint that reads those slices (`SCHEMORPH101`, `SCHEMORPH102`) now has something to read on plans where it previously had nothing, so a plan can carry warnings it did not carry before; and because `planHash` binds each change's `sql` (since 1.4), the same plan hashes to a new value wherever the field went from `null` to text. A hash captured earlier fails closed — the apply refuses rather than running unreviewed DDL |
 
 ## Shape
 
 ```json
 {
-  "formatVersion": "1.4",
+  "formatVersion": "1.5",
   "planHash": "bd270dd7f6ba…(64 hex)",
   "atomicity": "partial",
   "hasChanges": true,
@@ -66,7 +67,7 @@ Current version: **`1.4`**.
 | Field | Type | Meaning |
 |---|---|---|
 | `formatVersion` | string | Format version (see Versioning above) |
-| `planHash` | string | SHA-256 fingerprint of exactly what would execute: each change's name, type, actions and risk in plan order, **plus the executed script** — the declarative update script and each `redefine` change's `sql` (since 1.4). Messages, `explanation` and `atomicity` are excluded (they describe a plan, they are not what it runs). Pass to `apply --expect-plan <hash>` (or MCP `schemorph_apply.expectedPlanHash`) to guarantee the apply runs the reviewed plan or refuses (`plan_mismatch`) |
+| `planHash` | string | SHA-256 fingerprint of exactly what would execute: each change's name, type, actions and risk in plan order, **plus the executed script** — the declarative update script and each change's `sql`, whatever its kind (since 1.4). Messages, `explanation` and `atomicity` are excluded (they describe a plan, they are not what it runs). Pass to `apply --expect-plan <hash>` (or MCP `schemorph_apply.expectedPlanHash`) to guarantee the apply runs the reviewed plan or refuses (`plan_mismatch`) |
 | `atomicity` | string | What an apply of this plan guarantees on partial failure: `partial` (stages commit independently; a failure leaves earlier stages applied — SQL Server's mode) or `transactional` (the apply lands whole or not at all; only claimed where the tool owns the transaction boundary). See [failure-semantics.md](failure-semantics.md). Excluded from `planHash` |
 | `hasChanges` | bool | `true` when `changes` is non-empty; pairs with exit code 2 on `diff` |
 | `hasDestructiveChanges` | bool | `true` when any change carries `risk: "destructive"` |
@@ -75,7 +76,7 @@ Current version: **`1.4`**.
 | `changes[].objectType` | string | Provider-raw object type (`Table`, `View`, `Procedure`, ...) |
 | `changes[].actions` | string[] | What will be done, in order. Today always one verb; composite operations (e.g. a rebuild = `["drop", "create"]`) become expressible without a breaking change |
 | `changes[].risk` | string | `safe` \| `warning` \| `destructive` (design principle §4: destructive = a DROP of anything holding data) |
-| `changes[].sql` | string? | The SQL this change will execute. On `redefine` changes: the exact idempotent script, verbatim. On declarative changes: this change's slice of the DacFx update script, attributed from the generator's own per-object markers, or — when the generator announces the work under a dependent object it names in its own right (a check, default, or foreign-key constraint) — from the table the segment's `ALTER TABLE` statements themselves target. `null` whenever attribution is not certain: an unreadable segment, statements spanning more than one table, or a target the comparison did not report. A missing slice is honest, a wrong one is not. (What executes on the declarative path is always the whole publish, not these slices.) Descriptive only: excluded from `planHash` |
+| `changes[].sql` | string? | The SQL this change will execute. On `redefine` changes: the exact idempotent script, verbatim. On declarative changes: this change's slice of the update script. How the slice is obtained is the provider's business and differs by engine — where the script comes from a generator it is attributed from that generator's own per-object markers (or, when the work is announced under a dependent object the generator names in its own right — a check, default, or foreign-key constraint — from the table the segment's `ALTER TABLE` statements target); where the provider synthesizes the script itself, each statement records the object it belongs to as it is emitted, so attribution is exact. `null` whenever attribution is not certain: an unreadable segment, statements spanning more than one object, or a target the comparison did not report. A missing slice is honest, a wrong one is not. What executes on the declarative path is always the whole publish, not these slices — but they are **bound by `planHash`** (since 1.4), so a slice that changes invalidates a reviewed hash |
 | `changes[].explanation` | string? | Deterministic rationale for the change: why it is planned and how it will be performed (e.g. checksum-difference reasoning on redefines, data-loss statement on destructive drops). Descriptive only: excluded from `planHash` |
 | `messages` | array | Diagnostics attached to the plan (gated-out destructive changes, skipped non-model files, engine warnings) — see [errors.md § Provider messages](errors.md#provider-messages) |
 

@@ -40,6 +40,36 @@ public class SnapshotComparerTests
     }
 
     [Fact]
+    public void Columns_that_differ_only_in_position_are_not_a_change()
+    {
+        // A column added to an existing table lands last no matter where the
+        // desired state declares it, and no ALTER moves it. Reading the
+        // difference as a change plans work no statement can carry out — the
+        // plan never empties and the apply has nothing to run.
+        var id = new PgColumn("Id", "uuid", true, null);
+        var note = new PgColumn("Note", "text", false, null);
+        var stamp = new PgColumn("Stamp", "timestamptz", true, "now()");
+
+        var declared = Table("A", id, note, stamp);
+        var live = Table("A", id, stamp, note);
+
+        Assert.Empty(SnapshotComparer.Compare([declared], [live]).Changes);
+    }
+
+    [Fact]
+    public void A_reordered_column_whose_definition_also_changed_is_still_a_change()
+    {
+        // The order-insensitive comparison must not become a blind one: the
+        // reordered column carries a real definition difference here.
+        var id = new PgColumn("Id", "uuid", true, null);
+        var declared = Table("A", id, new PgColumn("Note", "text", true, null));
+        var live = Table("A", new PgColumn("Note", "text", false, null), id);
+
+        var change = Assert.Single(SnapshotComparer.Compare([declared], [live]).Changes);
+        Assert.Equal(new RawChange("Change", "Table", "A"), change);
+    }
+
+    [Fact]
     public void A_constraint_difference_is_a_table_change_regardless_of_order()
     {
         var pk = new PgConstraint("PK_A", "PRIMARY KEY (\"Id\")");

@@ -28,6 +28,27 @@ public static class ReviewScriptRenderer
     /// </summary>
     public sealed class ScriptUnavailableException(string message) : Exception(message);
 
+    /// <summary>
+    /// Why the script is missing is the provider's to say, not this renderer's to
+    /// assert: diagnostic codes are provider-specific, so naming one here states a
+    /// cause that may never have fired while hiding the one that did. The plan
+    /// carries whatever was actually reported, so the codes present are echoed and
+    /// the reader is sent to them — the same correction SCHEMORPH008 needed, where
+    /// asserting a cause was itself the misdirection.
+    /// </summary>
+    private static string ReportedReason(Plan plan)
+    {
+        var codes = plan.Messages
+            .Where(m => m.Severity is "Error" or "Warning")
+            .Select(m => m.Code)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        return codes.Count == 0
+            ? "The plan reports no diagnostic explaining the absence. "
+            : $"The plan reports: {string.Join(", ", codes)}. ";
+    }
+
     /// <param name="target">Connection string; redacted before it is written.</param>
     /// <param name="generatedAt">Injected so the output is reproducible under test.</param>
     public static string Render(Plan plan, string target, DateTimeOffset generatedAt)
@@ -43,9 +64,10 @@ public static class ReviewScriptRenderer
         if (declarative.Count > 0 && string.IsNullOrWhiteSpace(updateScript))
         {
             throw new ScriptUnavailableException(
-                $"The plan has {declarative.Count} declarative change(s) but the engine could not " +
-                "generate their update script (SCHEMORPH002), so a review document would omit them. " +
-                "Review the JSON plan instead, or re-run once the generation error is resolved.");
+                $"The plan has {declarative.Count} declarative change(s) but no update script was " +
+                "produced for them, so a review document would omit them. " +
+                ReportedReason(plan) +
+                "Review the JSON plan instead, or re-run once the cause is resolved.");
         }
 
         var hash = PlanFingerprint.Compute(plan);

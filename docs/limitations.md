@@ -65,6 +65,27 @@ own normalizer, in the consumer of that engine. The cure is worse than the disea
 and a blunt alternative (ignoring check constraints in the comparison) would hide
 real changes, which [Design Principles §4](design-principles.md) forbids.
 
+## Column order is not compared
+
+Schemorph diffs state, not ordinal position. A column's physical position is
+neither declared in a model nor reachable by an `ALTER`: a column added to an
+existing table lands last, whatever order the desired state lists it in, and a
+generated file typically lists it ahead of trailing audit columns. Both providers
+therefore exclude ordinal position from the comparison — SQL Server through
+`IgnoreColumnOrder`, PostgreSQL by comparing columns by name.
+
+The alternative is worse in a different way on each engine. On SQL Server,
+honoring the difference makes the engine rebuild the whole table (new table, copy
+rows, drop, rename) to re-seat a column, turning an additive change into full data
+motion. On PostgreSQL there is no rebuild path at all, so the difference becomes a
+change no statement can carry out: the plan never empties and the apply has nothing
+to run.
+
+**What this means for you:** if column position is material to your application —
+a positional `INSERT`, a `SELECT *` whose column order is consumed — name the
+columns explicitly. Schemorph will not reorder a table to match a file, and does
+not report the difference as drift.
+
 ## Ordering across strategies is documented, not automatic
 
 Schemorph runs the declarative publish, then re-definitions, then versioned
@@ -103,8 +124,22 @@ a generated desired state never emits them, so treating their absence as "delete
 them" would destroy live principals. Manage them through a separate operational
 path.
 
-## One database engine
+## Two database engines, and one of them is partial
 
-SQL Server only. PostgreSQL is a planned second provider
-([ADR-0003](adr/0003-postgres-as-second-provider.md)) with no committed timeline; if you need Postgres
-today, Atlas, sqldef, or Flyway will serve you better.
+SQL Server is complete. PostgreSQL is released **up to a declared scope** — tables,
+columns, constraints and the target schema ([ADR-0003](adr/0003-postgres-as-second-provider.md),
+[ADR-0007](adr/0007-postgres-engine-selection.md)). Everything outside that
+declaration — indexes, views, functions, procedures, triggers, versioned
+migrations — is **refused with an error naming what the provider does support**,
+never half-planned. The scope grows in releasable slices, with no committed
+timeline; if you need the refused parts on PostgreSQL today, Atlas, sqldef, or
+Flyway will serve you better.
+
+The refusal is the contract, not a bug: a plan that cannot see a difference must
+not claim a sync. Ask the provider what it covers with `schemorph schema` — the
+capability list is part of the machine-readable manifest.
+
+Parity means identical contract and equal capability range — deliberately **not**
+identical limitations. The expression-comparison defect above is SQL-Server-specific:
+the PostgreSQL comparison normalizes both sides through the engine's own renderings,
+so enum-style CHECK constraints converge there.

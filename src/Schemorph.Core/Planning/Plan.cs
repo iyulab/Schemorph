@@ -69,7 +69,7 @@ public sealed record Plan(
     /// additions (consumers must ignore unknown properties); the major version
     /// increments for breaking changes. Independent of the product version.
     /// </summary>
-    public const string CurrentFormatVersion = "1.4";   // 1.4: planHash binds the executed script text (bugfix — see PlanFingerprint)
+    public const string CurrentFormatVersion = "1.5";   // 1.5: per-change sql populated on every provider (see docs/plan-format.md)
 
     public bool HasChanges => Actions.Count > 0;
 

@@ -59,13 +59,24 @@ internal static class SnapshotComparer
         return new Comparison(changes, outOfScope);
     }
 
-    // Records compare by value; order matters on columns (attnum order is the
-    // table's own order) but NOT on constraints/indexes, which the reader
-    // returns name-sorted already — sorting again here keeps the comparison
-    // independent of that implementation detail.
+    // Records compare by value, and no member's catalog order is part of a
+    // table's identity: this comparison asks whether the two schemas mean the
+    // same thing, and both sides are read in the engine's own order (columns by
+    // attnum, constraints/indexes name-sorted), which is a reading artifact.
+    // Sorting here makes the answer independent of it.
 
+    // Column order specifically is NOT state. This is the project-wide policy —
+    // "Schemorph diffs state, not ordinal position" — that the SQL Server
+    // provider states as `IgnoreColumnOrder`; ordinal position is neither
+    // declared in a model nor reachable by an ALTER. A column added to an
+    // existing table lands last whatever the desired state says, so honoring
+    // the difference plans a change no statement can carry out: the plan never
+    // empties, and the apply has nothing to run. Where such a difference is
+    // material (a positional `INSERT`, `SELECT *`), the remedy is naming the
+    // columns, not rebuilding the table.
     private static bool ColumnsEqual(PgTable a, PgTable b)
-        => a.Columns.SequenceEqual(b.Columns);
+        => a.Columns.OrderBy(c => c.Name, StringComparer.Ordinal)
+            .SequenceEqual(b.Columns.OrderBy(c => c.Name, StringComparer.Ordinal));
 
     private static bool ConstraintsEqual(PgTable a, PgTable b)
         => a.Constraints.OrderBy(c => c.Name, StringComparer.Ordinal)

@@ -64,10 +64,11 @@ directly makes the tool's own record of the change wrong.
   the text executed. Each change is listed above it, with destructive ones marked.
 - **Stage 2** — each idempotent re-definition, in dependency order, verbatim.
 
-If the engine cannot generate the declarative script (`SCHEMORPH002`), the command
+If no update script was produced for the plan's declarative changes, the command
 **fails** with `review_script_unavailable` instead of emitting a document that
 silently omits a stage. An approval artifact missing changes is worse than no
-artifact: it gets signed anyway.
+artifact: it gets signed anyway. The failure quotes whichever diagnostic the plan
+carries for it, because the cause is the provider's to report.
 
 ## Pairing it with CI
 

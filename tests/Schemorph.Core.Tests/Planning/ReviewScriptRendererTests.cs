@@ -120,8 +120,7 @@ public sealed class ReviewScriptRendererTests
     [Fact]
     public void A_missing_update_script_fails_rather_than_emitting_a_partial_document()
     {
-        // SCHEMORPH002: the engine could not generate the declarative script. A
-        // document holding only the re-definitions would be signed for changes
+        // A document holding only the re-definitions would be signed for changes
         // nobody read — the exact failure mode this feature exists to remove.
         var plan = PlanOf(
             Declarative("dbo.Orders"),
@@ -130,7 +129,35 @@ public sealed class ReviewScriptRendererTests
         var ex = Assert.Throws<ReviewScriptRenderer.ScriptUnavailableException>(
             () => ReviewScriptRenderer.Render(plan, "conn", At));
 
+        Assert.Contains("1 declarative change(s)", ex.Message);
+    }
+
+    [Fact]
+    public void The_refusal_echoes_the_reported_diagnostic_rather_than_asserting_one()
+    {
+        // Which diagnostic explains a missing script is provider-specific — a code
+        // one provider emits, another cannot. Naming a fixed one states a cause
+        // that may never have fired and hides the one that did, so the refusal
+        // quotes what the plan actually carries.
+        var plan = new Plan(Plan.CurrentFormatVersion, [Declarative("dbo.Orders")],
+            [new PlanMessage("Warning", "SCHEMORPH002", "Update-script generation failed.")]);
+
+        var ex = Assert.Throws<ReviewScriptRenderer.ScriptUnavailableException>(
+            () => ReviewScriptRenderer.Render(plan, "conn", At));
+
         Assert.Contains("SCHEMORPH002", ex.Message);
+    }
+
+    [Fact]
+    public void The_refusal_says_so_when_no_diagnostic_explains_the_absence()
+    {
+        var plan = PlanOf(Declarative("dbo.Orders"));
+
+        var ex = Assert.Throws<ReviewScriptRenderer.ScriptUnavailableException>(
+            () => ReviewScriptRenderer.Render(plan, "conn", At));
+
+        Assert.Contains("no diagnostic", ex.Message);
+        Assert.DoesNotContain("SCHEMORPH", ex.Message);
     }
 
     [Fact]

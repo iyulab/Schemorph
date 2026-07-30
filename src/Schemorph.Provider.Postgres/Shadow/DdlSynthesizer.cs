@@ -22,15 +22,23 @@ namespace Schemorph.Provider.Postgres.Shadow;
 /// </summary>
 internal static class DdlSynthesizer
 {
-    public static IReadOnlyList<string> Synthesize(
+    /// <summary>
+    /// One statement and the table it carries. Every statement belongs to exactly
+    /// one table, which is what lets the caller check its own work: a change the
+    /// comparison reported and synthesis produced no statement for is an internal
+    /// disagreement, and the apply must not report it as done.
+    /// </summary>
+    public sealed record Statement(string ObjectName, string Sql);
+
+    public static IReadOnlyList<Statement> Synthesize(
         string targetSchema, IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live)
     {
-        var constraintDrops = new List<string>();
-        var tableCreates = new List<string>();
-        var columnChanges = new List<string>();
-        var constraintAdds = new List<string>();
-        var foreignKeyAdds = new List<string>();
-        var tableDrops = new List<string>();
+        var constraintDrops = new List<Statement>();
+        var tableCreates = new List<Statement>();
+        var columnChanges = new List<Statement>();
+        var constraintAdds = new List<Statement>();
+        var foreignKeyAdds = new List<Statement>();
+        var tableDrops = new List<Statement>();
 
         var liveByName = live.ToDictionary(t => t.Name, StringComparer.Ordinal);
         var desiredNames = desired.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
@@ -41,10 +49,10 @@ internal static class DdlSynthesizer
 
             if (!liveByName.TryGetValue(want.Name, out var have))
             {
-                tableCreates.Add(CreateTable(qualified, want));
+                tableCreates.Add(new Statement(want.Name, CreateTable(qualified, want)));
                 foreach (var constraint in want.Constraints)
                 {
-                    AddConstraint(qualified, constraint, constraintAdds, foreignKeyAdds);
+                    AddConstraint(want.Name, qualified, constraint, constraintAdds, foreignKeyAdds);
                 }
                 continue;
             }
@@ -57,7 +65,8 @@ internal static class DdlSynthesizer
         {
             if (!desiredNames.Contains(have.Name))
             {
-                tableDrops.Add($"DROP TABLE {Qualified(targetSchema, have.Name)};");
+                tableDrops.Add(new Statement(
+                    have.Name, $"DROP TABLE {Qualified(targetSchema, have.Name)};"));
             }
         }
 
@@ -73,16 +82,17 @@ internal static class DdlSynthesizer
     }
 
     private static void SynthesizeColumns(
-        string qualified, PgTable want, PgTable have, List<string> statements)
+        string qualified, PgTable want, PgTable have, List<Statement> statements)
     {
         var haveByName = have.Columns.ToDictionary(c => c.Name, StringComparer.Ordinal);
         var wantNames = want.Columns.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
+        void Add(string sql) => statements.Add(new Statement(want.Name, sql));
 
         foreach (var column in want.Columns)
         {
             if (!haveByName.TryGetValue(column.Name, out var existing))
             {
-                statements.Add($"ALTER TABLE {qualified} ADD COLUMN {DesiredStateRenderer.RenderColumn(column)};");
+                Add($"ALTER TABLE {qualified} ADD COLUMN {DesiredStateRenderer.RenderColumn(column)};");
                 continue;
             }
             if (column == existing) continue;
@@ -93,8 +103,8 @@ internal static class DdlSynthesizer
             // rebuilt. Honest and visible: it is a drop plus an add.
             if (column.GeneratedAs != existing.GeneratedAs)
             {
-                statements.Add($"ALTER TABLE {qualified} DROP COLUMN {name};");
-                statements.Add($"ALTER TABLE {qualified} ADD COLUMN {DesiredStateRenderer.RenderColumn(column)};");
+                Add($"ALTER TABLE {qualified} DROP COLUMN {name};");
+                Add($"ALTER TABLE {qualified} ADD COLUMN {DesiredStateRenderer.RenderColumn(column)};");
                 continue;
             }
 
@@ -102,17 +112,17 @@ internal static class DdlSynthesizer
             {
                 // No USING clause: where the engine cannot cast, its own error
                 // is the honest outcome, not a guessed conversion.
-                statements.Add($"ALTER TABLE {qualified} ALTER COLUMN {name} TYPE {column.DataType};");
+                Add($"ALTER TABLE {qualified} ALTER COLUMN {name} TYPE {column.DataType};");
             }
             if (column.Default != existing.Default)
             {
-                statements.Add(column.Default is null
+                Add(column.Default is null
                     ? $"ALTER TABLE {qualified} ALTER COLUMN {name} DROP DEFAULT;"
                     : $"ALTER TABLE {qualified} ALTER COLUMN {name} SET DEFAULT {column.Default};");
             }
             if (column.NotNull != existing.NotNull)
             {
-                statements.Add(column.NotNull
+                Add(column.NotNull
                     ? $"ALTER TABLE {qualified} ALTER COLUMN {name} SET NOT NULL;"
                     : $"ALTER TABLE {qualified} ALTER COLUMN {name} DROP NOT NULL;");
             }
@@ -120,11 +130,11 @@ internal static class DdlSynthesizer
             {
                 if (existing.Identity != PgIdentity.None)
                 {
-                    statements.Add($"ALTER TABLE {qualified} ALTER COLUMN {name} DROP IDENTITY;");
+                    Add($"ALTER TABLE {qualified} ALTER COLUMN {name} DROP IDENTITY;");
                 }
                 if (column.Identity != PgIdentity.None)
                 {
-                    statements.Add(
+                    Add(
                         $"ALTER TABLE {qualified} ALTER COLUMN {name} ADD{DesiredStateRenderer.IdentityClause(column)};");
                 }
             }
@@ -134,14 +144,14 @@ internal static class DdlSynthesizer
         {
             if (!wantNames.Contains(column.Name))
             {
-                statements.Add($"ALTER TABLE {qualified} DROP COLUMN {DesiredStateRenderer.Quote(column.Name)};");
+                Add($"ALTER TABLE {qualified} DROP COLUMN {DesiredStateRenderer.Quote(column.Name)};");
             }
         }
     }
 
     private static void SynthesizeConstraints(
         string qualified, PgTable want, PgTable have,
-        List<string> drops, List<string> adds, List<string> foreignKeyAdds)
+        List<Statement> drops, List<Statement> adds, List<Statement> foreignKeyAdds)
     {
         var haveByName = have.Constraints.ToDictionary(c => c.Name, StringComparer.Ordinal);
         var wantByName = want.Constraints.ToDictionary(c => c.Name, StringComparer.Ordinal);
@@ -152,7 +162,8 @@ internal static class DdlSynthesizer
                 && target.Definition != constraint.Definition;
             if (replaced || !wantByName.ContainsKey(constraint.Name))
             {
-                drops.Add($"ALTER TABLE {qualified} DROP CONSTRAINT {DesiredStateRenderer.Quote(constraint.Name)};");
+                drops.Add(new Statement(want.Name,
+                    $"ALTER TABLE {qualified} DROP CONSTRAINT {DesiredStateRenderer.Quote(constraint.Name)};"));
             }
         }
 
@@ -162,19 +173,20 @@ internal static class DdlSynthesizer
                 && existing.Definition == constraint.Definition;
             if (!unchanged)
             {
-                AddConstraint(qualified, constraint, adds, foreignKeyAdds);
+                AddConstraint(want.Name, qualified, constraint, adds, foreignKeyAdds);
             }
         }
     }
 
     private static void AddConstraint(
-        string qualified, PgConstraint constraint, List<string> adds, List<string> foreignKeyAdds)
+        string objectName, string qualified, PgConstraint constraint,
+        List<Statement> adds, List<Statement> foreignKeyAdds)
     {
         var target = constraint.Definition.StartsWith("FOREIGN KEY", StringComparison.Ordinal)
             ? foreignKeyAdds
             : adds;
-        target.Add(
-            $"ALTER TABLE {qualified} ADD CONSTRAINT {DesiredStateRenderer.Quote(constraint.Name)} {constraint.Definition};");
+        target.Add(new Statement(objectName,
+            $"ALTER TABLE {qualified} ADD CONSTRAINT {DesiredStateRenderer.Quote(constraint.Name)} {constraint.Definition};"));
     }
 
     private static string CreateTable(string qualified, PgTable table)
