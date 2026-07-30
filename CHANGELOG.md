@@ -79,7 +79,11 @@ change **additively**: consumers must ignore properties they do not know.
   in-place form on the supported baseline. Losing an expression is performed in place and
   keeps every value, so it deliberately does not warn. Providers that never re-create a
   column leave the signal off, exactly as `SCHEMORPH102`'s table rebuild is off where
-  there is no rebuild path.
+  there is no rebuild path. Worth stating for upgraders: a plan can carry this warning
+  where it previously carried none, so a pipeline gating on the `SCHEMORPH1xx` band —
+  the shape the [plan-comment recipe](docs/recipes/github-actions-plan-comment.md)
+  suggests — can fail on a change that passed before. That is the warning doing its job,
+  but it arrives without the plan itself having changed.
 - **Plan format 1.5** — `changes[].sql` populated on every provider (additive; the field
   has existed since 1.0). Two consequences are documented in
   [plan-format.md](docs/plan-format.md): a plan can now carry lint warnings it did not

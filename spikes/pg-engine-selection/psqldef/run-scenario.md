@@ -3,7 +3,12 @@
 Binary: `psqldef_windows_amd64.zip` from the v3.11.16 release (not committed).
 Connection: `-U spike_app -h 127.0.0.1 -p 15544 spike_target` (NOSUPERUSER role), desired via `--file`.
 
-## Step outputs (verbatim, trimmed to the decisive lines)
+Schema and table names were renamed after the fact for publication; the outputs below are
+otherwise as captured, and re-running the scenario reproduces them under any schema name —
+the decisive finding depends on the identifiers being *quoted and mixed-case*, not on what
+they are called.
+
+## Step outputs (trimmed to the decisive lines)
 
 **(1) empty DB, v1 `--dry-run`** — full CREATE script for all 4 tables, wrapped in
 `BEGIN; … COMMIT;`. Quoted identifiers preserved in CREATE TABLE output.
