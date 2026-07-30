@@ -70,7 +70,7 @@ public class CatalogReaderTests
     [SkippableFact]
     public async Task Identity_and_generated_columns_are_read_as_what_they_are()
     {
-        // Before cycle-78 both rendered as plain DEFAULT — wrong SQL for
+        // Both used to render as a plain DEFAULT — wrong SQL for
         // GENERATED ALWAYS AS ... STORED, and a lost identity clause.
         await using var schema = await PgTestSchema.CreateAsync("""
             CREATE TABLE "Metered" (

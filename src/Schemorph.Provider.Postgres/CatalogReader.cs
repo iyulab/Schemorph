@@ -64,7 +64,7 @@ internal static class CatalogReader
 
     // attidentity/attgenerated route the pg_attrdef expression: for a generated
     // column it is the generation expression, not a DEFAULT — rendering it as
-    // DEFAULT is wrong SQL (cycle-76). Identity sequence options come from the
+    // DEFAULT is wrong SQL. Identity sequence options come from the
     // internally-dependent ('i') sequence so non-default START/INCREMENT/…
     // survive a round trip; seqtypid lets the renderer tell a real MAXVALUE
     // from the type's own ceiling.

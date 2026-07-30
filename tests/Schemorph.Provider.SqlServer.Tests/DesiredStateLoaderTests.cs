@@ -58,7 +58,7 @@ public sealed class DesiredStateLoaderTests : IDisposable
     [Fact]
     public void Sqlcmd_include_directive_is_skipped_with_a_warning()
     {
-        // The SSDT PostDeployment case that broke real-world adoption (cycle-21).
+        // The SSDT PostDeployment case that broke real-world adoption.
         var path = WriteFile(@"Scripts\Script.PostDeployment.sql",
             ":r ..\\Scripts_gen\\Script.PostDeployment.RefreshViews.sql");
 

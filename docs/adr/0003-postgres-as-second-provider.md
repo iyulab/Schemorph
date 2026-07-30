@@ -113,7 +113,7 @@ and then says what that slice covers — not when the next one arrives.
 ## Addendum (2026-07-22): the selection surface, shaped by the second implementation
 
 This ADR deliberately left the provider-selection surface unspecified "until a second
-implementation exists to shape it". It exists (slice P1), and shaped it thus: the
+implementation exists to shape it". It exists (the table core), and shaped it thus: the
 composition root reads **`SCHEMORPH_PROVIDER`** (`sqlserver`, the default, or
 `postgres`) and hands every surface the provider paired with its own ledger store.
 

@@ -9,6 +9,21 @@ change **additively**: consumers must ignore properties they do not know.
 
 ### Fixed
 
+- **Removing a column's generation expression no longer discards its values**
+  (PostgreSQL). Both directions of a generation-expression change were synthesized the
+  same way — drop the column, add it back — on the reasoning that a generated column's
+  contents are derived and therefore reproducible. That reasoning inverts at exactly the
+  point this change is made: once the desired state removes the expression, the values
+  become ordinary data, and the expression that could recompute them is the thing being
+  removed. So an apply that was asked to *keep* a column and stop computing it returned
+  every row of it as `NULL`, with no warning, on a change whose plan reads as an ordinary
+  in-place alter. Dropping an expression is now `ALTER COLUMN … DROP EXPRESSION`, which the
+  engine performs in place and losslessly, and a type, default or `NOT NULL` difference on
+  the same column still gets its own statement. The other direction is unchanged and
+  remains a rebuild — there is no in-place form for it on the supported baseline, and the
+  new values are the expression's output by definition. Pinned by a live test that loads
+  rows, converts, and asserts both the retained values and an empty re-diff.
+
 - **Adding a column to an existing table no longer drifts forever on PostgreSQL.**
   The engine appends a new column whatever order the desired state lists it in, so a
   file that places it ahead of trailing audit columns can never match the live table
@@ -53,14 +68,42 @@ change **additively**: consumers must ignore properties they do not know.
   the emitted text: it fires only for a table that already exists, and never for
   identity or generated columns, where the engine supplies the value. A table rebuild
   is never claimed — this provider alters in place and has no rebuild path.
+- **`SCHEMORPH107` — a plan says when a column is re-created rather than altered.** A
+  change is planned per object, so a table entry reads as one in-place alter even when
+  carrying out the request means dropping a column and adding it back; the table and its
+  other columns survive, that column's values do not, and nothing in the plan said so.
+  The new lint code says it, in the same warning band and on the same terms as the rest:
+  judged on the model rather than on the emitted text, so it fires only where it is
+  proven, and it never changes the exit code. On PostgreSQL one shape reaches it — a
+  column that gains a generation expression or changes the one it has, which has no
+  in-place form on the supported baseline. Losing an expression is performed in place and
+  keeps every value, so it deliberately does not warn. Providers that never re-create a
+  column leave the signal off, exactly as `SCHEMORPH102`'s table rebuild is off where
+  there is no rebuild path.
 - **Plan format 1.5** — `changes[].sql` populated on every provider (additive; the field
   has existed since 1.0). Two consequences are documented in
   [plan-format.md](docs/plan-format.md): a plan can now carry lint warnings it did not
-  carry before, and because `planHash` binds each change's `sql` (since 1.4), the same
-  plan hashes to a new value wherever the field went from `null` to text. Earlier hashes
+  carry before, and every plan hashes to a new value (the slice is bound by `planHash`
+  since 1.4, and the fingerprint's delimiters changed — see below). Earlier hashes
   fail closed.
 
 ### Changed
+
+- **The apply gate's fingerprint can no longer have its boundaries moved by the content
+  it hashes.** `planHash` is a SHA-256 over the plan's shape and the executed script, and
+  the parts were joined with a pipe between an action's members and a newline between
+  actions — two characters SQL text holds routinely, since a change's DDL slice is
+  multi-line and may contain any printable character. Where a delimiter can occur inside
+  the data, it is the content that decides where one field ends and the next begins, so
+  two materially different plans can in principle reach the same input string and
+  therefore the same hash — and this hash exists precisely so that a reviewer's signature
+  cannot be transferred to a different apply. The boundary between the shape and the
+  script was already delimited by a character neither input can contain; the same
+  treatment now applies inside the shape (`US` between an action's members, `RS` between
+  actions), so every boundary comes from the encoding rather than from the data. Pinned by
+  tests that construct two plans whose old encodings collided. No plan property changed,
+  but the same plan hashes to a different value than it did in 0.5.2 — a hash captured
+  earlier fails closed, which is the designed direction.
 
 - **[plan-format.md](docs/plan-format.md) no longer understates what `planHash` covers.**
   It described `changes[].sql` as "excluded from `planHash`", which stopped being true in
@@ -68,6 +111,14 @@ change **additively**: consumers must ignore properties they do not know.
   would have believed an attributed slice could change without invalidating a signed
   hash — the exact false assurance the fingerprint exists to remove. The field row and
   the `planHash` row now both state that every change's `sql` is bound, whatever its kind.
+- **A refusal no longer points at a label the reader cannot look up.** Two PostgreSQL
+  refusals ended with an internal development-plan label — *index changes (…) — slice P2*,
+  *programmable objects (…) — slice P3* — which named nothing a user of the released tool
+  can find, in the one message whose whole job is to say what is and is not handled. The
+  refusals now name the unhandled work and stop there; what *is* handled still arrives
+  with them, from the declared-capability hint that has always accompanied them. The same
+  sweep removed internal-only references from source comments and test names throughout,
+  so what ships explains itself from what ships.
 - **[limitations.md](docs/limitations.md) describes two providers instead of one.** It
   still said SQL Server was the only engine and PostgreSQL a plan, which stopped being
   true at 0.5.0. It now states the declared PostgreSQL scope, that everything outside

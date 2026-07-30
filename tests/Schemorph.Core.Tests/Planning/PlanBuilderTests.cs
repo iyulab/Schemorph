@@ -185,6 +185,7 @@ public class PlanBuilderTests
             {
                 new RawChange("Change", "Table", "dbo.Strict"),
                 new RawChange("Change", "Table", "dbo.Rebuilt"),
+                new RawChange("Change", "Table", "dbo.Recast"),
                 new RawChange("Delete", "Table", "dbo.Gone"),
             },
             Array.Empty<RawMessage>(), UpdateScript: "(whole)",
@@ -192,6 +193,7 @@ public class PlanBuilderTests
             {
                 new ChangeScript("dbo.Strict", "ALTER TABLE ...", Rebuild: false, AddsNotNullWithoutDefault: true),
                 new ChangeScript("dbo.Rebuilt", "(rebuild sql)", Rebuild: true),
+                new ChangeScript("dbo.Recast", "(drop and add a column)", Rebuild: false, RecreatesColumn: true),
             });
 
         var plan = PlanBuilder.Build(result, allowDestructive: true);
@@ -199,9 +201,13 @@ public class PlanBuilderTests
         Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH101" && m.Text.Contains("dbo.Strict"));
         Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH102" && m.Text.Contains("dbo.Rebuilt"));
         Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH103" && m.Text.Contains("dbo.Gone"));
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH107" && m.Text.Contains("dbo.Recast"));
+        // The table-level entry that carries it still reads as one alter — which is
+        // why the warning has to exist: only SCHEMORPH107 names the column loss.
+        Assert.Equal(PlanOperation.Alter, plan.Actions.Single(a => a.ObjectName == "dbo.Recast").Operation);
         // Lint never escalates: warnings only, and the plan itself is untouched.
         Assert.All(plan.Messages, m => Assert.Equal("Warning", m.Severity));
-        Assert.Equal(3, plan.Actions.Count);
+        Assert.Equal(4, plan.Actions.Count);
     }
 
     [Fact]

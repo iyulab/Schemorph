@@ -5,9 +5,9 @@ using Schemorph.Core.Providers;
 namespace Schemorph.Provider.Postgres.Tests;
 
 /// <summary>
-/// The P1 stopping point, exercised through the CORE orchestration — the same
+/// The declared scope, exercised through the CORE orchestration — the same
 /// DiffOperation/ApplyOperation every surface renders. This is the contract
-/// layer of "MSSQL 수준": identical operations, plan vocabulary and ledger
+/// layer of parity with the first provider: identical operations, plan vocabulary and ledger
 /// semantics, with the provider only supplying dialect (ADR-0003).
 /// </summary>
 public class PgCoreLoopTests : IAsyncLifetime

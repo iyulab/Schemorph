@@ -64,10 +64,10 @@ internal sealed class PgDesiredState : IDesiredState
             if (programmable is not null)
             {
                 // Not the user's error and not ignorable — the honest outcome is
-                // the provider's own refusal, naming the slice that is missing.
+                // the provider's own refusal, naming what it does not handle.
                 throw new UnsupportedByProviderException(
                     PostgresProvider.ProviderName,
-                    $"programmable objects ({relative}: {programmable} — slice P3)",
+                    $"programmable objects ({relative}: {programmable})",
                     string.Join(", ", PostgresProvider.DeclaredCapabilities));
             }
 

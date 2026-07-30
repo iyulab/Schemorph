@@ -189,7 +189,10 @@ missing warning is possible but a wrong one is not.
 | `SCHEMORPH104` | Warning | A pending migration TRUNCATEs a table — removes every row, not selectively recoverable |
 | `SCHEMORPH105` | Warning | A pending migration UPDATEs or DELETEs without a WHERE clause — touches every row |
 | `SCHEMORPH106` | Warning | A pending migration changes permissions (GRANT/REVOKE/DENY) |
+| `SCHEMORPH107` | Warning | A change re-creates a column instead of altering it — that column's current values do not survive, though the table and its other columns do |
 
-Plan-side findings (`101`–`103`) ride the plan's `messages`; migration-side findings
-(`104`–`106`) ride the `migrations.warnings` list on `status` and `apply` output
-(text mode renders both under their section).
+Plan-side findings (`101`–`103`, `107`) ride the plan's `messages`; migration-side
+findings (`104`–`106`) ride the `migrations.warnings` list on `status` and `apply`
+output (text mode renders both under their section). Codes are assigned in the order
+the rules were added, so a new plan-side rule does not renumber the band — a code is
+an identifier, and consumers pin policy to it.

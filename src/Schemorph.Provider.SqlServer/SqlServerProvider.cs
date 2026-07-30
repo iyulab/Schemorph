@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Dac;
 using Microsoft.SqlServer.Dac.Compare;
@@ -554,7 +554,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
     /// explicit warning.
     ///
     /// Keyed on the *effect* — a comparison that reported an error — rather than
-    /// on any particular missing permission, because measurement (cycle 66)
+    /// on any particular missing permission, because measurement
     /// showed permissions do not predict completeness in either direction:
     ///
     ///   login                                  server VAD / db VD / obj VD   changes

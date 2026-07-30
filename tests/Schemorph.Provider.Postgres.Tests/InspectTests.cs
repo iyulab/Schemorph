@@ -32,7 +32,7 @@ public class InspectTests
     public async Task What_inspect_renders_can_be_applied_to_an_empty_schema()
     {
         // The honest test of a renderer: its output is valid SQL that recreates
-        // what it read. Nothing in P0 applies anything, so this drives psql-level
+        // what it read. Nothing in the read-only scope applies anything, so this drives psql-level
         // execution directly — it verifies the rendering, not an apply path.
         await using var source = await PgTestSchema.CreateAsync(Ddl);
         var url = $"{PgTestSchema.ServerUrl};Search Path={source.Name}";

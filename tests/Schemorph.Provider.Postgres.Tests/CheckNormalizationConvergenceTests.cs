@@ -4,7 +4,7 @@ using Schemorph.Core.Operations;
 namespace Schemorph.Provider.Postgres.Tests;
 
 /// <summary>
-/// CHECK expressions are the one P1 constraint class whose catalog rendering is
+/// CHECK expressions are the one constraint class whose catalog rendering is
 /// not parse-stable: a varchar IN-list parses to <c>(ARRAY[…]::text[])</c> on the
 /// first round and to per-element <c>(…::character varying)::text</c> casts when
 /// that rendering is parsed again. The live side always goes through the second

@@ -125,7 +125,7 @@ shadow variant requires retargeting desired-state DDL into the scratch schema, a
 substitution was refuted with a concrete counterexample before any parser was considered:
 `pg_get_indexdef` renders fold-safe schema qualifiers **unquoted** (`src_test."Workspaces"`),
 so quoted-form substitution misses them and the statement silently lands in the source
-schema (cycle-76 — the first hard evidence that the rewrite step must be parser-based,
+schema (the first hard evidence that the rewrite step must be parser-based,
 exactly as this ADR's risk list anticipated).
 
 The maintenance question was then answered by measurement (`spikes/pg-parser-rewrite/`):

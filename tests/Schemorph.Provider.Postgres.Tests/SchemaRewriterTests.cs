@@ -4,7 +4,7 @@ namespace Schemorph.Provider.Postgres.Tests;
 
 /// <summary>
 /// The rewriter is what makes the scratch-schema shadow sound. The decisive
-/// case is the one measurement refuted string substitution with (cycle-76):
+/// case is the one measurement refuted string substitution with:
 /// <c>pg_get_indexdef</c> renders fold-safe schema qualifiers UNQUOTED, so a
 /// textual rewrite keyed on the quoted form misses them.
 /// </summary>
@@ -50,7 +50,7 @@ public class SchemaRewriterTests
     public void Qualified_column_references_are_retargeted()
     {
         // Tables do not carry three-part column refs, but the rewriter is
-        // statement-agnostic and views (P3) will feed it exactly this shape.
+        // statement-agnostic and views will feed it exactly this shape once declared.
         var sql = """CREATE VIEW "Src"."V" AS SELECT "Src"."T"."c" FROM "Src"."T";""";
 
         var rewritten = SchemaRewriter.Retarget(sql, "Src", "shadow_x");

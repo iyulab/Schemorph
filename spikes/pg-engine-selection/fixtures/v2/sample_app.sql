@@ -1,6 +1,6 @@
-CREATE SCHEMA IF NOT EXISTS vibebase_control;
+CREATE SCHEMA IF NOT EXISTS sample_app;
 
-CREATE TABLE vibebase_control."Workspaces" (
+CREATE TABLE sample_app."Workspaces" (
     "Id" uuid NOT NULL,
     "Name" text NOT NULL,
     "Status" text NOT NULL,
@@ -12,7 +12,7 @@ CREATE TABLE vibebase_control."Workspaces" (
     CONSTRAINT "CK_Workspaces_Tier" CHECK ("Tier" IN ('free', 'pro'))
 );
 
-CREATE TABLE vibebase_control."Members" (
+CREATE TABLE sample_app."Members" (
     "Id" uuid NOT NULL,
     "WorkspaceId" uuid NOT NULL,
     "SubjectId" text NOT NULL,
@@ -21,20 +21,20 @@ CREATE TABLE vibebase_control."Members" (
     CONSTRAINT "UQ_Members_Workspace_Subject" UNIQUE ("WorkspaceId", "SubjectId"),
     CONSTRAINT "CK_Members_Kind" CHECK ("Kind" IN ('admin', 'builder')),
     CONSTRAINT "FK_Members_Workspaces" FOREIGN KEY ("WorkspaceId")
-        REFERENCES vibebase_control."Workspaces" ("Id") ON DELETE CASCADE
+        REFERENCES sample_app."Workspaces" ("Id") ON DELETE CASCADE
 );
 
-CREATE TABLE vibebase_control."Apps" (
+CREATE TABLE sample_app."Apps" (
     "Id" uuid NOT NULL,
     "WorkspaceId" uuid NOT NULL,
     "Target" text NOT NULL,
     CONSTRAINT "PK_Apps" PRIMARY KEY ("Id"),
     CONSTRAINT "UQ_Apps_Workspace_Target" UNIQUE ("WorkspaceId", "Target"),
     CONSTRAINT "FK_Apps_Workspaces" FOREIGN KEY ("WorkspaceId")
-        REFERENCES vibebase_control."Workspaces" ("Id") ON DELETE CASCADE
+        REFERENCES sample_app."Workspaces" ("Id") ON DELETE CASCADE
 );
 
-CREATE TABLE vibebase_control."Resources" (
+CREATE TABLE sample_app."Resources" (
     "Id" uuid NOT NULL,
     "AppId" uuid NOT NULL,
     "Type" text NOT NULL,
@@ -43,5 +43,5 @@ CREATE TABLE vibebase_control."Resources" (
     CONSTRAINT "PK_Resources" PRIMARY KEY ("Id"),
     CONSTRAINT "UQ_Resources_App_ExternalRef" UNIQUE ("AppId", "ExternalRef"),
     CONSTRAINT "FK_Resources_Apps" FOREIGN KEY ("AppId")
-        REFERENCES vibebase_control."Apps" ("Id") ON DELETE CASCADE
+        REFERENCES sample_app."Apps" ("Id") ON DELETE CASCADE
 );

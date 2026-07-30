@@ -56,7 +56,7 @@ public class RestrictedComparisonTests
     /// <summary>
     /// The regression this trigger exists for. A least-privilege login without the
     /// server-scoped grant draws this warning from DacFx and still reads every
-    /// database object — measured, cycle 66. Firing on it warned every consumer
+    /// database object — measured. Firing on it warned every consumer
     /// following this tool's own least-privilege guidance that their complete plan
     /// might be incomplete.
     /// </summary>

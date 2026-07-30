@@ -2,11 +2,11 @@
 // normalization. Throwaway code — the observations it prints are the artifact.
 using Npgsql;
 
-const string Schema = "vibebase_control";
+const string Schema = "sample_app";
 
 string fixtures = FindFixtures();
-string v1 = File.ReadAllText(Path.Combine(fixtures, "v1", "vibebase_control.sql"));
-string v2 = File.ReadAllText(Path.Combine(fixtures, "v2", "vibebase_control.sql"));
+string v1 = File.ReadAllText(Path.Combine(fixtures, "v1", "sample_app.sql"));
+string v2 = File.ReadAllText(Path.Combine(fixtures, "v2", "sample_app.sql"));
 
 // [1] target에 v1 apply — 도구 소유 단일 트랜잭션
 await Apply("spike_target", v1);
@@ -38,9 +38,9 @@ await DumpConstraints("spike_target");
 Console.WriteLine($"[6] same-DB scratch-schema diff v2: {await DiffInScratchSchema(v2)} differences (expect 0)");
 
 static string AlterToV2() => """
-    ALTER TABLE vibebase_control."Workspaces" ADD COLUMN "Tier" text NOT NULL DEFAULT 'free';
-    ALTER TABLE vibebase_control."Workspaces" ADD CONSTRAINT "CK_Workspaces_Tier" CHECK ("Tier" IN ('free', 'pro'));
-    ALTER TABLE vibebase_control."Resources" ADD CONSTRAINT "UQ_Resources_App_ExternalRef" UNIQUE ("AppId", "ExternalRef");
+    ALTER TABLE sample_app."Workspaces" ADD COLUMN "Tier" text NOT NULL DEFAULT 'free';
+    ALTER TABLE sample_app."Workspaces" ADD CONSTRAINT "CK_Workspaces_Tier" CHECK ("Tier" IN ('free', 'pro'));
+    ALTER TABLE sample_app."Resources" ADD CONSTRAINT "UQ_Resources_App_ExternalRef" UNIQUE ("AppId", "ExternalRef");
     """;
 
 static string FindFixtures()

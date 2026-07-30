@@ -76,7 +76,7 @@ public class PostgresLedgerTests
     [SkippableFact]
     public async Task The_ledger_is_invisible_to_inspect_and_comparison()
     {
-        // cycle-76's standing instruction: the moment __SchemorphHistory exists,
+        // The standing rule: the moment __SchemorphHistory exists,
         // the same self-exclusion the SQL Server provider applies must hold here.
         await using var schema = await PgTestSchema.CreateAsync("CREATE TABLE \"Real\" (\"x\" integer);");
         await new PostgresLedgerStore().EnsureInitializedAsync(UrlFor(schema.Name));

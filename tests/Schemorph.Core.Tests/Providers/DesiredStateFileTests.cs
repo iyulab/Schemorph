@@ -6,7 +6,7 @@ public class DesiredStateFileTests
 {
     [Theory]
     [InlineData("dbo.Orders")]
-    [InlineData("vibebase_control.Workspaces")]
+    [InlineData("sample_app.Workspaces")]
     [InlineData("public.über_tabelle")]
     public void Clean_names_pass_through_verbatim(string name)
     {

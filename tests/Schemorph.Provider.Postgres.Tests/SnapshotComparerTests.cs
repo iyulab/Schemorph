@@ -85,7 +85,7 @@ public class SnapshotComparerTests
     [Fact]
     public void An_index_difference_is_out_of_scope_not_a_silent_pass()
     {
-        // Index planning is slice P2. The provider must refuse, not emit a plan
+        // Index planning is outside the declared capabilities. The provider must refuse, not emit a plan
         // that cannot see the difference (§2: the backstop pins the manifest).
         var want = Table("A") with { Indexes = [new PgIndex("IX", "CREATE INDEX \"IX\" ON \"A\" (\"x\")")] };
         var have = Table("A");

@@ -16,7 +16,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     public const string ProviderName = "postgres";
 
     /// <summary>
-    /// What this provider can do today. Slice P1: the table core — reading,
+    /// What this provider can do today: the table core — reading,
     /// and diff/apply over tables, columns, constraints and the target
     /// schema itself. Every capability absent from this list must throw from
     /// <see cref="Refuse"/> — ProviderBoundaryTests pins the symmetry, and the
@@ -28,7 +28,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     public string Name => ProviderName;
 
     /// <summary>
-    /// Slice P1 earns `transactional` (ADR-0007, ADR-0004 addendum): the
+    /// This provider earns `transactional` (ADR-0007, ADR-0004 addendum): the
     /// declarative apply is one tool-owned transaction — the tool holds the
     /// boundary, it does not merely observe a rollback.
     /// </summary>
@@ -166,7 +166,7 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     /// <summary>
     /// Honestly empty, not refused: the loader admits no programmable files
-    /// into a desired state (it refuses them at the door, naming slice P3), so
+    /// into a desired state (it refuses them at the door), so
     /// the analysis of what it loaded is a real answer — zero objects.
     /// </summary>
     public Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(IDesiredState desiredState, CancellationToken cancellationToken = default)
@@ -194,8 +194,8 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// <summary>
     /// The shadow pipeline (ADR-0007): desired state applied to a scratch
     /// schema, both sides read back in comparison mode, compared structurally.
-    /// An index difference refuses — slice P2 — because a plan that cannot see
-    /// a difference must not claim a sync (§2 of the dev plan).
+    /// An index difference refuses, because a plan that cannot see a difference
+    /// must not claim a sync.
     /// </summary>
     private async Task<Compared> CompareCoreAsync(
         IDesiredState desiredState, string connectionString, CancellationToken cancellationToken)
@@ -216,7 +216,7 @@ public sealed class PostgresProvider : IDatabaseProvider
         var comparison = SnapshotComparer.Compare(desired, live);
         if (comparison.OutOfScope.Count > 0)
         {
-            throw Refuse($"index changes ({string.Join("; ", comparison.OutOfScope)} — slice P2)");
+            throw Refuse($"index changes ({string.Join("; ", comparison.OutOfScope)})");
         }
 
         var statements = DdlSynthesizer.Synthesize(schema, desired, live);
@@ -258,8 +258,38 @@ public sealed class PostgresProvider : IDatabaseProvider
                 Rebuild: false,
                 AddsNotNullWithoutDefault: AddsNotNullWithoutDefault(
                     desiredByName.GetValueOrDefault(g.Key),
+                    liveByName.GetValueOrDefault(g.Key)),
+                RecreatesColumn: RecreatesColumn(
+                    desiredByName.GetValueOrDefault(g.Key),
                     liveByName.GetValueOrDefault(g.Key))))
             .ToList();
+    }
+
+    /// <summary>
+    /// Whether this table has a column that must be dropped and added back rather
+    /// than altered — the hazard <c>SCHEMORPH107</c> exists for: the table survives
+    /// the apply and that one column's values do not, under a plan entry that reads
+    /// as an ordinary in-place alter.
+    ///
+    /// One shape reaches this today: a column that gains a generation expression or
+    /// changes the one it has, which has no in-place form on the supported baseline.
+    /// The reverse — losing an expression — is performed in place and keeps every
+    /// value, so it is deliberately not reported here.
+    ///
+    /// Judged on the model rather than on the emitted text, so it is proven rather
+    /// than pattern-matched, and only for a column that exists on both sides: a
+    /// generated column in a brand-new table replaces nothing.
+    /// </summary>
+    private static bool RecreatesColumn(PgTable? want, PgTable? have)
+    {
+        if (want is null || have is null) return false;
+
+        var live = have.Columns.ToDictionary(c => c.Name, StringComparer.Ordinal);
+
+        return want.Columns.Any(c =>
+            live.TryGetValue(c.Name, out var existing)
+            && c.GeneratedAs != existing.GeneratedAs
+            && c.GeneratedAs is not null);
     }
 
     /// <summary>

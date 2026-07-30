@@ -28,7 +28,7 @@ public class UnsupportedByProviderExceptionTests
     public void A_provider_that_declares_nothing_offers_no_hint()
     {
         // A confident wrong direction is worse than silence — the same rule the
-        // inspect hint was removed under (cycle 70).
+        // inspect hint was removed under.
         var error = new UnsupportedByProviderException("postgres", "apply").ToError();
 
         Assert.Null(error.Hint);

@@ -1,4 +1,4 @@
-﻿using Schemorph.Core.Providers;
+using Schemorph.Core.Providers;
 using Schemorph.Provider.SqlServer;
 
 namespace Schemorph.Provider.SqlServer.Tests;
@@ -272,7 +272,7 @@ public sealed class UpdateScriptAttributorTests
         Assert.Empty(result);   // no announcements → nothing attributed, nothing wrong
     }
 
-    // Verbatim shape captured from a real DacFx update script (cycle-61): the
+    // Verbatim shape captured from a real DacFx update script: the
     // scaffolding batches between segments must not swallow the following segment.
     [Fact]
     public void Real_dacfx_constraint_churn_attributes_both_halves()
@@ -336,7 +336,7 @@ public sealed class UpdateScriptAttributorTests
     // post-commit batches (a USE, a constraint re-validation), and letting those
     // flow into the last announced object cost that object its whole slice —
     // ownership is proven from the statements, and one foreign statement
-    // disproves it (cycle-61).
+    // disproves it.
     [Fact]
     public void Chatter_closes_the_open_segment()
     {

@@ -6,7 +6,7 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// The shadow harness end to end on a live server: inspect a source schema,
 /// retarget its rendered desired state into a scratch schema, apply, and read
 /// the scratch back through the same catalog reader. This is the machinery
-/// cycle-76 deliberately left the independent-index round trip unproven for —
+/// whose independent-index round trip was deliberately left unproven earlier —
 /// string substitution put the index in the SOURCE schema; the parser-based
 /// rewrite must put it in the shadow.
 /// </summary>
@@ -46,7 +46,7 @@ public class ShadowSchemaTests
             expected.Constraints.Select(c => (c.Name, c.Definition)),
             actual.Constraints.Select(c => (c.Name, c.Definition)));
 
-        // The unproven case from cycle-76: the independent expression index must
+        // The case left unproven earlier: the independent expression index must
         // exist in the SHADOW schema — with string substitution it stayed in the
         // source schema because pg_get_indexdef renders that qualifier unquoted.
         var index = Assert.Single(actual.Indexes);

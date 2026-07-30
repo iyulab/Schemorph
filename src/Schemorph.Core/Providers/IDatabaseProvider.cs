@@ -200,9 +200,18 @@ public sealed record CompareResult(
 /// <paramref name="AddsNotNullWithoutDefault"/>: the slice adds a NOT NULL
 /// column with no default — fails on any table that already holds rows
 /// (dialect judgment; false whenever it cannot be proven).
+/// <paramref name="RecreatesColumn"/>: the change re-creates a column instead of
+/// altering it, so that column's current values do not survive the apply while
+/// the table around it does — a table-level plan entry that reads as an ordinary
+/// alter, which is exactly why it needs saying (dialect judgment; false whenever
+/// it cannot be proven).
 /// </summary>
 public sealed record ChangeScript(
-    string ObjectName, string Sql, bool Rebuild, bool AddsNotNullWithoutDefault = false);
+    string ObjectName,
+    string Sql,
+    bool Rebuild,
+    bool AddsNotNullWithoutDefault = false,
+    bool RecreatesColumn = false);
 
 public sealed record RawChange(string Operation, string ObjectType, string ObjectName);
 

@@ -17,9 +17,9 @@ The desired text says `"Status" IN ('active', 'suspended')`; the catalog stores
 **(4a) v2 `--dry-run`** — three ALTERs as expected, but note the CHECK synthesis:
 
 ```
-ALTER TABLE "vibebase_control"."Workspaces" ADD COLUMN "Tier" text NOT NULL DEFAULT 'free';
-ALTER TABLE "vibebase_control"."Workspaces" ADD CONSTRAINT "CK_Workspaces_Tier" CHECK (Tier = ANY (ARRAY['free', 'pro']));
-ALTER TABLE "vibebase_control"."Resources" ADD CONSTRAINT "UQ_Resources_App_ExternalRef" UNIQUE ("AppId", "ExternalRef");
+ALTER TABLE "sample_app"."Workspaces" ADD COLUMN "Tier" text NOT NULL DEFAULT 'free';
+ALTER TABLE "sample_app"."Workspaces" ADD CONSTRAINT "CK_Workspaces_Tier" CHECK (Tier = ANY (ARRAY['free', 'pro']));
+ALTER TABLE "sample_app"."Resources" ADD CONSTRAINT "UQ_Resources_App_ExternalRef" UNIQUE ("AppId", "ExternalRef");
 ```
 
 `Tier` inside the CHECK expression has **lost its quoting**.
@@ -27,7 +27,7 @@ ALTER TABLE "vibebase_control"."Resources" ADD CONSTRAINT "UQ_Resources_App_Exte
 **(4b) v2 `--apply`** — **FAILED on psqldef's own generated DDL**:
 
 ```
-ALTER TABLE "vibebase_control"."Workspaces" ADD CONSTRAINT "CK_Workspaces_Tier" CHECK (Tier = ANY (ARRAY['free', 'pro']));
+ALTER TABLE "sample_app"."Workspaces" ADD CONSTRAINT "CK_Workspaces_Tier" CHECK (Tier = ANY (ARRAY['free', 'pro']));
 ROLLBACK;
 2026/07/21 18:42:22 pq: column "tier" does not exist (42703)
 ```
@@ -50,8 +50,8 @@ by another tool's hand).
 **(5′) v1 desired against v2 database, no `--enable-drop`** —
 
 ```
-ALTER TABLE "vibebase_control"."Resources" DROP CONSTRAINT "UQ_Resources_App_ExternalRef";
--- Skipped: ALTER TABLE "vibebase_control"."Workspaces" DROP COLUMN "Tier";
+ALTER TABLE "sample_app"."Resources" DROP CONSTRAINT "UQ_Resources_App_ExternalRef";
+-- Skipped: ALTER TABLE "sample_app"."Workspaces" DROP COLUMN "Tier";
 ```
 
 `DROP COLUMN` is gated (skipped, destructive-by-default philosophy compatible

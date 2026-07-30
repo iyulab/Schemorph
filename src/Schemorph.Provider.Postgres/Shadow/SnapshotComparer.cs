@@ -12,7 +12,7 @@ namespace Schemorph.Provider.Postgres.Shadow;
 ///
 /// Slice discipline (§2 of the dev plan): this slice compares tables, columns
 /// and constraints. An INDEX difference is real work the provider cannot plan
-/// yet (P2), so it is reported as out of scope for the caller to refuse on —
+/// yet, so it is reported as out of scope for the caller to refuse on —
 /// silently ignoring it would emit a plan that claims a sync it cannot see.
 /// </summary>
 internal static class SnapshotComparer

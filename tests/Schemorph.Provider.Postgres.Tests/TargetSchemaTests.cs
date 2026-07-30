@@ -4,7 +4,7 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// Pins <see cref="PostgresProvider.TargetSchemaOf"/> against the engine's own
 /// search_path rules. The dangerous shape is the server DEFAULT —
 /// <c>"$user", public</c> — which, taken literally, matches no schema and turns
-/// inspect into a silently empty result (the cycle-76 latent bug).
+/// inspect into a silently empty result — the latent bug this pins.
 /// </summary>
 public class TargetSchemaTests
 {

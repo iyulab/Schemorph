@@ -17,7 +17,7 @@ namespace Schemorph.Core.Planning;
 /// the executed script text tells them apart — otherwise a reviewer could sign
 /// one plan's hash and the gate would pass a materially different apply. The
 /// executed text differs even when a provider leaves the per-change <c>sql</c>
-/// null (Postgres P1), so this is what closes the hole for every provider.
+/// null, so this is what closes the hole for every provider.
 ///
 /// Still excluded, deliberately: messages (diagnostics, not execution),
 /// <c>explanation</c> (prose about a change, not the change), and
@@ -26,17 +26,36 @@ namespace Schemorph.Core.Planning;
 /// diff-apply race). The hash is stable across runs because its inputs are —
 /// the update script is generated deterministically from the same comparison
 /// the diff showed.
+///
+/// All of that rests on one property of the encoding: **different plans must
+/// produce different input strings.** Everything hashed here is either an
+/// identifier or SQL text, so the delimiters must be characters neither can
+/// contain. Ordinary punctuation will not do — SQL text is routinely multi-line
+/// and may hold any printable character, so a newline or a pipe lets the
+/// *content* decide where one field ends and the next begins, and two different
+/// plans can reach the same string that way. The C0 separators cannot occur in
+/// either input, so the boundaries come from the encoding instead: <c>US</c>
+/// between an action's members, <c>RS</c> between actions and before the script.
+/// They are written as escapes on purpose; a literal control character in the
+/// source is invisible to every reader of it.
 /// </summary>
 public static class PlanFingerprint
 {
+    /// <summary>U+001F UNIT SEPARATOR — between the members of one action.</summary>
+    private const char Field = '\u001F';
+
+    /// <summary>U+001E RECORD SEPARATOR — between actions, and before the executed script.</summary>
+    private const char Record = '\u001E';
+
     public static string Compute(Plan plan)
     {
-        var shape = string.Join("\n", plan.Actions.Select(a =>
-            $"{a.ObjectName}|{a.ObjectType}|{a.Operation}|{a.Risk}|{a.Sql}"));
-        // U+001E (record separator) cannot occur in an identifier or SQL text, so
-        // the boundary between the plan shape and the executed script is
-        // unambiguous — no crafted content can forge one side as the other.
-        return ContentChecksum.Compute($"{shape}{plan.UpdateScript}");
+        var shape = string.Join(Record, plan.Actions.Select(action => string.Join(Field,
+            action.ObjectName,
+            action.ObjectType,
+            action.Operation.ToString(),
+            action.Risk.ToString(),
+            action.Sql)));
+        return ContentChecksum.Compute($"{shape}{Record}{plan.UpdateScript}");
     }
 }
 

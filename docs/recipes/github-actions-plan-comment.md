@@ -68,9 +68,12 @@ jobs:
 
       # Optional policy gate: fail the job on specific lint codes
       # (SCHEMORPH1xx band, docs/errors.md) instead of just reporting them.
+      # The three below are the ones that cost data: a NOT NULL column with no
+      # default, an included destructive change, and a column re-created rather
+      # than altered. Pick your own set — codes are stable identifiers.
       - name: Enforce lint policy
         run: |
-          blocked=$(jq -r '[.messages[] | select(.code == "SCHEMORPH101" or .code == "SCHEMORPH103")] | length' plan.json)
+          blocked=$(jq -r '[.messages[] | select(.code == "SCHEMORPH101" or .code == "SCHEMORPH103" or .code == "SCHEMORPH107")] | length' plan.json)
           if [ "$blocked" -gt 0 ]; then
             echo "Plan contains blocked lint findings:" && jq -r '.messages[] | select(.code | startswith("SCHEMORPH1")) | "\(.code): \(.text)"' plan.json
             exit 1

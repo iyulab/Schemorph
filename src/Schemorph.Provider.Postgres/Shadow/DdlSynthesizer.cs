@@ -99,13 +99,33 @@ internal static class DdlSynthesizer
 
             var name = DesiredStateRenderer.Quote(column.Name);
 
-            // A generation expression cannot be altered — the column is
-            // rebuilt. Honest and visible: it is a drop plus an add.
+            // The two directions of a generation-expression change are not
+            // symmetric, so they cannot share one statement.
+            //
+            // Dropping the expression keeps every value: the engine turns the
+            // column into an ordinary one in place. Rebuilding it instead would
+            // discard data — and unlike a generated column's contents, those
+            // values are no longer derivable afterwards, because the expression
+            // that produced them is precisely what the desired state removed.
+            //
+            // Gaining or changing an expression has no in-place form on the
+            // supported baseline (no SET EXPRESSION before PostgreSQL 17), so the
+            // column is dropped and added. That is honest: the new values are the
+            // expression's output by definition.
             if (column.GeneratedAs != existing.GeneratedAs)
             {
-                Add($"ALTER TABLE {qualified} DROP COLUMN {name};");
-                Add($"ALTER TABLE {qualified} ADD COLUMN {DesiredStateRenderer.RenderColumn(column)};");
-                continue;
+                if (column.GeneratedAs is null)
+                {
+                    Add($"ALTER TABLE {qualified} ALTER COLUMN {name} DROP EXPRESSION;");
+                    // Fall through: a type, default or NOT NULL difference on the
+                    // same column still needs its own statement.
+                }
+                else
+                {
+                    Add($"ALTER TABLE {qualified} DROP COLUMN {name};");
+                    Add($"ALTER TABLE {qualified} ADD COLUMN {DesiredStateRenderer.RenderColumn(column)};");
+                    continue;
+                }
             }
 
             if (column.DataType != existing.DataType)

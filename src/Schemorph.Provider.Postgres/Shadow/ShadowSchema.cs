@@ -45,7 +45,7 @@ internal sealed class ShadowSchema : IAsyncDisposable
     /// desired state that half-applies is not a comparison side.
     ///
     /// After applying, CHECK constraints are re-added from their own catalog
-    /// rendering (same transaction). CHECK expressions are the one P1 class
+    /// rendering (same transaction). CHECK expressions are the one constraint class
     /// whose rendering is not parse-stable — a varchar IN-list renders as
     /// <c>(ARRAY[…]::text[])</c> from the user's text but as per-element
     /// <c>(…)::text</c> casts once that rendering is parsed again. The live

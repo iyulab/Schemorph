@@ -239,7 +239,7 @@ public sealed class ConvergenceTests : IDisposable
         // The limitation is survivable only if the plan says which object is
         // churning. It used to say nothing — the change is announced by DacFx
         // under the constraint's name, so nothing attributed and `sql` was null,
-        // leaving a reader with an unexplained permanent diff (cycle-57 → 61).
+        // leaving a reader with an unexplained permanent diff.
         Assert.NotNull(action.Sql);
         Assert.Contains("CK_Flags_Status", action.Sql);
     }

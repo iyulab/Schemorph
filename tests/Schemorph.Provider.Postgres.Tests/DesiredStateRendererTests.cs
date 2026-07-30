@@ -3,7 +3,7 @@ namespace Schemorph.Provider.Postgres.Tests;
 public class DesiredStateRendererTests
 {
     private static PgTable Workspaces() => new(
-        "vibebase_control", "Workspaces",
+        "sample_app", "Workspaces",
         Columns:
         [
             new PgColumn("Id", "uuid", NotNull: true, Default: "gen_random_uuid()"),
@@ -15,7 +15,7 @@ public class DesiredStateRendererTests
             new PgConstraint("PK_Workspaces", "PRIMARY KEY (\"Id\")"),
             new PgConstraint("CK_Workspaces_Status", "CHECK ((\"Status\" = ANY (ARRAY['active'::text, 'suspended'::text])))"),
         ],
-        Indexes: [new PgIndex("IX_Workspaces_Name", "CREATE UNIQUE INDEX \"IX_Workspaces_Name\" ON vibebase_control.\"Workspaces\" USING btree (\"Name\")")]);
+        Indexes: [new PgIndex("IX_Workspaces_Name", "CREATE UNIQUE INDEX \"IX_Workspaces_Name\" ON sample_app.\"Workspaces\" USING btree (\"Name\")")]);
 
     [Fact]
     public void One_file_per_table_under_the_conventional_layout()
@@ -23,7 +23,7 @@ public class DesiredStateRendererTests
         var files = DesiredStateRenderer.Render([Workspaces()]);
 
         var file = Assert.Single(files);
-        Assert.Equal("tables/vibebase_control.Workspaces.sql", file.RelativePath);
+        Assert.Equal("tables/sample_app.Workspaces.sql", file.RelativePath);
     }
 
     [Fact]
@@ -34,9 +34,9 @@ public class DesiredStateRendererTests
         // defect that eliminated psqldef in the engine spike.
         var sql = DesiredStateRenderer.Render([Workspaces()])[0].Content;
 
-        Assert.Contains("CREATE TABLE \"vibebase_control\".\"Workspaces\"", sql);
+        Assert.Contains("CREATE TABLE \"sample_app\".\"Workspaces\"", sql);
         Assert.Contains("\"Id\" uuid NOT NULL", sql);
-        Assert.DoesNotContain("CREATE TABLE vibebase_control", sql);
+        Assert.DoesNotContain("CREATE TABLE sample_app", sql);
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public class DesiredStateRendererTests
         var sql = DesiredStateRenderer.Render([Workspaces()])[0].Content;
 
         Assert.Contains(
-            "ALTER TABLE \"vibebase_control\".\"Workspaces\" ADD CONSTRAINT \"PK_Workspaces\" PRIMARY KEY (\"Id\");",
+            "ALTER TABLE \"sample_app\".\"Workspaces\" ADD CONSTRAINT \"PK_Workspaces\" PRIMARY KEY (\"Id\");",
             sql);
         Assert.Contains("ADD CONSTRAINT \"CK_Workspaces_Status\" CHECK", sql);
     }
@@ -105,7 +105,7 @@ public class DesiredStateRendererTests
     public void A_generated_column_renders_as_generated_not_as_default()
     {
         // The catalog stores the generation expression in the DEFAULT slot;
-        // rendering it as DEFAULT is wrong SQL (cycle-76 reader gap).
+        // rendering it as DEFAULT is wrong SQL.
         var table = new PgTable("public", "Prices",
             [new PgColumn("Total", "numeric", NotNull: true, Default: null,
                 GeneratedAs: "(\"Price\" * \"Qty\")")],

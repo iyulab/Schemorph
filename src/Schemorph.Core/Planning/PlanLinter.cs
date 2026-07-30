@@ -34,6 +34,13 @@ public static class PlanLinter
                     "old dropped, renamed) — time, locks and transaction log grow with the data.");
             }
 
+            if (script?.RecreatesColumn == true)
+            {
+                yield return new PlanMessage("Warning", "SCHEMORPH107",
+                    $"{action.ObjectName}: a column is re-created rather than altered — " +
+                    "its current values do not survive, though the table and its other columns do.");
+            }
+
             if (action.Risk == RiskLevel.Destructive)
             {
                 yield return new PlanMessage("Warning", "SCHEMORPH103",

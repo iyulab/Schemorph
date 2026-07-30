@@ -9,7 +9,7 @@ namespace Schemorph.Provider.Postgres.Shadow;
 /// tree, never the text (ADR-0007 addendum). String substitution was refuted
 /// by measurement — <c>pg_get_indexdef</c> renders fold-safe qualifiers
 /// unquoted, so a textual rewrite misses them and the statement lands in the
-/// source schema (cycle-76).
+/// source schema.
 ///
 /// The walk is generic over the protobuf AST so statement coverage does not
 /// depend on us enumerating statement types: every <c>schemaname</c> field is
