@@ -18,6 +18,16 @@ change **additively**: consumers must ignore properties they do not know.
   `DROP INDEX` in the review script like any other planned statement. Indexes a
   constraint owns stay out of it: they belong to the constraint that creates them.
 
+  **That drop is not gated by `--allow-destructive`**, on either engine — measured, not
+  assumed. An index holds no data of its own, so removing one classifies as an ordinary
+  alter, the same classification the SQL Server provider has always given it. Read the
+  consequence before the first apply: a repository that was *refused* on 0.6.0 because
+  the live database carried an index the files never mentioned now plans that index
+  away, and the default `apply` will carry it out. `diff --format sql` shows the
+  `DROP INDEX` before anything runs, and that review script is the place to catch it.
+  No `SCHEMORPH1xx` fires — the band is about data that does not survive, and this is
+  query time rather than rows.
+
   Foreign keys are the case worth naming, because PostgreSQL creates no index for one on
   its own. A foreign-key column without a supporting index is a table scan on every
   lookup through that key, and until now the provider could not be asked to fix it.

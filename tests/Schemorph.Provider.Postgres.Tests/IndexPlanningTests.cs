@@ -109,6 +109,32 @@ public class IndexPlanningTests : IAsyncLifetime
         await AssertConvergedAsync();
     }
 
+    // Which gate a dropped index falls under is a question an upgrader asks
+    // before running apply in production, so it is measured rather than reasoned
+    // about. An index holds no data of its own — it is derivable from the table
+    // it is on — so removing one classifies as an ordinary alter and runs without
+    // the destructive flag, the same way the first provider treats it. What it
+    // costs is query time, not rows, and the plan says so by naming the DROP.
+    [SkippableFact]
+    public async Task Dropping_an_index_does_not_require_the_destructive_flag()
+    {
+        await PgTestSchema.ExecuteAsync(
+            $"""CREATE INDEX "IX_Doc_OwnerId" ON "{_live.Name}"."Doc" ("OwnerId");""");
+        await DeclareAsync();
+
+        var diff = await DiffOperation.RunAsync(_provider, _ledger, _schemaDir, _url, allowDestructive: false);
+        Assert.True(diff.Success, string.Join("; ", diff.Errors.Select(e => e.Text)));
+        Assert.True(diff.Plan!.HasChanges);
+        Assert.False(diff.Plan.HasDestructiveChanges);
+        Assert.Contains("DROP INDEX", diff.Plan.UpdateScript);
+
+        var apply = await ApplyOperation.RunAsync(_provider, _ledger,
+            new ApplyOperation.Request(_schemaDir, _url, ExpectedPlanHash: null));
+
+        Assert.True(apply.Success, string.Join("; ", apply.Errors.Select(e => e.Text)));
+        Assert.DoesNotContain("IX_Doc_OwnerId", await IndexDefinitionsAsync());
+    }
+
     // The aspects a per-column projection cannot see. Each is applied on top of a
     // live index that differs from the declaration only there, so a comparison
     // blind to it reports "no changes" — a silent lie about a schema that has
