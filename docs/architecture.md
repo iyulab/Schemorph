@@ -41,7 +41,7 @@ The core consumes the provider's raw comparison and turns it into a Schemorph pl
 
 Procedures, functions, views, and triggers are stored one object per file and applied via `CREATE OR ALTER` (SQL Server 2016+) / `CREATE OR REPLACE` (PostgreSQL). Schemorph tracks a checksum per object file; on `apply`, changed objects are re-applied in dependency order.
 
-Rationale: procedure bodies are semantically opaque text. Comparing them structurally is unreliable in every tool that attempts it. Re-definition is idempotent, deterministic, and uses a mechanism the database itself guarantees. The "diff" for these objects is simply *changed / unchanged / new / removed* at file granularity — which is also exactly what a code reviewer or AI agent wants to see, alongside the git diff of the body itself.
+Rationale: procedure bodies are semantically opaque text. Comparing them structurally is unreliable in every tool that attempts it. Re-definition is idempotent, deterministic, and uses a mechanism the database itself guarantees. The "diff" for these objects is simply *changed / unchanged / new / removed* at file granularity — which is also exactly what a reviewer wants to see, alongside the git diff of the body itself.
 
 ### 3. Versioned migrations — data changes
 
@@ -61,7 +61,7 @@ Exact table name, columns, and retention semantics: implementation decisions.
 
 ## The Plan
 
-Every mutating operation is expressible as a plan before it is executed. The plan is the central data structure of Schemorph and the primary contract with AI agents:
+Every mutating operation is expressible as a plan before it is executed. The plan is the central data structure of Schemorph and its primary contract with everything outside it — reviewers, scripts, CI jobs, agents:
 
 - Each planned action carries: the object, the operation, the generated SQL, a risk classification (safe / warning / destructive), and — where non-obvious — an explanation.
 - Plans are renderable as human text and as versioned JSON.
@@ -91,7 +91,7 @@ A `dotnet tool` plus standalone native binaries. Verb-oriented (`inspect`, `diff
 
 ### MCP Server
 
-Exposes the same operations as MCP tools so AI agents can plan and apply schema changes as first-class tool calls, and the current schema state / plan as MCP resources (`schemorph://schema`, `schemorph://schema/{kind}/{name}`, `schemorph://plan`) so hosts can attach them as context. The MCP surface and the CLI are two renderings of the same core API — neither is a wrapper around the other's text output.
+Exposes the same operations as MCP tools, so a host that speaks MCP plans and applies schema changes as first-class tool calls rather than by scraping CLI text, and the current schema state / plan as MCP resources (`schemorph://schema`, `schemorph://schema/{kind}/{name}`, `schemorph://plan`) so hosts can attach them as context. The MCP surface and the CLI are two renderings of the same core API — neither is a wrapper around the other's text output.
 
 ## Repository Layout (user's project)
 

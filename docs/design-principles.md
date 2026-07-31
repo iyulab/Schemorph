@@ -31,24 +31,24 @@ Single-mechanism tools fail predictably: pure diff tools mangle procedure bodies
 
 This three-way split is an anchor. The exact classification of edge-case object types (sequences, user-defined types, permissions, ...) is an open decision to be made per-provider as implementation reveals their behavior. **Security principals** (users, logins, roles, role membership, permissions) are the first such edge case settled: on SQL Server they are excluded from the declarative diff — a code-generated desired-state never emits them and dropping a login for being "absent" is the silent destruction §4 forbids ([ADR-0006](./adr/0006-security-principals-out-of-declarative-model.md)).
 
-## 3. AI agents are a primary user
+## 3. Every interface is programmable
 
-Design every interface as if the caller might be a program that reasons:
+The same information is available to a person reading a terminal and to a program parsing a stream — and the structured form is the authoritative one:
 
 - **Structured output everywhere.** Every command that produces information supports `--format json` with a stable, versioned shape. Human-readable output is a rendering of the structured form, never the other way around.
 - **Plans before actions.** Any operation that would modify a database can produce its full plan without executing it.
 - **Semantics in exit codes.** "Nothing to do", "changes pending", and "failure" are distinguishable without parsing text.
 - **Explainability.** When Schemorph decides something non-obvious (e.g., "this column change requires a table rebuild"), the plan says so and says why.
-- **MCP surface.** The same operations are exposed as an MCP server so agents can call them as tools rather than shelling out.
+- **MCP surface.** The same operations are exposed as an MCP server, so a host that speaks MCP calls them as tools instead of shelling out and scraping text.
 
-This principle constrains API design continuously; it is not a feature to be added later.
+This principle constrains API design continuously; it is not a feature to be added later. It also runs the other way: a machine-readable surface is never a reason to ship output a person cannot review. The same plan renders as a review document (`diff --format sql`) whose fingerprint is what a gated `apply` will execute — the reviewer and the program are looking at one artifact, not two. ([ADR-0008](./adr/0008-interface-anchor-names-a-property.md))
 
 ## 4. Safe by default, honest about danger
 
 - Reading and planning are always safe. `diff` never modifies anything.
 - Destructive operations (`DROP` of anything holding data) are excluded from plans unless explicitly enabled, and are prominently marked when enabled.
 - Every `apply` records what ran, when, its checksum, and its outcome in the history ledger. The ledger is the audit trail.
-- Schemorph does not pretend to make schema changes risk-free. It makes risk *visible* — the rest is judgment, which belongs to the user (human or agent) and to review processes, not to the tool.
+- Schemorph does not pretend to make schema changes risk-free. It makes risk *visible* — the rest is judgment, which belongs to the user and to review processes, not to the tool.
 
 ## 5. Local-first, no strings attached
 
@@ -63,13 +63,13 @@ Schemorph does not rewrite what already works:
 - The SQL Server diff engine is **DacFx** — Microsoft's own schema-comparison framework, battle-tested across the full breadth of T-SQL. Reimplementing it would be years of work to reach lower fidelity. ([ADR-0001](./adr/0001-csharp-dacfx-foundation.md))
 - Future providers may likewise wrap existing engines where quality ones exist.
 
-What Schemorph owns — and where all of its value concentrates — is everything around the engine: the object-strategy model, the ledger, the plan format, the CLI ergonomics, the safety semantics, the agent interface. Engines are replaceable; the experience is the product.
+What Schemorph owns — and where all of its value concentrates — is everything around the engine: the object-strategy model, the ledger, the plan format, the CLI ergonomics, the safety semantics, the machine-readable interface. Engines are replaceable; the experience is the product.
 
 ## 7. One mental model across databases
 
-SQL Server is first; PostgreSQL is planned. The provider boundary exists so that commands, file layout, plan format, ledger semantics, and safety rules are identical across databases — only the dialect underneath changes. ([ADR-0003](./adr/0003-postgres-as-second-provider.md))
+Schemorph is multi-target by design. SQL Server came first; PostgreSQL is released up to a declared capability scope; further engines are welcome behind the same boundary. The provider boundary exists so that commands, file layout, plan format, ledger semantics, and safety rules are identical across databases — only the dialect underneath changes. ([ADR-0003](./adr/0003-postgres-as-second-provider.md))
 
-A user (or agent) who learns Schemorph on one database has learned it for all of them.
+Anyone who learns Schemorph on one database has learned it for all of them.
 
 ---
 
