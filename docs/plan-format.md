@@ -1,8 +1,8 @@
 # The plan format
 
 The machine-readable plan is Schemorph's primary contract with everything that
-consumes it — scripts, CI jobs, agents
-(design principle §3: the text rendering derives from it, never the reverse). The
+consumes it — scripts, CI jobs, agents (design principle §3: the text rendering
+derives from it, never the reverse). The
 single source of truth in code is `PlanRenderer.ToJsonModel`
 (`src/Schemorph.Core/Planning/PlanRenderer.cs`); keep this document and that
 method in sync. Every surface that embeds a plan — `diff --format json` output,

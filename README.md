@@ -42,15 +42,15 @@ On SQL Server, one combination of properties does not exist today as free, offli
 | SSDT / SqlPackage | ✅ | ✅ | ⚠️ pre/post scripts | ⚠️ CLI exists, project system is VS-bound | ⚠️ deploy script + report, no plan identity to gate on |
 | EF Migrations | ❌ (code-first) | ❌ | ⚠️ | ✅ | ⚠️ `migrations script` output only |
 | Flyway / Liquibase | ⚠️ Flyway schema model, commercial editions only | ⚠️ repeatable scripts | ✅ | ✅ | ⚠️ dry-run SQL / status; no fingerprint gate |
-| Atlas | ✅ | ⚠️ limited on SQL Server | ✅ | ❌ SQL Server driver is paid (Pro) and requires login | ⚠️ plan and lint output |
-| Bytebase | ⚠️ PostgreSQL only | ❌ | ✅ | ⚠️ self-hosted server, GUI-first | ⚠️ review workflow is GUI-centric |
+| Atlas | ✅ | ⚠️ limited on SQL Server | ✅ | ❌ SQL Server driver is paid (Pro) and requires login | ⚠️ plan files with a from-state check — Pro, requires login |
+| Bytebase | ⚠️ PostgreSQL only | ❌ | ✅ | ⚠️ self-hosted server, GUI-first | ⚠️ server-side approval flow |
 | sqldef | ✅ | ⚠️ views/triggers only — no procedures/functions | ❌ | ✅ | ⚠️ `--dry-run` DDL only |
 | **Schemorph** | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 <sup>Competitive claims as of 2026-07; re-verified periodically as these tools evolve.</sup>
 
 - Atlas gates its SQL Server driver behind a paid plan; Bytebase's declarative workflow is PostgreSQL-only; Flyway's schema model requires commercial editions; sqldef cannot manage procedures or functions; SSDT is bound to the Visual Studio project system.
-- The last column is a narrow, checkable bar, not a slogan: the plan is a **versioned machine contract** ([plan-format.md](./docs/plan-format.md)) that also renders as a review document, and `apply` executes **only** a reviewed plan fingerprint or refuses. Printing a dry-run script is common; refusing to run anything but the script that was reviewed is not.
+- The last column is a narrow, checkable bar, not a slogan: the plan is a **versioned machine contract** ([plan-format.md](./docs/plan-format.md)) that also renders as a review document, and `apply` executes **only** a reviewed plan fingerprint or refuses. Printing a dry-run script is common; binding the apply to the *identity* of the reviewed plan is rare — Atlas does it (plan files with a from-state check), behind a login and a paid plan, on a SQL Server driver that is itself Pro-gated.
 
 Schemorph is that combination: the **declarative diff model** (SSDT, Atlas, sqldef) and the **versioned migration ledger** (Flyway, Liquibase) in one coherent tool, where every change passes through a plan that a person can read and a program can parse — the same plan, not two renderings that can drift apart.
 
@@ -104,7 +104,7 @@ Nothing here is a separate mode: the JSON, the review document, and the MCP tool
 
 ## Database Support
 
-Schemorph is multi-target by design: one command set, one plan format, one ledger model and one set of safety rules across engines — only the dialect underneath changes ([provider boundary](./docs/architecture.md)). Two engines ship today, and the boundary exists so more can follow.
+Schemorph is multi-target by design: one command set, one plan format, one ledger model and one set of safety rules across engines — only the dialect underneath changes ([provider boundary](./docs/architecture.md)). The boundary exists so further engines can follow.
 
 - **SQL Server** — initial target. The diff engine builds on [DacFx](https://github.com/microsoft/DacFx) (Microsoft's schema comparison framework, the same engine behind SSDT), giving full-fidelity handling of T-SQL objects from day one.
 - **PostgreSQL** — released, up to a declared scope: the table core. Set `SCHEMORPH_PROVIDER=postgres` and Schemorph inspects, diffs and applies **tables, columns, constraints, indexes and the target schema**, with the declarative apply running as **one transaction** — applied entirely or not at all. Comparison is native `pg_catalog` with shadow normalization ([ADR-0007](./docs/adr/0007-postgres-engine-selection.md)); a database-owner role with `CREATE SCHEMA` suffices — no superuser, no `CREATEDB`, no extensions. Everything outside the declared capability list (views/functions/triggers/procedures, migrations, and concurrent index builds) is **refused with an explicit error** rather than half-planned ([ADR-0003](./docs/adr/0003-postgres-as-second-provider.md)); the scope grows in releasable slices with no committed timeline. **If you need the refused parts on PostgreSQL today, Atlas, sqldef, or Flyway will serve you better** — that is a more useful answer than a date we cannot keep.
