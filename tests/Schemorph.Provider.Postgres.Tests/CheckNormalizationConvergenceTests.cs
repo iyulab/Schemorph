@@ -9,9 +9,9 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// first round and to per-element <c>(…::character varying)::text</c> casts when
 /// that rendering is parsed again. The live side always goes through the second
 /// parse (apply executes synthesized DDL built from shadow renderings), so
-/// without a fixed-point pass on the shadow the loop never converges — found by
-/// the mdd-booster PG-dialect chain E2E (37-table consumer corpus, 2026-07-23),
-/// where every enum CHECK table re-planned as an alter forever.
+/// without a fixed-point pass on the shadow the loop never converges: any
+/// schema whose enum-like columns are varchar carrying an IN-list CHECK
+/// re-plans as an alter on every run, forever.
 ///
 /// Text-typed CHECKs never exposed this (elements are already text, no relabel),
 /// which is why the existing corpus tests stayed green.
