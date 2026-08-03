@@ -71,6 +71,67 @@ public class PlanBuilderTests
         Assert.Empty(plan.Messages);
     }
 
+    /// <summary>
+    /// Invisible to the plan is not invisible to the engine. It compares the ledger
+    /// like any other table and writes a DROP for it into the update script on every
+    /// run against a target that already has one — which is every real target. The
+    /// plan has to say so, because the reviewer can see the statement.
+    /// </summary>
+    [Fact]
+    public void A_dropped_ledger_change_is_recorded_as_excluded_from_execution()
+    {
+        var plan = PlanBuilder.Build(
+            Result(new RawChange("Delete", "Table", "dbo.__SchemorphHistory")), allowDestructive: true);
+
+        var excluded = Assert.Single(plan.Excluded);
+        Assert.Equal("dbo.__SchemorphHistory", excluded.ObjectName);
+        Assert.Contains("never dropped or altered", excluded.Reason);
+    }
+
+    /// <summary>
+    /// The gated-destructive path drops a change the same way, and the script keeps
+    /// its statements the same way — the warning says it was gated, this says the
+    /// text is still there to read.
+    /// </summary>
+    [Fact]
+    public void A_gated_destructive_change_is_recorded_as_excluded_from_execution()
+    {
+        var plan = PlanBuilder.Build(
+            Result(new RawChange("Delete", "Table", "dbo.LegacyLog")), allowDestructive: false);
+
+        var excluded = Assert.Single(plan.Excluded);
+        Assert.Equal("dbo.LegacyLog", excluded.ObjectName);
+        Assert.Contains("Enable destructive changes explicitly", excluded.Reason);
+    }
+
+    [Fact]
+    public void A_plan_that_executes_everything_it_contains_excludes_nothing()
+    {
+        var plan = PlanBuilder.Build(
+            Result(new RawChange("Add", "Table", "dbo.Orders")), allowDestructive: false);
+
+        Assert.Empty(plan.Excluded);
+        Assert.NotEmpty(plan.Actions);
+    }
+
+    /// <summary>
+    /// Explaining itself better must not change a plan's identity: an operator holding
+    /// a hash from before this field existed can still gate an apply with it.
+    /// </summary>
+    [Fact]
+    public void Recording_exclusions_does_not_move_the_fingerprint()
+    {
+        var withExclusion = PlanBuilder.Build(
+            Result(new RawChange("Add", "Table", "dbo.Orders"),
+                   new RawChange("Delete", "Table", "dbo.__SchemorphHistory")),
+            allowDestructive: true);
+        var without = PlanBuilder.Build(
+            Result(new RawChange("Add", "Table", "dbo.Orders")), allowDestructive: true);
+
+        Assert.NotEmpty(withExclusion.Excluded);
+        Assert.Equal(PlanFingerprint.Compute(without), PlanFingerprint.Compute(withExclusion));
+    }
+
     [Theory]
     [InlineData("Delete", "Table", "dbo.Data", false, false)]     // destructive gated
     [InlineData("Delete", "Table", "dbo.Data", true, true)]       // destructive allowed

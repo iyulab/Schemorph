@@ -44,6 +44,11 @@ public static class PlanRenderer
             a.Explanation,
         }).ToList(),
         plan.Messages,
+        // Objects the engine's script has statements for that this plan does not run.
+        // Automation reading `changes` and `hasDestructiveChanges` has no other way to
+        // learn they are in the text: both describe what executes, and the difference
+        // between the two is exactly what a reviewer was left to guess at.
+        plan.Excluded,
     };
 
     public static string ToJson(Plan plan) => JsonSerializer.Serialize(ToJsonModel(plan), JsonOptions);

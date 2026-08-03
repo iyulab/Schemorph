@@ -5,6 +5,41 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Fixed
+
+- **The review document now says which of its statements do not run.** The document is
+  the engine's own update script, reproduced exactly so that what a person reviews and
+  what an apply executes are one artifact. That fidelity has a consequence nobody was
+  told about: the engine writes the script over the whole comparison, so it can contain
+  DDL for objects the plan drops — and reading a review document, a statement means
+  "this runs".
+
+  Two kinds of object land there. Schemorph's history ledger is compared like any other
+  table and is not part of the desired state, so every run against a target that already
+  has one — that is, every target after the first apply — produced a `DROP TABLE` for it
+  in the reviewed text. It was never executed, and the plan, the change count and the
+  messages all stayed silent about it, because the ledger is deliberately invisible in
+  user-facing output. Destructive changes gated out of a plan are the same shape: warned
+  about, dropped from execution, still present in the script.
+
+  A reviewer had no way to tell any of that from the text they were signing. The header
+  now names those objects above the script, with why each one does not execute, and
+  bounds itself explicitly — anything not listed does run. Naming them matters more than
+  the false stop it prevents: an operator who learns that a `DROP` here is inert will
+  wave through the one that is not.
+
+### Changed
+
+- **Plan format 1.6 — `excluded[]`.** The same fact on the machine path: automation
+  reading `changes` and `hasDestructiveChanges` could not see those statements either,
+  since both describe what executes. The field is always present and empty when a plan
+  runs everything its script contains. **`planHash` does not change** — it is derived
+  from the actions and script the hash already binds, and a plan's identity must not
+  move because it started explaining itself better, so a hash captured under 1.5 still
+  matches. See [docs/plan-format.md](docs/plan-format.md).
+
 ## 0.7.0 — 2026-07-30
 
 ### Added

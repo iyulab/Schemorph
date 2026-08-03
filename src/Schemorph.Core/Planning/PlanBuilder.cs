@@ -18,6 +18,10 @@ public static class PlanBuilder
         ApplyAtomicity atomicity = ApplyAtomicity.Partial)
     {
         var actions = new List<PlanAction>();
+        // What the plan drops while the engine's script keeps it. Recorded where the
+        // dropping happens: a reader of the review document sees those statements, so
+        // deciding not to run something is only half of it — the other half is saying so.
+        var excluded = new List<PlanExclusion>();
         var messages = compareResult.Messages
             .Where(m => !LedgerObjects.IsLedgerObject(m.Text))   // engine chatter about our own bookkeeping
             .Select(m => new PlanMessage(m.Severity, m.Code, m.Text))
@@ -29,7 +33,17 @@ public static class PlanBuilder
         {
             if (LedgerObjects.IsLedgerObject(change.ObjectName))
             {
-                continue;   // Schemorph's own bookkeeping is invisible to plans.
+                // Schemorph's own bookkeeping is invisible to plans — but not to the
+                // engine, which compares it like any other table and writes a DROP for
+                // it into the update script whenever the target already has one (that
+                // is, on every run after the first). Staying silent here is what left
+                // reviewers reading a DROP of the history ledger with nothing in the
+                // plan, the summary or the messages to say it does not run.
+                excluded.Add(new PlanExclusion(change.ObjectName,
+                    "Schemorph's own history ledger. It is not part of the desired state and is " +
+                    "never dropped or altered by an apply; the engine reports it only because it " +
+                    "compares the whole target."));
+                continue;
             }
             if (RoutesToRedefine(change))
             {
@@ -43,6 +57,11 @@ public static class PlanBuilder
                     "Warning",
                     "SCHEMORPH001",
                     $"Destructive change excluded from plan (enable explicitly to include): {operation} {change.ObjectType} {change.ObjectName}"));
+                // Same shape as the ledger above: the engine's script still carries the
+                // statement. The warning says it was gated; this says where to expect it.
+                excluded.Add(new PlanExclusion(change.ObjectName,
+                    $"Destructive {operation} on {change.ObjectType}, gated out of this plan. " +
+                    "Enable destructive changes explicitly to include it."));
                 continue;
             }
 
@@ -60,7 +79,8 @@ public static class PlanBuilder
 
         // The executed declarative script rides the plan so its fingerprint binds
         // exactly what runs, not just the object-level action shape (PlanFingerprint).
-        return new Plan(Plan.CurrentFormatVersion, actions, messages, atomicity, compareResult.UpdateScript);
+        return new Plan(Plan.CurrentFormatVersion, actions, messages, atomicity, compareResult.UpdateScript,
+            excluded);
     }
 
     /// <summary>

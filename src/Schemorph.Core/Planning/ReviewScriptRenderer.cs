@@ -54,8 +54,11 @@ public static class ReviewScriptRenderer
     public static string Render(Plan plan, string target, DateTimeOffset generatedAt)
     {
         // The executed declarative text is read from the plan — the same field the
-        // fingerprint binds — so the reviewed text, the hashed text and the applied
-        // text are one artifact by construction, not by the caller passing a match.
+        // fingerprint binds — so the reviewed text and the hashed text are one artifact
+        // by construction, not by the caller passing a match. What actually runs is a
+        // subset of it: the engine writes the script over the whole comparison, and the
+        // plan can drop objects from execution while their statements stay in the text.
+        // Plan.Excluded names them, and the header renders that above the script.
         var updateScript = plan.UpdateScript;
         var declarative = plan.Actions.Where(a => a.Operation != PlanOperation.Redefine).ToList();
         var redefines = plan.Actions.Where(a => a.Operation == PlanOperation.Redefine).ToList();
@@ -93,6 +96,30 @@ public static class ReviewScriptRenderer
         sb.AppendLine(" * Migrations are not part of this document: they are run-once scripts");
         sb.AppendLine(" * reviewed as files in the repository, not regenerated per plan.");
         sb.AppendLine(" * --------------------------------------------------------------- */");
+
+        // Ahead of the messages, because it is about this document rather than about
+        // the plan: it tells the reader that something they are about to read is not
+        // part of what runs. Without it the only honest reading of a statement in a
+        // review document is that it executes — and that reading would be wrong.
+        if (plan.Excluded.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("/* NOT EXECUTED — statements below exist for these objects and will not run.");
+            sb.AppendLine(" * The script is the engine's own text, reproduced exactly so that what is");
+            sb.AppendLine(" * reviewed and what is applied stay one artifact. That fidelity is why it");
+            sb.AppendLine(" * can contain work this plan does not do. Each object here is announced in");
+            sb.AppendLine(" * the script by a PRINT naming it.");
+            sb.AppendLine(" *");
+            foreach (var e in plan.Excluded)
+            {
+                sb.AppendLine($" *   {Redaction.Redact(e.ObjectName)}");
+                sb.AppendLine($" *     {Redaction.Redact(e.Reason)}");
+            }
+            sb.AppendLine(" *");
+            sb.AppendLine(" * Anything NOT listed here does run. A DROP you cannot find above is a");
+            sb.AppendLine(" * DROP that executes.");
+            sb.AppendLine(" */");
+        }
 
         if (plan.Messages.Count > 0)
         {

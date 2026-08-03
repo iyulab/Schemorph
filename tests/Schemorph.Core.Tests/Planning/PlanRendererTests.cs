@@ -18,7 +18,7 @@ public class PlanRendererTests
     {
         var json = PlanRenderer.ToJson(Sample);
 
-        Assert.Contains("\"formatVersion\": \"1.5\"", json);
+        Assert.Contains($"\"formatVersion\": \"{Plan.CurrentFormatVersion}\"", json);
         Assert.Contains("\"hasChanges\": true", json);
         Assert.Contains("\"hasDestructiveChanges\": true", json);
         Assert.Contains("\"changes\"", json);
@@ -92,13 +92,45 @@ public class PlanRendererTests
         Assert.NotEqual(PlanFingerprint.Compute(Sample), PlanFingerprint.Compute(different));
     }
 
+    /// <summary>
+    /// Automation reading this JSON decides whether a plan is safe from
+    /// <c>changes</c> and <c>hasDestructiveChanges</c> — both of which describe what
+    /// executes. A DROP sitting in the update script for an object the plan skips is
+    /// invisible to both, which is how a script can read as destructive to a person
+    /// and as clean to a machine at the same time.
+    /// </summary>
+    [Fact]
+    public void Json_carries_what_the_script_contains_but_the_plan_does_not_execute()
+    {
+        var plan = Sample with
+        {
+            Excluded = [new PlanExclusion("dbo.__SchemorphHistory", "Schemorph's own history ledger.")],
+        };
+
+        using var doc = System.Text.Json.JsonDocument.Parse(PlanRenderer.ToJson(plan));
+
+        var excluded = Assert.Single(doc.RootElement.GetProperty("excluded").EnumerateArray().ToList());
+        Assert.Equal("dbo.__SchemorphHistory", excluded.GetProperty("objectName").GetString());
+        Assert.Equal("Schemorph's own history ledger.", excluded.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Json_carries_an_empty_exclusion_list_when_the_plan_runs_all_of_its_script()
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(PlanRenderer.ToJson(Sample));
+
+        // Present and empty, not absent: a consumer checking the field should not have
+        // to tell "nothing excluded" apart from "this version does not report it".
+        Assert.Empty(doc.RootElement.GetProperty("excluded").EnumerateArray().ToList());
+    }
+
     [Fact]
     public void Json_planHash_matches_the_computed_fingerprint()
     {
         var json = PlanRenderer.ToJson(Sample);
 
         using var doc = System.Text.Json.JsonDocument.Parse(json);
-        Assert.Equal("1.5", doc.RootElement.GetProperty("formatVersion").GetString());
+        Assert.Equal(Plan.CurrentFormatVersion, doc.RootElement.GetProperty("formatVersion").GetString());
         Assert.Equal(PlanFingerprint.Compute(Sample), doc.RootElement.GetProperty("planHash").GetString());
     }
 

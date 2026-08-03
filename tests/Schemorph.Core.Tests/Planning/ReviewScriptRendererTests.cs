@@ -179,4 +179,46 @@ public sealed class ReviewScriptRendererTests
 
         Assert.Contains("No changes.", doc);
     }
+
+    /// <summary>
+    /// The document is the engine's text verbatim, so it can contain DDL for objects
+    /// the plan never executes — a history-ledger DROP appears in every comparison
+    /// against a target that already has a ledger. Reading a review document, a
+    /// statement means "this runs"; where that is untrue the document has to say so
+    /// itself, because the reader is signing the text and not the plan model.
+    /// </summary>
+    [Fact]
+    public void Objects_present_in_the_script_but_not_executed_are_named_before_it()
+    {
+        var plan = PlanOf("ALTER TABLE dbo.Orders ADD Note INT;\nDROP TABLE dbo.__SchemorphHistory;",
+            Declarative("dbo.Orders")) with
+        {
+            Excluded = [new PlanExclusion("dbo.__SchemorphHistory", "Schemorph's own history ledger.")],
+        };
+
+        var doc = ReviewScriptRenderer.Render(plan, "conn", At);
+
+        Assert.Contains("NOT EXECUTED", doc);
+        Assert.Contains("dbo.__SchemorphHistory", doc);
+        Assert.Contains("Schemorph's own history ledger.", doc);
+
+        // Ahead of the script: a caveat found after the statement is a caveat found
+        // after the reviewer already read the statement as executable.
+        Assert.True(doc.IndexOf("NOT EXECUTED", StringComparison.Ordinal)
+                  < doc.IndexOf("DROP TABLE dbo.__SchemorphHistory;", StringComparison.Ordinal));
+
+        // The far worse outcome than a false stop is teaching a reader that DROPs here
+        // are inert. The notice bounds itself so the lesson stays "this one does not run".
+        Assert.Contains("Anything NOT listed here does run", doc);
+    }
+
+    [Fact]
+    public void A_plan_that_executes_everything_it_contains_carries_no_notice()
+    {
+        var plan = PlanOf("ALTER TABLE dbo.Orders ADD Note INT;", Declarative("dbo.Orders"));
+
+        var doc = ReviewScriptRenderer.Render(plan, "conn", At);
+
+        Assert.DoesNotContain("NOT EXECUTED", doc);
+    }
 }
