@@ -107,8 +107,8 @@ public static class ReviewScriptRenderer
             sb.AppendLine("/* NOT EXECUTED — statements below exist for these objects and will not run.");
             sb.AppendLine(" * The script is the engine's own text, reproduced exactly so that what is");
             sb.AppendLine(" * reviewed and what is applied stay one artifact. That fidelity is why it");
-            sb.AppendLine(" * can contain work this plan does not do. Each object here is announced in");
-            sb.AppendLine(" * the script by a PRINT naming it.");
+            sb.AppendLine(" * can contain work this plan does not do. Search the script for an object's");
+            sb.AppendLine(" * name to find the statements meant for it.");
             sb.AppendLine(" *");
             foreach (var e in plan.Excluded)
             {

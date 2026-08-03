@@ -115,7 +115,7 @@ public sealed class PostgresProvider : IDatabaseProvider
         }
 
         // The same script AND the same attribution diff advertised: the fingerprint
-        // binds both (plan format 1.5), so anything the gate hashes has to be
+        // binds both (since plan format 1.5), so anything the gate hashes has to be
         // produced identically on this path — the asymmetry that broke the gate once.
         onChangesComputed?.Invoke(new CompareResult(
             compared.Changes, Array.Empty<RawMessage>(),

@@ -19,7 +19,7 @@ independent of the product version:
 - **Major** increments are breaking changes to existing properties. These are
   rare and deliberate.
 
-Current version: **`1.5`**.
+Current version: **`1.6`**.
 
 | Version | Change |
 |---|---|
