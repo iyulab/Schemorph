@@ -48,7 +48,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
     public Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken cancellationToken = default)
         => Task.Run(() => Compare(request, cancellationToken), cancellationToken);
 
-    public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, bool> includeChange, Action<CompareResult>? onChangesComputed = null, CancellationToken cancellationToken = default)
+    public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, ChangeScript?, bool> includeChange, Action<CompareResult>? onChangesComputed = null, CancellationToken cancellationToken = default)
         => Task.Run(() => Apply(request, includeChange, onChangesComputed, cancellationToken), cancellationToken);
 
     public Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(IDesiredState desiredState, CancellationToken cancellationToken = default)
@@ -178,7 +178,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
     // ------------------------------------------------------------------ apply
 
-    private static ApplyResult Apply(ApplyRequest request, Func<RawChange, bool> includeChange, Action<CompareResult>? onChangesComputed, CancellationToken cancellationToken)
+    private static ApplyResult Apply(ApplyRequest request, Func<RawChange, ChangeScript?, bool> includeChange, Action<CompareResult>? onChangesComputed, CancellationToken cancellationToken)
     {
         var state = SqlServerDesiredState.From(request.DesiredState);
         using var session = ComparisonSession.Open(state, request.ConnectionString, cancellationToken);
@@ -203,12 +203,20 @@ public sealed class SqlServerProvider : IDatabaseProvider
         var (script, changeScripts) = GenerateUpdateScript(result, request.ConnectionString, all, messages: null);
         var tablesWithColumnChanges = TablesWithColumnChanges(result.Differences);
 
+        // Same attribution the hook announces below, so the gate here and the gate
+        // the plan was built with judge identical input. This provider reports no
+        // column-level data-loss signal yet (see the note on ChangeScript in
+        // GenerateUpdateScript), so its classification is unchanged for now —
+        // passing the slice is what makes adding one a provider-local change.
+        var attributed = (changeScripts ?? Array.Empty<ChangeScript>())
+            .ToDictionary(s => s.ObjectName, StringComparer.OrdinalIgnoreCase);
+
         var applied = new List<RawChange>();
         var excluded = new List<RawChange>();
         foreach (var difference in result.Differences)
         {
             var change = ToRawChange(difference);
-            if (includeChange(change))
+            if (includeChange(change, attributed.GetValueOrDefault(change.ObjectName)))
             {
                 applied.Add(change);
             }

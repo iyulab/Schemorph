@@ -5,6 +5,72 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Fixed
+
+- **Removing a column from the desired state is a destructive change, and is gated
+  like one.** A plan is built per object, so a column the files stop declaring
+  arrives as an `ALTER` of the table that holds it — the same shape as adding a
+  default or widening a type. Risk was classified from that shape alone, so the
+  most common way to lose data got the ordinary alter's `warning`, was included in
+  every plan by default, and a plain `apply` carried it out. Every row of that
+  column was gone, with `--allow-destructive` never asked for and no
+  `SCHEMORPH1xx` fired. The gate stood only in front of a `DROP` of a whole
+  object, which is the rarer half of the same hazard.
+
+  The criterion has always been the loss rather than the syntax; what was missing
+  is that a change's *object and operation* cannot express it. Providers now
+  report whether a change removes a column, and the classification reads that
+  alongside the operation. A column that is **re-created** is deliberately not
+  gated — its new values are the new definition's output, so they are replaced
+  rather than lost, and `SCHEMORPH107` describes it as before. The line is
+  recoverability.
+
+  **Read this before upgrading.** A change that applied on 0.8.0 can now be
+  refused: `diff` reports no actions, `hasDestructiveChanges` stays `false`
+  because nothing destructive is *in* the plan, and `SCHEMORPH001` says what was
+  held back and why. The change is in `excluded[]` and in the review script.
+  Passing `--allow-destructive` restores exactly the previous behaviour, now with
+  `risk: "destructive"` and `SCHEMORPH103` on the entry. Gating is per object, so
+  a safe change to the same table waits with the unsafe one rather than applying
+  beside it — the plan and the apply must contain the same thing.
+
+  **Currently PostgreSQL only.** The signal is a dialect judgment and this
+  provider proves it from the model. The SQL Server provider reports nothing yet
+  and keeps its previous classification; DacFx's own data-loss signal is the
+  candidate and needs a live engine to establish. Parity here means the same
+  contract, and the contract is that a provider which cannot prove the
+  distinction under-claims rather than guesses.
+
+### Added
+
+- **`SCHEMORPH108` — a plan says when it drops an index the desired state does not
+  declare.** Since 0.7.0 an undeclared index is planned away, and correctly so:
+  the files are the whole truth about a table's indexes. It is also correctly
+  **not** gated — an index holds no data of its own, which 0.7.0 measured on both
+  engines. But the lint band said nothing either, and that silence is read. A
+  reviewer who has learned that this band speaks up when something is at stake
+  sees no warning and concludes there is nothing to lose, while the queries that
+  index answered fall back to a scan.
+
+  Saying it required widening what the band is about, from *data that does not
+  survive* to **cost the apply changes** — data loss being the most expensive kind
+  rather than the only one. Nothing about gating moved: what fires here and what
+  the destructive gate stops remain separate questions, and this fires on a change
+  that runs by default. Upgraders gating CI on the `SCHEMORPH1xx` band (the shape
+  the [plan-comment recipe](docs/recipes/github-actions-plan-comment.md) suggests)
+  can fail on a plan that passed before, without the plan itself having changed.
+
+### Changed
+
+- **`planHash` moves for any plan containing a change that removes a column.**
+  Risk is part of what the fingerprint binds, and that change's risk is now
+  `destructive`. A hash captured under 0.8.0 no longer matches and the apply
+  refuses rather than running unreviewed DDL — fail-closed, the designed
+  direction. No plan property changed and the format version is unchanged: this
+  is a classification correction, not a contract addition.
+
 ## 0.8.0 — 2026-08-03
 
 ### Fixed

@@ -133,15 +133,112 @@ public class PlanBuilderTests
     }
 
     [Theory]
-    [InlineData("Delete", "Table", "dbo.Data", false, false)]     // destructive gated
-    [InlineData("Delete", "Table", "dbo.Data", true, true)]       // destructive allowed
-    [InlineData("Delete", "View", "dbo.V", false, true)]          // programmable drop = warning, stays declarative
-    [InlineData("Add", "Table", "dbo.__SchemorphHistory", true, false)]   // ledger self-exclusion
-    [InlineData("Add", "Procedure", "dbo.P", false, false)]       // routed to redefine strategy
-    [InlineData("Change", "View", "dbo.V", true, false)]          // routed to redefine strategy
-    public void ShouldInclude_matches_plan_policy(string op, string type, string name, bool allowDestructive, bool expected)
+    [InlineData("Delete", "Table", "dbo.Data", false, false, false)]   // destructive gated
+    [InlineData("Delete", "Table", "dbo.Data", true, false, true)]     // destructive allowed
+    [InlineData("Delete", "View", "dbo.V", false, false, true)]        // programmable drop = warning, stays declarative
+    [InlineData("Add", "Table", "dbo.__SchemorphHistory", true, false, false)]   // ledger self-exclusion
+    [InlineData("Add", "Procedure", "dbo.P", false, false, false)]     // routed to redefine strategy
+    [InlineData("Change", "View", "dbo.V", true, false, false)]        // routed to redefine strategy
+    [InlineData("Change", "Table", "dbo.Data", false, false, true)]    // ordinary in-place alter
+    // The gate reads the attribution, not the operation: an alter that removes a
+    // column is the same (Change, Table) tuple as the one above and loses every
+    // row of it. Judging from the tuple alone applied it by default.
+    [InlineData("Change", "Table", "dbo.Data", false, true, false)]    // column drop gated
+    [InlineData("Change", "Table", "dbo.Data", true, true, true)]      // column drop allowed
+    public void ShouldInclude_matches_plan_policy(
+        string op, string type, string name, bool allowDestructive, bool dropsColumn, bool expected)
     {
-        Assert.Equal(expected, PlanBuilder.ShouldInclude(new RawChange(op, type, name), allowDestructive));
+        var script = dropsColumn ? new ChangeScript(name, "-- ddl", Rebuild: false, DropsColumn: true) : null;
+
+        Assert.Equal(expected, PlanBuilder.ShouldInclude(new RawChange(op, type, name), script, allowDestructive));
+    }
+
+    /// <summary>
+    /// The gate and the plan must reach the same verdict, because the apply filters
+    /// with one and the reviewer signs the other. They did not always share input:
+    /// the predicate took a <see cref="RawChange"/> while the plan also had the
+    /// provider's attribution, so a column drop was gated out of the plan and
+    /// applied anyway would have been indistinguishable from correct behaviour.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ShouldInclude_agrees_with_the_plan_it_gates(bool allowDestructive)
+    {
+        var change = new RawChange("Change", "Table", "dbo.Data");
+        var script = new ChangeScript("dbo.Data", "ALTER TABLE dbo.Data DROP COLUMN Gone;",
+            Rebuild: false, DropsColumn: true);
+        var compare = new CompareResult([change], [], "ALTER TABLE dbo.Data DROP COLUMN Gone;", [script]);
+
+        var plan = PlanBuilder.Build(compare, allowDestructive);
+        var included = PlanBuilder.ShouldInclude(change, script, allowDestructive);
+
+        Assert.Equal(plan.Actions.Any(a => a.ObjectName == "dbo.Data"), included);
+    }
+
+    [Fact]
+    public void A_column_the_desired_state_stops_declaring_is_destructive()
+    {
+        var script = new ChangeScript("dbo.Data", "ALTER TABLE dbo.Data DROP COLUMN Gone;",
+            Rebuild: false, DropsColumn: true);
+        var compare = new CompareResult(
+            [new RawChange("Change", "Table", "dbo.Data")], [],
+            "ALTER TABLE dbo.Data DROP COLUMN Gone;", [script]);
+
+        var gated = PlanBuilder.Build(compare, allowDestructive: false);
+        Assert.Empty(gated.Actions);
+        Assert.False(gated.HasDestructiveChanges);
+        Assert.Contains(gated.Messages, m => m.Code == "SCHEMORPH001");
+        // The statement stays in the engine's script, so the review document has to
+        // name it — the 1.6 contract, exercised on the shape 1.6 did not yet cover.
+        Assert.Contains(gated.Excluded, e => e.ObjectName == "dbo.Data");
+
+        var allowed = PlanBuilder.Build(compare, allowDestructive: true);
+        Assert.Equal(RiskLevel.Destructive, Assert.Single(allowed.Actions).Risk);
+        Assert.True(allowed.HasDestructiveChanges);
+        Assert.Contains(allowed.Messages, m => m.Code == "SCHEMORPH103");
+    }
+
+    /// <summary>
+    /// The boundary the criterion draws: recoverability, not whether the old bytes
+    /// survive. A re-created column's values are the new definition's output, so
+    /// gating it would refuse a change nobody loses anything to — SCHEMORPH107
+    /// describes it instead.
+    /// </summary>
+    [Fact]
+    public void A_re_created_column_is_described_but_not_gated()
+    {
+        var script = new ChangeScript("dbo.Data", "-- drop and add", Rebuild: false,
+            RecreatesColumn: true);
+        var compare = new CompareResult(
+            [new RawChange("Change", "Table", "dbo.Data")], [], "-- drop and add", [script]);
+
+        var plan = PlanBuilder.Build(compare, allowDestructive: false);
+
+        Assert.Equal(RiskLevel.Warning, Assert.Single(plan.Actions).Risk);
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH107");
+        Assert.DoesNotContain(plan.Messages, m => m.Code == "SCHEMORPH001");
+    }
+
+    /// <summary>
+    /// An index holds no data, so removing one is not gated — 0.7.0 measured that
+    /// on both engines and said so. What was missing is that the band stayed silent
+    /// about it too, and a reviewer who has learned that the band speaks up reads
+    /// silence as "nothing at stake".
+    /// </summary>
+    [Fact]
+    public void A_dropped_index_warns_without_gating()
+    {
+        var script = new ChangeScript("dbo.Data", "DROP INDEX ix_gone;", Rebuild: false,
+            DropsIndex: true);
+        var compare = new CompareResult(
+            [new RawChange("Change", "Table", "dbo.Data")], [], "DROP INDEX ix_gone;", [script]);
+
+        var plan = PlanBuilder.Build(compare, allowDestructive: false);
+
+        Assert.Equal(RiskLevel.Warning, Assert.Single(plan.Actions).Risk);
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH108");
+        Assert.DoesNotContain(plan.Messages, m => m.Code == "SCHEMORPH001");
     }
 
     // ADR-0002 strategy routing: programmable-object creation/alteration never goes

@@ -97,7 +97,7 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     public async Task<ApplyResult> ApplyAsync(
         ApplyRequest request,
-        Func<RawChange, bool> includeChange,
+        Func<RawChange, ChangeScript?, bool> includeChange,
         Action<CompareResult>? onChangesComputed = null,
         CancellationToken cancellationToken = default)
     {
@@ -121,8 +121,15 @@ public sealed class PostgresProvider : IDatabaseProvider
             compared.Changes, Array.Empty<RawMessage>(),
             compared.UpdateScript, compared.ChangeScripts));
 
-        var included = compared.Changes.Where(includeChange).ToList();
-        var excluded = compared.Changes.Where(c => !includeChange(c)).ToList();
+        // The gate reads the same attribution the hook just announced — the plan
+        // built there and the filter applied here must classify identically, or
+        // the apply executes something the plan gated out.
+        var attributed = compared.ChangeScripts
+            .ToDictionary(s => s.ObjectName, StringComparer.Ordinal);
+        bool Include(RawChange c) => includeChange(c, attributed.GetValueOrDefault(c.ObjectName));
+
+        var included = compared.Changes.Where(Include).ToList();
+        var excluded = compared.Changes.Where(c => !Include(c)).ToList();
 
         // Exclusions are masked BEFORE synthesis: an excluded drop keeps its
         // table out of the script entirely, rather than being filtered out of
@@ -254,8 +261,64 @@ public sealed class PostgresProvider : IDatabaseProvider
                     liveByName.GetValueOrDefault(g.Key)),
                 RecreatesColumn: RecreatesColumn(
                     desiredByName.GetValueOrDefault(g.Key),
+                    liveByName.GetValueOrDefault(g.Key)),
+                DropsColumn: DropsColumn(
+                    desiredByName.GetValueOrDefault(g.Key),
+                    liveByName.GetValueOrDefault(g.Key)),
+                DropsIndex: DropsIndex(
+                    desiredByName.GetValueOrDefault(g.Key),
                     liveByName.GetValueOrDefault(g.Key))))
             .ToList();
+    }
+
+    /// <summary>
+    /// Whether this table loses a column the desired state no longer declares —
+    /// the destructive criterion, and the one signal here the core *gates* on
+    /// rather than merely reports.
+    ///
+    /// Only for a table that exists on both sides. A table the desired state drops
+    /// entirely is already destructive at the object level, and one it creates has
+    /// nothing to lose; reporting either here would say the same thing twice or
+    /// say it wrongly.
+    ///
+    /// The synthesizer emits <c>DROP COLUMN</c> in two places and this is
+    /// deliberately only one of them. The other is a column that gains or changes
+    /// a generation expression, which has no in-place form on the supported
+    /// baseline: it is dropped and added back, and its new values are the new
+    /// expression's output by definition. That is a replacement, not a loss, and
+    /// <c>SCHEMORPH107</c> already describes it. Gating it would refuse a change
+    /// nobody loses anything to. Judged on the model rather than the emitted text,
+    /// so the distinction is proven rather than pattern-matched.
+    /// </summary>
+    private static bool DropsColumn(PgTable? want, PgTable? have)
+    {
+        if (want is null || have is null) return false;
+
+        var declared = want.Columns.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
+
+        return have.Columns.Any(c => !declared.Contains(c.Name));
+    }
+
+    /// <summary>
+    /// Whether this table loses an index the desired state no longer declares —
+    /// the hazard <c>SCHEMORPH108</c> exists for. Not destructive and not gated:
+    /// an index holds no data of its own, so nothing is unrecoverable. What
+    /// changes is query cost, which the band says out loud rather than leaving to
+    /// a reader who would otherwise infer "nothing at stake" from its silence.
+    ///
+    /// A redefinition — same name, different definition — is a drop and a create
+    /// in the synthesizer, but the index survives the apply under that name, so it
+    /// is not reported here. Only a name the desired state stopped declaring is.
+    /// Nothing is reported for a table the desired state drops: its indexes go
+    /// with it, and that plan entry is already destructive.
+    /// </summary>
+    private static bool DropsIndex(PgTable? want, PgTable? have)
+    {
+        if (want is null || have is null) return false;
+
+        var declared = want.Indexes.Select(i => i.Name).ToHashSet(StringComparer.Ordinal);
+
+        return have.Indexes.Any(i => !declared.Contains(i.Name));
     }
 
     /// <summary>

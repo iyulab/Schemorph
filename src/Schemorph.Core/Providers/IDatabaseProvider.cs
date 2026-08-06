@@ -43,7 +43,14 @@ public interface IDatabaseProvider
     /// <summary>
     /// Apply desired state to the target database. <paramref name="includeChange"/>
     /// is the core's policy hook: the provider mechanically applies exactly the
-    /// changes the core includes (destructive gating, self-exclusion, ...).
+    /// changes the core includes (destructive gating, self-exclusion, ...). It is
+    /// handed the change's <see cref="ChangeScript"/> alongside the change itself,
+    /// because a <see cref="RawChange"/> is three strings — object, type, operation
+    /// — and the destructive criterion is about what the change *does to data*,
+    /// which lives one level below that. The provider passes the same attribution
+    /// it announces through <paramref name="onChangesComputed"/>, so the gate here
+    /// and the gate the plan was built with judge identical input; null when the
+    /// change has no attributed slice.
     /// <paramref name="onChangesComputed"/> fires before anything executes, with
     /// the comparison the apply will carry out — from the same session, so a plan
     /// shown through it cannot race a second comparison. It carries the compare
@@ -55,7 +62,7 @@ public interface IDatabaseProvider
     /// </summary>
     Task<ApplyResult> ApplyAsync(
         ApplyRequest request,
-        Func<RawChange, bool> includeChange,
+        Func<RawChange, ChangeScript?, bool> includeChange,
         Action<CompareResult>? onChangesComputed = null,
         CancellationToken cancellationToken = default);
 
@@ -205,13 +212,25 @@ public sealed record CompareResult(
 /// the table around it does — a table-level plan entry that reads as an ordinary
 /// alter, which is exactly why it needs saying (dialect judgment; false whenever
 /// it cannot be proven).
+/// <paramref name="DropsColumn"/>: the change removes a column the desired state
+/// no longer declares. Unlike every other signal here this one is not only
+/// described but *gated* — its rows are gone and nothing recomputes them, which
+/// is the destructive criterion itself. Distinct from
+/// <paramref name="RecreatesColumn"/> deliberately: a re-created column's values
+/// are the new definition's output, so they are replaced rather than lost.
+/// <paramref name="DropsIndex"/>: the change removes an index the desired state
+/// no longer declares. Not destructive — an index holds no data of its own — but
+/// the queries it answered fall back to a scan, so it is a cost the reviewer is
+/// changing rather than one they are keeping.
 /// </summary>
 public sealed record ChangeScript(
     string ObjectName,
     string Sql,
     bool Rebuild,
     bool AddsNotNullWithoutDefault = false,
-    bool RecreatesColumn = false);
+    bool RecreatesColumn = false,
+    bool DropsColumn = false,
+    bool DropsIndex = false);
 
 public sealed record RawChange(string Operation, string ObjectType, string ObjectName);
 

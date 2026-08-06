@@ -69,7 +69,7 @@ internal sealed class FakeProvider : IDatabaseProvider
     public Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken ct = default)
         => throw new NotSupportedException();
 
-    public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, bool> include, Action<CompareResult>? onChangesComputed = null, CancellationToken ct = default)
+    public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, ChangeScript?, bool> include, Action<CompareResult>? onChangesComputed = null, CancellationToken ct = default)
     {
         if (ApplyOutcome is null) throw new NotSupportedException();
         if (Computed is not null) onChangesComputed?.Invoke(Computed);

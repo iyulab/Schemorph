@@ -50,22 +50,30 @@ public static class PlanBuilder
                 continue;   // Represented by checksum-driven Redefine actions instead.
             }
 
-            var (operation, risk) = Classify(change);
+            var script = scripts.GetValueOrDefault(change.ObjectName);
+            var (operation, risk) = Classify(change, script);
             if (risk == RiskLevel.Destructive && !allowDestructive)
             {
+                // What is lost differs by shape, and the reviewer is deciding whether to
+                // enable it — so the message says which loss they would be enabling
+                // rather than only that one exists.
+                var loss = script?.DropsColumn == true && operation == PlanOperation.Alter
+                    ? "a column the desired state no longer declares is dropped, and its rows do not survive"
+                    : "the object it drops holds data";
+
                 messages.Add(new PlanMessage(
                     "Warning",
                     "SCHEMORPH001",
-                    $"Destructive change excluded from plan (enable explicitly to include): {operation} {change.ObjectType} {change.ObjectName}"));
+                    $"Destructive change excluded from plan (enable explicitly to include): " +
+                    $"{operation} {change.ObjectType} {change.ObjectName} — {loss}."));
                 // Same shape as the ledger above: the engine's script still carries the
                 // statement. The warning says it was gated; this says where to expect it.
                 excluded.Add(new PlanExclusion(change.ObjectName,
-                    $"Destructive {operation} on {change.ObjectType}, gated out of this plan. " +
+                    $"Destructive {operation} on {change.ObjectType} — {loss}, gated out of this plan. " +
                     "Enable destructive changes explicitly to include it."));
                 continue;
             }
 
-            var script = scripts.GetValueOrDefault(change.ObjectName);
             actions.Add(new PlanAction(change.ObjectName, change.ObjectType, operation, risk,
                 Sql: script?.Sql,
                 Explanation: Explain(operation, risk, script?.Rebuild == true)));
@@ -90,6 +98,11 @@ public static class PlanBuilder
     /// </summary>
     private static string Explain(PlanOperation operation, RiskLevel risk, bool rebuild) => operation switch
     {
+        // The loss comes first: a change can both rebuild and drop a column, and a
+        // reader told only about the rebuild's cost has been told the cheaper half.
+        PlanOperation.Alter when risk == RiskLevel.Destructive =>
+            "The live definition differs from the desired state, and carrying the change out drops a column the desired state no longer declares — its rows are lost, while the table and its other columns survive. In this plan only because destructive changes were explicitly allowed."
+            + (rebuild ? " The table is also rebuilt: a new table is created, rows are copied over, the old table is dropped and the new one renamed. Expect time and log proportional to the data." : ""),
         PlanOperation.Alter when rebuild =>
             "The change cannot be applied in place: the table is rebuilt — a new table is created, rows are copied over, the old table is dropped and the new one renamed. Expect time and log proportional to the data.",
         PlanOperation.Create => "Missing from the database; created by the declarative publish.",
@@ -100,12 +113,17 @@ public static class PlanBuilder
         _ => "Planned by the declarative publish.",
     };
 
-    /// <summary>Apply-time policy: exactly the declarative changes a plan would contain.</summary>
-    public static bool ShouldInclude(RawChange change, bool allowDestructive)
+    /// <summary>
+    /// Apply-time policy: exactly the declarative changes a plan would contain.
+    /// Takes the same attribution <see cref="Build"/> classifies with, because a
+    /// gate that judged less than the plan did would let through what the plan
+    /// gated out — the two must reach the same verdict from the same input.
+    /// </summary>
+    public static bool ShouldInclude(RawChange change, ChangeScript? script, bool allowDestructive)
     {
         if (LedgerObjects.IsLedgerObject(change.ObjectName)) return false;
         if (RoutesToRedefine(change)) return false;
-        var (_, risk) = Classify(change);
+        var (_, risk) = Classify(change, script);
         return risk != RiskLevel.Destructive || allowDestructive;
     }
 
@@ -118,10 +136,11 @@ public static class PlanBuilder
         ProgrammableObjects.IsProgrammable(change.ObjectType)
         && Classify(change).Operation is PlanOperation.Create or PlanOperation.Alter or PlanOperation.Redefine;
 
-    public static (PlanOperation Operation, RiskLevel Risk) Classify(RawChange change)
+    public static (PlanOperation Operation, RiskLevel Risk) Classify(
+        RawChange change, ChangeScript? script = null)
     {
         var operation = ParseOperation(change.Operation);
-        return (operation, ClassifyRisk(operation, change.ObjectType));
+        return (operation, ClassifyRisk(operation, change.ObjectType, script));
     }
 
     private static PlanOperation ParseOperation(string operation) => operation.ToLowerInvariant() switch
@@ -141,10 +160,33 @@ public static class PlanBuilder
     private static readonly HashSet<string> DataHoldingObjectTypes =
         new(StringComparer.OrdinalIgnoreCase) { "Table" };
 
-    private static RiskLevel ClassifyRisk(PlanOperation operation, string objectType) => operation switch
+    /// <summary>
+    /// The criterion is data-losing, not object-dropping — and for most of this
+    /// project's life those were treated as the same thing, because a plan is
+    /// built per object and an object is the coarsest thing a change can name.
+    /// A column removed from the desired state is carried out as an ALTER of the
+    /// table that holds it: same object, same operation, and every row of that
+    /// column gone. Classifying it from the operation alone therefore called the
+    /// most common unrecoverable loss an ordinary alter and applied it by default.
+    ///
+    /// Which is why the provider's attribution is an input here. The signal it
+    /// carries is deliberately narrow: a column the desired state no longer
+    /// declares. A column that is *re-created* (<c>RecreatesColumn</c>) is not
+    /// gated — its new values are the new definition's output, so they are
+    /// replaced rather than lost, and <c>SCHEMORPH107</c> says so. The line is
+    /// recoverability, not whether the old bytes survive.
+    ///
+    /// A provider that cannot prove the distinction reports neither signal and
+    /// keeps the object-level classification it always had — under-claiming is
+    /// the designed direction for every dialect judgment in
+    /// <see cref="ChangeScript"/>.
+    /// </summary>
+    private static RiskLevel ClassifyRisk(
+        PlanOperation operation, string objectType, ChangeScript? script) => operation switch
     {
         PlanOperation.Create => RiskLevel.Safe,
         PlanOperation.Redefine => RiskLevel.Safe,
+        PlanOperation.Alter when script?.DropsColumn == true => RiskLevel.Destructive,
         PlanOperation.Alter => RiskLevel.Warning,
         PlanOperation.Drop when DataHoldingObjectTypes.Contains(objectType) => RiskLevel.Destructive,
         PlanOperation.Drop => RiskLevel.Warning,

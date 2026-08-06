@@ -158,3 +158,17 @@ Parity means identical contract and equal capability range — deliberately **no
 identical limitations. The expression-comparison defect above is SQL-Server-specific:
 the PostgreSQL comparison normalizes both sides through the engine's own renderings,
 so enum-style CHECK constraints converge there.
+
+One asymmetry runs the other way, and it is worth stating plainly because it sits on
+the gate rather than on a capability. **Removing a column from the desired state is
+classified destructive on PostgreSQL and not yet on SQL Server.** Whether a change
+loses data is a judgment about the change's contents, which only the provider can
+make; the PostgreSQL provider proves it from the compared model, and the SQL Server
+provider has no equivalent signal wired up yet. So the same declarative edit is
+refused without `--allow-destructive` on one engine and applied on the other.
+
+That is a gap in one provider's judgment, not two different contracts: a provider
+that cannot prove the distinction reports nothing and keeps the coarser object-level
+classification, which is the same under-claiming rule every dialect signal follows.
+Until it closes, review the plan on SQL Server rather than relying on the gate to
+stop a column removal — `diff --format sql` shows the statement before anything runs.

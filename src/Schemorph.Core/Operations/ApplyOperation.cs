@@ -87,7 +87,7 @@ public static class ApplyOperation
         {
             result = await provider.ApplyAsync(
                 new ApplyRequest(state, request.ConnectionString),
-                change => PlanBuilder.ShouldInclude(change, request.AllowDestructive),
+                (change, script) => PlanBuilder.ShouldInclude(change, script, request.AllowDestructive),
                 computed =>
                 {
                     redefinePlan = RedefineRunner.WithInvalidations(

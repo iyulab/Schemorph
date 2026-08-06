@@ -181,17 +181,22 @@ never change the exit code; execution gating stays with the destructive gate.
 Rules are deliberately conservative: they fire only on what is proven, so a
 missing warning is possible but a wrong one is not.
 
+What the band covers is **cost the apply changes**, of which lost data is the most
+expensive kind rather than the only one. Reading it as "data loss" makes its silence
+mean "nothing is at stake", which is not what silence here has ever guaranteed.
+
 | Code | Severity | Meaning |
 |---|---|---|
 | `SCHEMORPH101` | Warning | A change adds a NOT NULL column without a default — fails on a table that already holds rows |
 | `SCHEMORPH102` | Warning | A change rebuilds the table (new table, rows copied, old dropped, renamed) — cost grows with the data |
-| `SCHEMORPH103` | Warning | A destructive change is included in the plan (`--allow-destructive`) — applying it loses the data it holds |
+| `SCHEMORPH103` | Warning | A destructive change is included in the plan (`--allow-destructive`) — applying it loses data. The text names which loss: an object that holds data, or a column the desired state no longer declares |
 | `SCHEMORPH104` | Warning | A pending migration TRUNCATEs a table — removes every row, not selectively recoverable |
 | `SCHEMORPH105` | Warning | A pending migration UPDATEs or DELETEs without a WHERE clause — touches every row |
 | `SCHEMORPH106` | Warning | A pending migration changes permissions (GRANT/REVOKE/DENY) |
 | `SCHEMORPH107` | Warning | A change re-creates a column instead of altering it — that column's current values do not survive, though the table and its other columns do |
+| `SCHEMORPH108` | Warning | A change drops an index the desired state does not declare — no data is lost and it is not gated, but every query that relied on it falls back to a scan |
 
-Plan-side findings (`101`–`103`, `107`) ride the plan's `messages`; migration-side
+Plan-side findings (`101`–`103`, `107`–`108`) ride the plan's `messages`; migration-side
 findings (`104`–`106`) ride the `migrations.warnings` list on `status` and `apply`
 output (text mode renders both under their section). Codes are assigned in the order
 the rules were added, so a new plan-side rule does not renumber the band — a code is

@@ -84,7 +84,7 @@ One change goes through the same four steps whether you type them or a pipeline 
 3. **`schemorph diff --format sql`** — the whole plan as *one* review document, in execution order, with the `planHash` in its header. This is the artifact to read, paste into a pull request, and sign off on.
 4. **`schemorph apply --expect-plan <hash>`** — executes exactly that plan, or refuses with `plan_mismatch` if anything drifted since the review.
 
-The DDL a person approves is the DDL that runs, and nothing else — that is the whole point of the fingerprint ([human approval gate](./docs/recipes/human-approval-gate.md)). Destructive operations (`DROP` of anything holding data) stay out of plans entirely unless you enable them, and are marked prominently when you do. Every apply is recorded in a history ledger inside the database: what ran, when, its checksum, its outcome.
+The DDL a person approves is the DDL that runs, and nothing else — that is the whole point of the fingerprint ([human approval gate](./docs/recipes/human-approval-gate.md)). Destructive operations — anything that loses data nothing can recompute, whether that is dropping an object that holds rows or altering a table to remove a column your files no longer declare — stay out of plans entirely unless you enable them, and are marked prominently when you do. Every apply is recorded in a history ledger inside the database: what ran, when, its checksum, its outcome.
 
 There is a [ready-made GitHub Actions recipe](./docs/recipes/github-actions-plan-comment.md) that posts the review document as a comment on every schema pull request.
 

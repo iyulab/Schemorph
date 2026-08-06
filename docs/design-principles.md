@@ -46,7 +46,7 @@ This principle constrains API design continuously; it is not a feature to be add
 ## 4. Safe by default, honest about danger
 
 - Reading and planning are always safe. `diff` never modifies anything.
-- Destructive operations (`DROP` of anything holding data) are excluded from plans unless explicitly enabled, and are prominently marked when enabled.
+- Destructive operations (anything that loses data that cannot be recomputed) are excluded from plans unless explicitly enabled, and are prominently marked when enabled. The criterion is the loss, not the syntax: a `DROP` of an object that holds data qualifies, and so does an `ALTER` that removes a column the desired state no longer declares — a plan is built per object, so the second arrives wearing the first's clothes. A column that is *re-created* does not qualify: its new values are the new definition's output, so they are replaced rather than lost, and the lint band describes it instead. Where a provider cannot prove the distinction it reports nothing and the coarser object-level classification stands — under-claiming is always the safe direction for a dialect judgment.
 - Every `apply` records what ran, when, its checksum, and its outcome in the history ledger. The ledger is the audit trail.
 - Schemorph does not pretend to make schema changes risk-free. It makes risk *visible* — the rest is judgment, which belongs to the user and to review processes, not to the tool.
 
