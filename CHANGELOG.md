@@ -81,10 +81,10 @@ change **additively**: consumers must ignore properties they do not know.
 
 ### Changed
 
-- **`planHash` moves for any plan containing a change that removes a column.**
-  Risk is part of what the fingerprint binds, and that change's risk is now
-  `destructive`. A hash captured under 0.8.0 no longer matches and the apply
-  refuses rather than running unreviewed DDL — fail-closed, the designed
+- **`planHash` moves for any plan containing a change that removes a column, on
+  either engine.** Risk is part of what the fingerprint binds, and that change's
+  risk is now `destructive`. A hash captured under 0.8.0 no longer matches and the
+  apply refuses rather than running unreviewed DDL — fail-closed, the designed
   direction. No plan property changed and the format version is unchanged: this
   is a classification correction, not a contract addition.
 

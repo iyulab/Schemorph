@@ -112,6 +112,48 @@ public sealed class RenameTests : IDisposable
     }
 
     /// <summary>
+    /// The same limit one level up, where the per-object gate makes the result look
+    /// stranger than a refusal: the create is safe on its own and applies, the drop
+    /// is withheld, and what is left is an empty table beside the full one. Pinned
+    /// on this engine too because the shape is the generator's, not the model's —
+    /// a claim about what a publish leaves behind cannot be inherited across
+    /// providers.
+    /// </summary>
+    [SkippableFact]
+    public async Task A_renamed_table_becomes_a_create_beside_a_withheld_drop()
+    {
+        await SeedLiveWithNotes();
+
+        File.Delete(Path.Combine(SchemaDir, "tables", "dbo.Workspaces.sql"));
+        File.WriteAllText(Path.Combine(SchemaDir, "tables", "dbo.Workareas.sql"), """
+            CREATE TABLE dbo.Workareas (
+                Id INT NOT NULL PRIMARY KEY,
+                Name NVARCHAR(50) NOT NULL,
+                Notes NVARCHAR(100) NULL
+            );
+            GO
+
+            """);
+
+        var diff = await DiffOperation.RunAsync(_provider, _ledger, SchemaDir, _db.Url, allowDestructive: false);
+        Assert.True(diff.Success, string.Join("; ", diff.Errors.Select(e => e.Text)));
+
+        Assert.Contains(diff.Plan!.Excluded, e => e.ObjectName == "dbo.Workspaces");
+        Assert.Contains(diff.Plan.Actions, a => a.ObjectName == "dbo.Workareas");
+
+        var outcome = await ApplyOperation.RunAsync(_provider, _ledger,
+            new ApplyOperation.Request(SchemaDir, _db.Url,
+                ExpectedPlanHash: PlanFingerprint.Compute(diff.Plan)));
+        Assert.True(outcome.Success, string.Join("; ", outcome.Errors.Select(e => e.Text)));
+
+        // Both tables exist, and the rows stayed with the old name.
+        Assert.Equal(1, _db.Scalar<int>("SELECT COUNT(*) FROM sys.tables WHERE name = 'Workspaces'"));
+        Assert.Equal(1, _db.Scalar<int>("SELECT COUNT(*) FROM sys.tables WHERE name = 'Workareas'"));
+        Assert.Equal(1, _db.Scalar<int>("SELECT COUNT(*) FROM dbo.Workspaces"));
+        Assert.Equal(0, _db.Scalar<int>("SELECT COUNT(*) FROM dbo.Workareas"));
+    }
+
+    /// <summary>
     /// The other side of the criterion, and the one a gate gets wrong by being too
     /// eager: widening a column is not losing it. Nothing here is unrecoverable, so
     /// the change stays an ordinary alter and a plain apply carries it out — if this

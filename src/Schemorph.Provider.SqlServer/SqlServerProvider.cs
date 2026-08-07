@@ -645,7 +645,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
     /// </summary>
     private static IReadOnlyList<string> TablesDroppingColumns(IEnumerable<SchemaDifference> differences) =>
         differences
-            .Where(d => (d.SourceObject ?? d.TargetObject)?.ObjectType == Table.TypeClass
+            .Where(d => d.UpdateAction == SchemaUpdateAction.Change
+                        && (d.SourceObject ?? d.TargetObject)?.ObjectType == Table.TypeClass
                         && DropsAColumn(d.Children))
             .Select(FullName)
             .Distinct(StringComparer.OrdinalIgnoreCase)
