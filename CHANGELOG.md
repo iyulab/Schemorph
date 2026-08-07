@@ -36,14 +36,31 @@ change **additively**: consumers must ignore properties they do not know.
   a safe change to the same table waits with the unsafe one rather than applying
   beside it — the plan and the apply must contain the same thing.
 
-  **Currently PostgreSQL only.** The signal is a dialect judgment and this
-  provider proves it from the model. The SQL Server provider reports nothing yet
-  and keeps its previous classification; DacFx's own data-loss signal is the
-  candidate and needs a live engine to establish. Parity here means the same
-  contract, and the contract is that a provider which cannot prove the
-  distinction under-claims rather than guesses.
+  **Both providers.** The signal is a dialect judgment and each provider proves it
+  from its own comparison rather than from the generated text — PostgreSQL from the
+  compared model, SQL Server from the comparison tree, where a removal arrives as a
+  `Delete` on the column beneath a change to its table. Reading the script instead
+  would make the classification depend on how a generator worded a statement, which
+  is not what decides whether rows survive. Both exclude a column dropped and
+  re-added under the same name, and neither gates a redefinition: the line is
+  recoverability, and it is drawn once.
 
 ### Added
+
+- **[limitations.md](docs/limitations.md) states what a rename becomes.** Objects are
+  matched by name, so a renamed one is planned as a drop beside a create and no rename
+  statement is emitted — true on both engines since the first release, and the one entry
+  that page was missing. What makes it worth a section is that the shape arrives while
+  the values do not: the row survives and the column carries the requested name holding
+  nothing, so every check short of reading a value agrees the rename worked.
+
+  The column gate above is what keeps it from being quiet, and it is why the two
+  entries are worth reading together: a rename is the easiest way to reach a column
+  removal by accident, since it does not look like removing anything. Both engines now
+  refuse it and say so. Also documented: why inferring the rename from shape would be
+  worse than refusing to — a wrong guess lands data in a column it does not belong to,
+  which nothing downstream reports — and the order of operations that keeps the values
+  (`RenameTests`, both providers).
 
 - **`SCHEMORPH108` — a plan says when it drops an index the desired state does not
   declare.** Since 0.7.0 an undeclared index is planned away, and correctly so:

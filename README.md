@@ -29,7 +29,7 @@ schemorph status --url "..." --schema ./schema --migrations ./migrations
 schemorph mcp
 ```
 
-**Status: early (0.x), under active development.** Released on [NuGet](https://www.nuget.org/packages/Schemorph) and [GitHub releases](https://github.com/iyulab/Schemorph/releases). Two engines ship — SQL Server, and PostgreSQL up to a declared scope ([Database Support](#database-support)). Working today against SQL Server: the full loop (`inspect` / `diff` / `apply` / `status`) with destructive-change gating and semantic exit codes; programmable-object routing via `CREATE OR ALTER`; checksummed run-once migrations; a history ledger; brownfield adoption (existing databases and SSDT trees are consumed as-is — matching objects reconcile instead of re-applying); a versioned machine-readable [plan format](./docs/plan-format.md) with per-change SQL and explanations, an apply gate (`--expect-plan`) and [safety-lint warnings](./docs/errors.md); and an MCP server (`schemorph mcp`) with schema/plan resources. The documents in [`docs/`](./docs) define the project's anchors — see [Design Principles](./docs/design-principles.md) for what is fixed and what is open.
+**Status: early (0.x), under active development.** Released on [NuGet](https://www.nuget.org/packages/Schemorph) and [GitHub releases](https://github.com/iyulab/Schemorph/releases). Two engines ship — SQL Server, and PostgreSQL up to a declared scope ([Database Support](#database-support)). Working today against SQL Server: the full loop (`inspect` / `diff` / `apply` / `status`) with destructive-change gating and semantic exit codes; programmable-object routing via `CREATE OR ALTER`; checksummed run-once migrations; a history ledger; brownfield adoption (existing databases and SSDT trees are consumed as-is — matching objects reconcile instead of re-applying); a versioned machine-readable [plan format](./docs/plan-format.md) with per-change SQL and explanations, an apply gate (`--expect-plan`) and [safety-lint warnings](./docs/errors.md); and an MCP server (`schemorph mcp`) with schema/plan resources. The documents in [`docs/`](./docs) define the project's anchors — [**`docs/` indexes them by question**](./docs/README.md) ("how do I undo an applied change?", "the apply failed at change 17 — now what?"), and [Design Principles](./docs/design-principles.md) says what is fixed and what is open.
 
 ---
 
@@ -108,6 +108,15 @@ Schemorph is multi-target by design: one command set, one plan format, one ledge
 
 - **SQL Server** — initial target. The diff engine builds on [DacFx](https://github.com/microsoft/DacFx) (Microsoft's schema comparison framework, the same engine behind SSDT), giving full-fidelity handling of T-SQL objects from day one.
 - **PostgreSQL** — released, up to a declared scope: the table core. Set `SCHEMORPH_PROVIDER=postgres` and Schemorph inspects, diffs and applies **tables, columns, constraints, indexes and the target schema**, with the declarative apply running as **one transaction** — applied entirely or not at all. Comparison is native `pg_catalog` with shadow normalization ([ADR-0007](./docs/adr/0007-postgres-engine-selection.md)); a database-owner role with `CREATE SCHEMA` suffices — no superuser, no `CREATEDB`, no extensions. Everything outside the declared capability list (views/functions/triggers/procedures, migrations, and concurrent index builds) is **refused with an explicit error** rather than half-planned ([ADR-0003](./docs/adr/0003-postgres-as-second-provider.md)); the scope grows in releasable slices with no committed timeline. **If you need the refused parts on PostgreSQL today, Atlas, sqldef, or Flyway will serve you better** — that is a more useful answer than a date we cannot keep.
+
+**Which PostgreSQL schema is the target** comes from the connection string's `Search Path`, and defaults to `public` when it is absent. Everything the run touches lands there — the compared objects, the DDL, and the history ledger alike — so several schemas can live on one server and be managed independently, one connection string each:
+
+```bash
+schemorph diff --url "Host=...;Database=app;Search Path=tenant_a" --schema ./schema
+schemorph diff --url "Host=...;Database=app;Search Path=tenant_b" --schema ./schema
+```
+
+Note the two different senses of the word: **`--schema` is the directory of desired-state `.sql` files**, never a database namespace. The namespace is chosen by the connection string alone.
 
 ## Installation
 

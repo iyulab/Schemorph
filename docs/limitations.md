@@ -86,6 +86,44 @@ a positional `INSERT`, a `SELECT *` whose column order is consumed — name the
 columns explicitly. Schemorph will not reorder a table to match a file, and does
 not report the difference as drift.
 
+## A rename is planned as a drop and a create
+
+Objects are matched by name, so one that changed its name is not one object seen
+twice — it is one that stopped being declared and another that started. Both
+providers plan it that way: a column rename becomes an `ADD COLUMN` beside a
+`DROP COLUMN`, a table rename a `CREATE TABLE` beside a `DROP TABLE`. No rename
+statement is ever emitted — measured on both engines (`RenameTests`).
+
+**The shape arrives and the values do not.** The row survives, the column has the
+name the files asked for, and it holds nothing. Every check short of reading a
+value agrees that the rename worked, which is why this is worth stating rather
+than leaving to the plan to imply.
+
+What stands between that and a plain `apply` is the destructive gate, on both
+engines: the drop half is classified destructive, so the plan comes back with no
+actions, `SCHEMORPH001` names what was held back, and the column is untouched.
+Renaming costs you a refusal you have to read — which is the intended price, since
+a rename is the easiest way to reach a column removal by accident. It does not look
+like removing anything.
+
+One consequence is easy to miss: the gate is per object, so at table granularity
+the create is safe on its own and applies while the drop is withheld. What is left
+is an empty table beside the full one, and the next diff still reports the drop.
+
+**Why it is not just fixed:** the two snapshots carry nothing that separates a
+rename from a removal plus an unrelated addition — the identity a rename asserts
+exists only in the author's head, and never reached the files. A tool could guess
+from shape (same type, one name in, one name out) and then execute the guess; the
+failure mode of a wrong guess is data landing in a column it does not belong to,
+which is worse than losing it visibly, because nothing downstream reports it. An
+out-of-band hint would instead move the assertion outside the desired state, where
+the plan can no longer check it against anything.
+
+**What this means for you:** rename with the engine's own statement — it carries
+the identity the files cannot — and then update the desired state to match. The
+next diff is empty and the values are where you left them. Do the two in the other
+order and the plan will offer to drop the column instead.
+
 ## Ordering across strategies is documented, not automatic
 
 Schemorph runs the declarative publish, then re-definitions, then versioned
@@ -159,16 +197,17 @@ identical limitations. The expression-comparison defect above is SQL-Server-spec
 the PostgreSQL comparison normalizes both sides through the engine's own renderings,
 so enum-style CHECK constraints converge there.
 
-One asymmetry runs the other way, and it is worth stating plainly because it sits on
-the gate rather than on a capability. **Removing a column from the desired state is
-classified destructive on PostgreSQL and not yet on SQL Server.** Whether a change
-loses data is a judgment about the change's contents, which only the provider can
-make; the PostgreSQL provider proves it from the compared model, and the SQL Server
-provider has no equivalent signal wired up yet. So the same declarative edit is
-refused without `--allow-destructive` on one engine and applied on the other.
+The destructive gate is **not** one of the places they differ. Removing a column the
+desired state no longer declares is classified destructive on both, each provider
+proving it from its own comparison rather than from the generated text — the same
+criterion, twice, because whether rows survive is a fact about the change and not
+about how a generator worded it. A column dropped and re-added under the same name
+is excluded on both for the same reason: its values are the new definition's output,
+so they are replaced rather than lost.
 
-That is a gap in one provider's judgment, not two different contracts: a provider
-that cannot prove the distinction reports nothing and keeps the coarser object-level
-classification, which is the same under-claiming rule every dialect signal follows.
-Until it closes, review the plan on SQL Server rather than relying on the gate to
-stop a column removal — `diff --format sql` shows the statement before anything runs.
+The rule underneath is worth stating, because it is what keeps parity meaningful
+while the providers grow at different rates: a provider that **cannot** prove a
+distinction reports nothing and keeps the coarser object-level classification. It
+under-claims rather than guessing. So an engine gaining a signal narrows what gets
+refused by making the refusal more accurate — never by asking you to trust a
+judgment the tool could not make.

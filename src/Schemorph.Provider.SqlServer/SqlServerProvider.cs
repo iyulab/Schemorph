@@ -168,7 +168,17 @@ public sealed class SqlServerProvider : IDatabaseProvider
         var scriptResult = result.GenerateScript(databaseName);
         if (scriptResult.Success)
         {
-            return (scriptResult.Script, UpdateScriptAttributor.Attribute(scriptResult.Script, changes));
+            // The attributor reads the script; this one reads the comparison. They
+            // are kept apart on purpose — whether rows survive is a fact about the
+            // change, not about how the generator chose to word it.
+            var dropping = TablesDroppingColumns(result.Differences)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var attributed = UpdateScriptAttributor.Attribute(scriptResult.Script, changes)
+                .Select(s => s with { DropsColumn = dropping.Contains(s.ObjectName) })
+                .ToList();
+
+            return (scriptResult.Script, attributed);
         }
 
         messages?.Add(new RawMessage("Warning", "SCHEMORPH002",
@@ -619,6 +629,47 @@ public sealed class SqlServerProvider : IDatabaseProvider
             .Select(FullName)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    /// <summary>
+    /// Tables that lose a column the desired state no longer declares — the
+    /// signal the destructive gate reads. Judged on the comparison tree rather
+    /// than the emitted script, so the distinction is proven rather than
+    /// pattern-matched: DacFx reports the removal as a Delete difference on the
+    /// column beneath a Change on its table.
+    ///
+    /// A column that is dropped and re-added under the same name is deliberately
+    /// excluded, matching the criterion itself: its new values are the new
+    /// definition's output, so they are replaced rather than lost, and
+    /// <c>SCHEMORPH107</c> already describes that shape. The line is
+    /// recoverability, which is why the name — not the pair of actions — decides.
+    /// </summary>
+    private static IReadOnlyList<string> TablesDroppingColumns(IEnumerable<SchemaDifference> differences) =>
+        differences
+            .Where(d => (d.SourceObject ?? d.TargetObject)?.ObjectType == Table.TypeClass
+                        && DropsAColumn(d.Children))
+            .Select(FullName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private static bool DropsAColumn(IEnumerable<SchemaDifference> children)
+    {
+        var columns = children
+            .Where(c => (c.SourceObject ?? c.TargetObject)?.ObjectType == Column.TypeClass)
+            .ToList();
+
+        var readded = columns
+            .Where(c => c.UpdateAction == SchemaUpdateAction.Add)
+            .Select(ColumnName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return columns.Any(c => c.UpdateAction == SchemaUpdateAction.Delete
+                                && !readded.Contains(ColumnName(c)));
+    }
+
+    private static string ColumnName(SchemaDifference difference) =>
+        (difference.SourceObject ?? difference.TargetObject)?.Name.Parts is { Count: > 0 } parts
+            ? parts[^1]
+            : difference.Name ?? string.Empty;
 
     private static RawChange ToRawChange(SchemaDifference difference) => new(
         difference.UpdateAction.ToString(),
