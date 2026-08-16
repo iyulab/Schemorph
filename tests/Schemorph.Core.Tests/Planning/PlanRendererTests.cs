@@ -82,6 +82,20 @@ public class PlanRendererTests
     }
 
     [Fact]
+    public void Fingerprint_ignores_message_object_attribution()
+    {
+        // 1.7: messages[].objectName is new state on a field the hash already
+        // excludes — pinning that the exclusion still holds once the field carries
+        // per-object data, not just when it is empty.
+        var attributed = Sample with
+        {
+            Messages = new[] { new PlanMessage("Warning", "SCHEMORPH102", "dbo.Orders: rebuilds", "dbo.Orders") },
+        };
+
+        Assert.Equal(PlanFingerprint.Compute(Sample), PlanFingerprint.Compute(attributed));
+    }
+
+    [Fact]
     public void Fingerprint_changes_when_the_change_set_changes()
     {
         var different = Sample with
@@ -122,6 +136,32 @@ public class PlanRendererTests
         // Present and empty, not absent: a consumer checking the field should not have
         // to tell "nothing excluded" apart from "this version does not report it".
         Assert.Empty(doc.RootElement.GetProperty("excluded").EnumerateArray().ToList());
+    }
+
+    /// <summary>
+    /// Format 1.7: a plan-level message that is about a specific change says so —
+    /// a consumer that already parses `changes[].objectName` can now join a
+    /// warning to the entry it belongs to instead of parsing English out of `text`.
+    /// A message that is not about one object (an engine-level diagnostic, here)
+    /// stays honestly absent rather than guessing.
+    /// </summary>
+    [Fact]
+    public void Json_messages_carry_the_change_they_are_about_when_they_are_about_one()
+    {
+        var plan = Sample with
+        {
+            Messages = new[]
+            {
+                new PlanMessage("Warning", "SCHEMORPH102", "dbo.Orders: rebuilds the table", "dbo.Orders"),
+                new PlanMessage("Warning", "SQL72015", "data loss could occur"),
+            },
+        };
+
+        using var doc = System.Text.Json.JsonDocument.Parse(PlanRenderer.ToJson(plan));
+        var messages = doc.RootElement.GetProperty("messages").EnumerateArray().ToList();
+
+        Assert.Equal("dbo.Orders", messages[0].GetProperty("objectName").GetString());
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, messages[1].GetProperty("objectName").ValueKind);
     }
 
     [Fact]

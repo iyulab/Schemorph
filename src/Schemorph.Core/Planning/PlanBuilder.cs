@@ -65,7 +65,8 @@ public static class PlanBuilder
                     "Warning",
                     "SCHEMORPH001",
                     $"Destructive change excluded from plan (enable explicitly to include): " +
-                    $"{operation} {change.ObjectType} {change.ObjectName} — {loss}."));
+                    $"{operation} {change.ObjectType} {change.ObjectName} — {loss}.",
+                    change.ObjectName));
                 // Same shape as the ledger above: the engine's script still carries the
                 // statement. The warning says it was gated; this says where to expect it.
                 excluded.Add(new PlanExclusion(change.ObjectName,

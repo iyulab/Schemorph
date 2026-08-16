@@ -59,6 +59,9 @@ public class PlanBuilderTests
         Assert.False(plan.HasChanges);
         var message = Assert.Single(plan.Messages);
         Assert.Equal("SQL72015", message.Code);
+        // Not about one object — an engine-level diagnostic pre-dates any change,
+        // so there is nothing in `changes[]` to attribute it to.
+        Assert.Null(message.ObjectName);
     }
 
     [Fact]
@@ -188,7 +191,7 @@ public class PlanBuilderTests
         var gated = PlanBuilder.Build(compare, allowDestructive: false);
         Assert.Empty(gated.Actions);
         Assert.False(gated.HasDestructiveChanges);
-        Assert.Contains(gated.Messages, m => m.Code == "SCHEMORPH001");
+        Assert.Contains(gated.Messages, m => m.Code == "SCHEMORPH001" && m.ObjectName == "dbo.Data");
         // The statement stays in the engine's script, so the review document has to
         // name it — the 1.6 contract, exercised on the shape 1.6 did not yet cover.
         Assert.Contains(gated.Excluded, e => e.ObjectName == "dbo.Data");
@@ -196,7 +199,7 @@ public class PlanBuilderTests
         var allowed = PlanBuilder.Build(compare, allowDestructive: true);
         Assert.Equal(RiskLevel.Destructive, Assert.Single(allowed.Actions).Risk);
         Assert.True(allowed.HasDestructiveChanges);
-        Assert.Contains(allowed.Messages, m => m.Code == "SCHEMORPH103");
+        Assert.Contains(allowed.Messages, m => m.Code == "SCHEMORPH103" && m.ObjectName == "dbo.Data");
     }
 
     /// <summary>
@@ -216,7 +219,7 @@ public class PlanBuilderTests
         var plan = PlanBuilder.Build(compare, allowDestructive: false);
 
         Assert.Equal(RiskLevel.Warning, Assert.Single(plan.Actions).Risk);
-        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH107");
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH107" && m.ObjectName == "dbo.Data");
         Assert.DoesNotContain(plan.Messages, m => m.Code == "SCHEMORPH001");
     }
 
@@ -237,7 +240,7 @@ public class PlanBuilderTests
         var plan = PlanBuilder.Build(compare, allowDestructive: false);
 
         Assert.Equal(RiskLevel.Warning, Assert.Single(plan.Actions).Risk);
-        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH108");
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH108" && m.ObjectName == "dbo.Data");
         Assert.DoesNotContain(plan.Messages, m => m.Code == "SCHEMORPH001");
     }
 
@@ -356,10 +359,10 @@ public class PlanBuilderTests
 
         var plan = PlanBuilder.Build(result, allowDestructive: true);
 
-        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH101" && m.Text.Contains("dbo.Strict"));
-        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH102" && m.Text.Contains("dbo.Rebuilt"));
-        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH103" && m.Text.Contains("dbo.Gone"));
-        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH107" && m.Text.Contains("dbo.Recast"));
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH101" && m.Text.Contains("dbo.Strict") && m.ObjectName == "dbo.Strict");
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH102" && m.Text.Contains("dbo.Rebuilt") && m.ObjectName == "dbo.Rebuilt");
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH103" && m.Text.Contains("dbo.Gone") && m.ObjectName == "dbo.Gone");
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH107" && m.Text.Contains("dbo.Recast") && m.ObjectName == "dbo.Recast");
         // The table-level entry that carries it still reads as one alter — which is
         // why the warning has to exist: only SCHEMORPH107 names the column loss.
         Assert.Equal(PlanOperation.Alter, plan.Actions.Single(a => a.ObjectName == "dbo.Recast").Operation);

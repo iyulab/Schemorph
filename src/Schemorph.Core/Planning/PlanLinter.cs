@@ -33,21 +33,24 @@ public static class PlanLinter
             {
                 yield return new PlanMessage("Warning", "SCHEMORPH101",
                     $"{action.ObjectName}: adds a NOT NULL column without a default — " +
-                    "this fails on a table that already holds rows. Add a DEFAULT or make it NULLable first.");
+                    "this fails on a table that already holds rows. Add a DEFAULT or make it NULLable first.",
+                    action.ObjectName);
             }
 
             if (script?.Rebuild == true)
             {
                 yield return new PlanMessage("Warning", "SCHEMORPH102",
                     $"{action.ObjectName}: this change rebuilds the table (new table, rows copied, " +
-                    "old dropped, renamed) — time, locks and transaction log grow with the data.");
+                    "old dropped, renamed) — time, locks and transaction log grow with the data.",
+                    action.ObjectName);
             }
 
             if (script?.RecreatesColumn == true)
             {
                 yield return new PlanMessage("Warning", "SCHEMORPH107",
                     $"{action.ObjectName}: a column is re-created rather than altered — " +
-                    "its current values do not survive, though the table and its other columns do.");
+                    "its current values do not survive, though the table and its other columns do.",
+                    action.ObjectName);
             }
 
             if (script?.DropsIndex == true)
@@ -55,7 +58,8 @@ public static class PlanLinter
                 yield return new PlanMessage("Warning", "SCHEMORPH108",
                     $"{action.ObjectName}: an index the desired state does not declare is dropped — " +
                     "no data is lost, so this is not gated, but every query that relied on it " +
-                    "falls back to a scan. Declare it in the desired state to keep it.");
+                    "falls back to a scan. Declare it in the desired state to keep it.",
+                    action.ObjectName);
             }
 
             if (action.Risk == RiskLevel.Destructive)
@@ -71,7 +75,8 @@ public static class PlanLinter
                           "the desired state no longer declares is dropped and its rows are lost. " +
                           "The table and its other columns survive."
                         : $"{action.ObjectName}: destructive change included in the plan — " +
-                          "applying it loses the data it holds.");
+                          "applying it loses the data it holds.",
+                    action.ObjectName);
             }
         }
     }

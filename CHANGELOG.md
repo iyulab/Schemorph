@@ -5,6 +5,19 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Changed
+
+- **Plan format 1.7 — `messages[].objectName`.** A plan-level warning about a specific
+  change (`SCHEMORPH001`, `SCHEMORPH101`–`103`, `SCHEMORPH107`, `SCHEMORPH108`) already
+  named that change in its prose; there was no structured way to ask "which entry in
+  `changes[]` does this message belong to" without parsing English. The field matches a
+  `changes[].objectName` for these, and stays absent on messages that are not about one
+  object (an engine-level diagnostic, a desired-state file problem). **`planHash` does
+  not change** — messages were never a hash input, so a hash captured under ≤1.6 still
+  matches. See [docs/plan-format.md](docs/plan-format.md).
+
 ## 0.9.0 — 2026-08-11
 
 ### Fixed

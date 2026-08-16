@@ -30,7 +30,17 @@ public sealed record PlanAction(
     string? Explanation = null);
 
 /// <summary>Diagnostic attached to a plan (e.g. engine warnings, gated-out actions).</summary>
-public sealed record PlanMessage(string Severity, string Code, string Text);
+/// <param name="ObjectName">
+/// The object the message is about, when it is about one — most plan-level
+/// warnings are raised while iterating a specific <see cref="PlanAction"/> and
+/// already say so in <paramref name="Text"/>'s prose (design principle §3: a
+/// consumer had no structured way to ask "which change caused this warning"
+/// short of parsing English). Null for messages that are not about one object
+/// (engine-level diagnostics, desired-state file problems raised before a plan
+/// exists) — a missing name is honest here the same way a missing
+/// <see cref="PlanAction.Sql"/> is: absence says "not applicable", not "not known".
+/// </param>
+public sealed record PlanMessage(string Severity, string Code, string Text, string? ObjectName = null);
 
 /// <summary>
 /// An object the engine's update script has statements for that this plan will not
@@ -98,7 +108,7 @@ public sealed record Plan(
     /// additions (consumers must ignore unknown properties); the major version
     /// increments for breaking changes. Independent of the product version.
     /// </summary>
-    public const string CurrentFormatVersion = "1.6";   // 1.6: excluded[] — objects the script contains and the plan does not execute (see docs/plan-format.md)
+    public const string CurrentFormatVersion = "1.7";   // 1.7: messages[].objectName — attributes a plan-level message to the change that caused it, where there is one (see docs/plan-format.md)
 
     public bool HasChanges => Actions.Count > 0;
 
