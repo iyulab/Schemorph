@@ -53,6 +53,19 @@ public class ProviderBoundaryTests
         }
     }
 
+    /// <summary>
+    /// D2: every line this provider declares has to be a real word in the
+    /// vocabulary a consumer reads from the CLI manifest — a declared capability
+    /// the vocabulary does not know would make "not supported" and "not a
+    /// capability this tool models" indistinguishable again, from the other
+    /// direction.
+    /// </summary>
+    [Fact]
+    public void Every_declared_capability_is_a_word_in_the_vocabulary()
+    {
+        Assert.All(Provider.Capabilities.Declared, c => Assert.Contains(c, CapabilityVocabulary.All));
+    }
+
     [Fact]
     public void The_declared_surface_is_the_table_core_with_indexes_and_earns_transactional()
     {

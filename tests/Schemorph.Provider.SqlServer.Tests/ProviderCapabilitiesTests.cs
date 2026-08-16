@@ -23,6 +23,18 @@ public class ProviderCapabilitiesTests
             declared);
     }
 
+    /// <summary>
+    /// D2: a consumer reading the CLI manifest's <c>provider.vocabulary</c> has
+    /// to trust that it really is the full line set, not a second copy that can
+    /// drift from what "the full surface" above actually asserts. This provider
+    /// IS the vocabulary — pinning identity, not just equal content.
+    /// </summary>
+    [Fact]
+    public void Its_declared_surface_is_the_capability_vocabulary_itself()
+    {
+        Assert.Same(CapabilityVocabulary.All, new SqlServerProvider().Capabilities.Declared);
+    }
+
     [Fact]
     public void Declares_partial_atomicity()
     {

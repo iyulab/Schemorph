@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Schemorph.Core.Planning;
+using Schemorph.Core.Providers;
 
 namespace Schemorph.Cli;
 
@@ -16,8 +17,11 @@ internal static class CliManifest
     // 1.1: docs.failureSemantics · 1.2: the apply-only stage/committed envelope
     // fields · 1.3: diff --format sql (the review document) · 1.4: the provider
     // block (capability lines + apply atomicity, sourced from the provider's own
-    // declaration). All additive; consumers ignore properties they do not know.
-    public const string ManifestVersion = "1.4";
+    // declaration) · 1.5: provider.vocabulary — the full capability line set,
+    // so a consumer can compute "not supported" for this provider without
+    // hand-maintaining another provider's declared list. All additive;
+    // consumers ignore properties they do not know.
+    public const string ManifestVersion = "1.5";
 
     public static string ToJson(string toolVersion) => JsonSerializer.Serialize(new
     {
@@ -146,7 +150,11 @@ internal static class CliManifest
     /// <summary>
     /// The provider's declared surface, sourced from the declaration itself
     /// (the canonical layer — dev plan §2) so the manifest cannot drift from
-    /// what the provider actually claims and refuses.
+    /// what the provider actually claims and refuses. <c>vocabulary</c> is the
+    /// full capability line set (since 1.5) — without it, a capability absent
+    /// from <c>capabilities</c> reads as "not supported", and a consumer had no
+    /// way to tell that from "not a capability this tool models at all" short of
+    /// hand-maintaining another provider's declared list to diff against.
     /// </summary>
     private static object ProviderBlock()
     {
@@ -155,6 +163,7 @@ internal static class CliManifest
         {
             name = provider.Name,
             capabilities = provider.Capabilities.Declared,
+            vocabulary = CapabilityVocabulary.All,
             atomicity = provider.Capabilities.Atomicity?.ToString().ToLowerInvariant(),
         };
     }

@@ -18,6 +18,15 @@ change **additively**: consumers must ignore properties they do not know.
   not change** — messages were never a hash input, so a hash captured under ≤1.6 still
   matches. See [docs/plan-format.md](docs/plan-format.md).
 
+- **CLI manifest 1.5 — `provider.vocabulary`.** `provider.capabilities` says what the
+  active provider declares; nothing said what the *full* capability line set is, so a
+  capability's absence read as "not supported" and "not a capability this tool models at
+  all" the same way. `vocabulary` is that full set — today identical to the SQL Server
+  provider's own declaration, which is the parity yardstick a second provider grows
+  toward. A consumer computes what a provider refuses as `vocabulary` minus
+  `capabilities`, without hand-maintaining another provider's declared list to diff
+  against.
+
 ## 0.9.0 — 2026-08-11
 
 ### Fixed

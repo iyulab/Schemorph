@@ -22,6 +22,26 @@ public enum ApplyAtomicity
 }
 
 /// <summary>
+/// The full set of capability lines a provider can declare — what a "complete"
+/// provider's <see cref="ProviderCapabilities.Declared"/> equals (the SQL
+/// Server provider today, the parity yardstick a second provider grows toward
+/// one line per slice). Exists as code, not only as prose
+/// in this file's history, so a consumer of the CLI manifest's
+/// <c>provider.vocabulary</c> can compute "not supported" (absent from
+/// <c>vocabulary</c> minus <c>capabilities</c>) without hand-maintaining SQL
+/// Server's line list itself — before this, that distinction existed only in a
+/// human reading two files side by side.
+/// </summary>
+public static class CapabilityVocabulary
+{
+    public static readonly IReadOnlyList<string> All =
+    [
+        "inspect", "tables", "columns", "constraints", "schemas", "indexes",
+        "views", "functions", "triggers", "procedures", "migrations",
+    ];
+}
+
+/// <summary>
 /// A provider's declared surface — the canonical layer of the three-layer
 /// exposure policy (dev plan §2): the manifest states what the provider claims
 /// to handle, the plan/status envelope states what this run guaranteed
@@ -32,10 +52,7 @@ public enum ApplyAtomicity
 /// </summary>
 /// <param name="Declared">
 /// Capability lines, the parity yardstick between providers (a slice of work
-/// ends by adding one line). Vocabulary: <c>inspect</c>, <c>tables</c>,
-/// <c>columns</c>, <c>constraints</c>, <c>schemas</c>, <c>indexes</c>,
-/// <c>views</c>, <c>functions</c>, <c>triggers</c>, <c>procedures</c>,
-/// <c>migrations</c>.
+/// ends by adding one line) — a subset of <see cref="CapabilityVocabulary.All"/>.
 /// </param>
 /// <param name="Atomicity">
 /// The apply guarantee, or null while the provider declares no apply-side

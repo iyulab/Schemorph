@@ -26,18 +26,16 @@ public sealed class SqlServerProvider : IDatabaseProvider
     public string Name => ProviderName;
 
     /// <summary>
-    /// The full capability surface — this list is the parity yardstick a second
-    /// provider grows toward (one line per slice). Atomicity is `partial`
-    /// (ADR-0004 addendum): DacFx owns the publish connection, so stages commit
-    /// independently and a failure leaves earlier stages applied.
+    /// The full capability surface — this provider declares the whole vocabulary
+    /// (<see cref="CapabilityVocabulary.All"/>), which is what makes that list the
+    /// parity yardstick a second provider grows toward (one line per slice: when
+    /// this provider adds a capability, it adds it to the vocabulary, not just
+    /// here). Atomicity is `partial` (ADR-0004 addendum): DacFx owns the publish
+    /// connection, so stages commit independently and a failure leaves earlier
+    /// stages applied.
     /// </summary>
     public ProviderCapabilities Capabilities { get; } = new(
-        new[]
-        {
-            "inspect", "tables", "columns", "constraints", "schemas", "indexes",
-            "views", "functions", "triggers", "procedures", "migrations",
-        },
-        ApplyAtomicity.Partial);
+        CapabilityVocabulary.All, ApplyAtomicity.Partial);
 
     public Task<InspectResult> InspectAsync(InspectRequest request, CancellationToken cancellationToken = default)
         => Task.Run(() => Inspect(request, cancellationToken), cancellationToken);
