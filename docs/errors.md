@@ -133,6 +133,18 @@ exists only when the whole target was read.
 The warning is what names the reason inside that failure, which is why it is worth
 reading rather than just the envelope.
 
+#### PostgreSQL: a desired-state statement's own target must match the connection's schema
+
+`diff`/`inspect` on PostgreSQL compare against a scratch schema, not the target directly — the
+target schema is whatever the connection's `search_path` resolves to (default `public`). If a
+`CREATE TABLE`/`CREATE INDEX ... ON`/`ALTER TABLE` in the desired state is itself schema-qualified
+to something other than that resolved schema, the verb refuses with `compare_failed` naming both
+schemas, rather than running the statement against the schema it names. Point `search_path` at the
+same schema the desired state is qualified to (or leave the desired state unqualified — it is
+target-relative when there is no explicit schema). A statement that only *references* another
+schema — a foreign key target, for example — is unaffected; that is a supported cross-schema
+reference, not this statement's own target.
+
 #### `SCHEMORPH008` fires on an incomplete comparison, not on a missing permission
 
 The warning reports an **effect**: the comparison came back without having read the
