@@ -61,6 +61,7 @@ internal static class SchemaRewriter
                     parsed.Error?.Message ?? "The parser returned no tree.",
                     parsed.Error?.CursorPos ?? 0);
             }
+            ValidatePrimaryTargetSchema(parsed.Value, sourceSchema);
             Walk(parsed.Value, sourceSchema, shadowSchema);
             combined.Version = parsed.Value.Version;
             combined.Stmts.AddRange(parsed.Value.Stmts);
@@ -98,6 +99,60 @@ internal static class SchemaRewriter
                 $"Deparse failed after rewriting: {deparsed.Error?.Message}", 0);
         }
         return deparsed.Value;
+    }
+
+    /// <summary>
+    /// Refuse a statement whose own target — the table a CREATE TABLE declares,
+    /// the table an ALTER TABLE modifies, the table an index is built ON — is
+    /// schema-qualified to something other than <paramref name="source"/>.
+    ///
+    /// This is deliberately narrower than "every schema-bearing field": a FK's
+    /// <c>REFERENCES other.table</c> is a genuine cross-schema reference and
+    /// stays pass-through (<see cref="Walk"/>'s documented behavior, pinned by
+    /// <c>References_to_other_schemas_pass_through_untouched</c>). A
+    /// statement's own target is different — it is not a reference, it is what
+    /// gets created. Left unqualified, <see cref="Walk"/> already retargets it
+    /// (single-schema model DDL is target-relative). Qualified to
+    /// <paramref name="source"/>, it retargets the same way. Qualified to
+    /// anything else, <see cref="Walk"/>'s pass-through rule would leave it
+    /// exactly as written — and unlike a reference, that text is itself a
+    /// CREATE/ALTER/INDEX statement that <see cref="ShadowSchema.ApplyAsync"/>
+    /// then executes against the real target connection. There is no sandbox
+    /// bug that produces a false <c>diff</c> quite like this one: the shadow
+    /// schema stays empty (nothing landed there), so both comparison sides read
+    /// empty and diff reports no changes — while the desired-state's tables
+    /// silently exist for real, outside the shadow's own DROP-on-dispose reach.
+    /// This happens whenever the connection's resolved schema (search_path,
+    /// default "public") disagrees with the schema baked into the desired-state
+    /// SQL — a configuration mismatch, not a rare parser edge. Refusing loudly
+    /// here is strictly better than the alternative of silently retargeting to
+    /// <paramref name="source"/> too: retargeting would hide from the operator
+    /// that their desired-state and their connection disagree about which
+    /// schema they mean, which is exactly the kind of silent guess this slice's
+    /// design (single-schema, target-relative-when-unqualified) refuses to make.
+    /// </summary>
+    private static void ValidatePrimaryTargetSchema(ParseResult parsed, string source)
+    {
+        foreach (var statement in parsed.Stmts)
+        {
+            var (kind, relation) = statement.Stmt switch
+            {
+                { CreateStmt.Relation: { } r } => ("CREATE TABLE", r),
+                { IndexStmt.Relation: { } r } => ("CREATE INDEX", r),
+                { AlterTableStmt.Relation: { } r } => ("ALTER TABLE", r),
+                _ => (null, null),
+            };
+            if (relation is null) continue;
+            if (relation.Schemaname.Length == 0 || relation.Schemaname == source) continue;
+
+            throw new SchemaRewriteException(
+                $"{kind} \"{relation.Relname}\" is schema-qualified to \"{relation.Schemaname}\", " +
+                $"but the connection resolves the target schema as \"{source}\" (from the " +
+                "connection string's search_path). A desired-state statement's own target must " +
+                "match the connection's schema, or be left unqualified — this is refused rather " +
+                "than silently applied, because applying it would run for real against " +
+                $"\"{relation.Schemaname}\" instead of staying inside the comparison sandbox.", 0);
+        }
     }
 
     private static int OrderClass(RawStmt statement) => statement.Stmt switch

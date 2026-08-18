@@ -108,6 +108,59 @@ public class SchemaRewriterTests
     }
 
     [Fact]
+    public void A_create_table_qualified_to_a_different_schema_than_the_connection_is_refused()
+    {
+        // The connection resolves the target schema as "public" (the default
+        // when search_path carries something else, or is absent) while the
+        // desired-state SQL is qualified to "vibebase_control" — exactly the
+        // mismatch that let a bare `diff` create real tables outside the
+        // shadow sandbox (docket 6c36eb54). Passing this through untouched,
+        // the way a REFERENCES target legitimately does, would execute the
+        // CREATE TABLE for real against "vibebase_control" the moment
+        // ShadowSchema.ApplyAsync runs it on the live connection.
+        var sql = """CREATE TABLE "vibebase_control"."Apps" ("Id" uuid NOT NULL);""";
+
+        var ex = Assert.Throws<SchemaRewriteException>(
+            () => SchemaRewriter.Retarget(sql, "public", "shadow_x"));
+
+        Assert.Contains("vibebase_control", ex.Message);
+        Assert.Contains("public", ex.Message);
+        Assert.Contains("Apps", ex.Message);
+    }
+
+    [Fact]
+    public void An_alter_table_qualified_to_a_different_schema_than_the_connection_is_refused()
+    {
+        var sql = """ALTER TABLE "vibebase_control"."Apps" ADD COLUMN "Name" text;""";
+
+        Assert.Throws<SchemaRewriteException>(
+            () => SchemaRewriter.Retarget(sql, "public", "shadow_x"));
+    }
+
+    [Fact]
+    public void An_index_qualified_to_a_different_schema_than_the_connection_is_refused()
+    {
+        var sql = """CREATE INDEX "IX_Apps" ON "vibebase_control"."Apps" ("Name");""";
+
+        Assert.Throws<SchemaRewriteException>(
+            () => SchemaRewriter.Retarget(sql, "public", "shadow_x"));
+    }
+
+    [Fact]
+    public void A_foreign_key_reference_to_another_schema_is_still_pass_through_not_refused()
+    {
+        // The statement's OWN target ("Src"."T") matches the connection's
+        // resolved schema — only the REFERENCES target lives elsewhere, which
+        // stays a legitimate cross-schema reference (unaffected by the new
+        // guard; same fixture as References_to_other_schemas_pass_through_untouched).
+        var sql = """CREATE TABLE "Src"."T" ("r" uuid REFERENCES "Other"."U" ("Id"));""";
+
+        var rewritten = SchemaRewriter.Retarget(sql, "Src", "shadow_x");
+
+        Assert.Contains("\"Other\".\"U\"", rewritten);
+    }
+
+    [Fact]
     public void Invalid_sql_throws_with_the_parsers_position()
     {
         var ex = Assert.Throws<SchemaRewriteException>(

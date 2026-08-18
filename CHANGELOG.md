@@ -5,6 +5,27 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Fixed
+
+- **`diff`/`inspect` on PostgreSQL could silently write to the target instead of the comparison
+  sandbox, then misreport no changes.** The shadow-schema comparison retargets desired-state DDL
+  onto a scratch schema before executing it. If a statement's own target — the table a `CREATE
+  TABLE` declares, a `CREATE INDEX` is built `ON`, an `ALTER TABLE` modifies — was schema-qualified
+  to something other than the schema the connection resolves (via `search_path`, default
+  `public`), the statement passed through unretargeted and executed for real against that schema
+  instead of the shadow. Because the shadow then read back empty and the real target now matched
+  the desired state, the two sides compared equal and `diff` reported `hasChanges: false` — while
+  the desired state's objects were actually created outside the shadow's own cleanup. A second run
+  against the same target then failed with a duplicate-object error from the engine, since the
+  objects it was about to (re-)create already existed. Fixed by refusing the statement instead:
+  when a statement's own target disagrees with the connection's resolved schema, `diff`/`inspect`
+  now fail loudly (`compare_failed`) naming both schemas, rather than writing outside the sandbox.
+  A statement that merely *references* a table in another schema (a foreign key target, for
+  example) is unaffected — that was already a supported cross-schema reference and stays
+  pass-through.
+
 ## 0.10.0 — 2026-08-18
 
 ### Changed
