@@ -5,6 +5,28 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Added
+
+- **PostgreSQL: views, functions, procedures and triggers (P3).** `SCHEMORPH_PROVIDER=postgres`
+  now diffs and applies programmable objects the same way SQL Server does — idempotent
+  re-definition (ADR-0002 strategy 2) rather than structural diffing — using PostgreSQL's own
+  native `CREATE OR REPLACE` form for all four kinds. Unlike the SQL Server provider, which
+  rewrites `CREATE` to the differently-spelled `CREATE OR ALTER` with a regex, the PostgreSQL
+  redefinition script is built by setting one AST flag on the parsed statement and re-rendering
+  it — never by pattern-matching the keyword. A view (or a SQL-standard `BEGIN ATOMIC … END`
+  function body) that references a table whose column later changes shape is redefined
+  automatically even when the object's own file did not change, closing the same staleness gap
+  the SQL Server provider already closes. The declared capability list grows to `views`,
+  `functions`, `triggers`, `procedures`; only `migrations` remains outside it. See
+  [limitations.md](docs/limitations.md) for the two PostgreSQL-specific edges this slice does not
+  round out yet: a redefinition whose new shape `OR REPLACE` cannot accept fails loudly rather
+  than falling back to a drop and a create, and a programmable object already matching on a
+  brownfield database is redefined once on adoption rather than reconciled by a text match (PG's
+  `pg_get_viewdef` and its siblings do not preserve deployed text verbatim, unlike SQL Server's
+  `sys.sql_modules`).
+
 ## 0.10.1 — 2026-08-18
 
 ### Fixed

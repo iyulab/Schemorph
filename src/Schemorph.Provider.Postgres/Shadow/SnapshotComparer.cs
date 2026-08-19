@@ -49,6 +49,38 @@ internal static class SnapshotComparer
         return changes;
     }
 
+    /// <summary>
+    /// Tables where a column present on both sides has a different definition
+    /// — the signal P3's redefine invalidation needs
+    /// (<c>Schemorph.Core.Redefine.RedefineRunner.WithInvalidations</c>): a view or function
+    /// selecting a retyped column keeps the same file text while its meaning
+    /// goes stale, so a checksum over that text cannot see it. Column
+    /// additions and removals are deliberately excluded, mirroring the SQL
+    /// Server provider's own criterion — they leave an explicitly-projected
+    /// dependent object's meaning intact, and treating every additive column
+    /// as an invalidation would redefine the world on the most common change
+    /// there is.
+    /// </summary>
+    public static IReadOnlyList<string> TablesWithColumnChanges(
+        IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live)
+    {
+        var liveByName = live.ToDictionary(t => t.Name, StringComparer.Ordinal);
+        var changed = new List<string>();
+
+        foreach (var want in desired)
+        {
+            if (!liveByName.TryGetValue(want.Name, out var have)) continue;
+
+            var haveColumns = have.Columns.ToDictionary(c => c.Name, StringComparer.Ordinal);
+            var anyColumnChanged = want.Columns.Any(c =>
+                haveColumns.TryGetValue(c.Name, out var existing) && c != existing);
+
+            if (anyColumnChanged) changed.Add(want.Name);
+        }
+
+        return changed;
+    }
+
     // Records compare by value, and no member's catalog order is part of a
     // table's identity: this comparison asks whether the two schemas mean the
     // same thing, and both sides are read in the engine's own order (columns by

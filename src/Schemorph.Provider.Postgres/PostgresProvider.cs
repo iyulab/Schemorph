@@ -23,7 +23,10 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// refusal hint quotes exactly these lines.
     /// </summary>
     internal static readonly string[] DeclaredCapabilities =
-        { "inspect", "tables", "columns", "constraints", "indexes", "schemas" };
+        {
+            "inspect", "tables", "columns", "constraints", "indexes", "schemas",
+            "views", "functions", "triggers", "procedures",
+        };
 
     public string Name => ProviderName;
 
@@ -92,7 +95,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     {
         var compared = await CompareCoreAsync(request.DesiredState, request.ConnectionString, cancellationToken);
         return new CompareResult(compared.Changes, compared.Messages,
-            compared.UpdateScript, compared.ChangeScripts);
+            compared.UpdateScript, compared.ChangeScripts, compared.TablesWithColumnChanges);
     }
 
     public async Task<ApplyResult> ApplyAsync(
@@ -119,7 +122,7 @@ public sealed class PostgresProvider : IDatabaseProvider
         // produced identically on this path — the asymmetry that broke the gate once.
         onChangesComputed?.Invoke(new CompareResult(
             compared.Changes, Array.Empty<RawMessage>(),
-            compared.UpdateScript, compared.ChangeScripts));
+            compared.UpdateScript, compared.ChangeScripts, compared.TablesWithColumnChanges));
 
         // The gate reads the same attribution the hook just announced — the plan
         // built there and the filter applied here must classify identically, or
@@ -166,22 +169,51 @@ public sealed class PostgresProvider : IDatabaseProvider
     }
 
     public Task ExecuteScriptAsync(string connectionString, string script, CancellationToken cancellationToken = default)
-        => throw Refuse("script execution");
-
-    public Task ExecuteScriptAsync(string connectionString, string script, IReadOnlyList<LedgerEntry> ledgerEntries, CancellationToken cancellationToken = default)
-        => throw Refuse("script execution with ledger");
+        => ExecuteScriptAsync(connectionString, script, Array.Empty<LedgerEntry>(), cancellationToken);
 
     /// <summary>
-    /// Honestly empty, not refused: the loader admits no programmable files
-    /// into a desired state (it refuses them at the door), so
-    /// the analysis of what it loaded is a real answer — zero objects.
+    /// Redefine scripts (P3) carry bare, unqualified object names — the same
+    /// single-schema convention <see cref="PgTable.Name"/> uses — so unlike
+    /// <see cref="ComposeScript"/>'s declarative script, which the caller
+    /// already schema-qualifies, this path must set the target schema itself
+    /// before running: the redefine runner (core, provider-agnostic) has no
+    /// schema of its own to prepend, and the connection's own resolved
+    /// search_path (what <see cref="TargetSchemaOf"/> reports) is not
+    /// guaranteed to be what the session would use without saying so — the
+    /// same reason the declarative path sets it explicitly rather than relying
+    /// on the connection default.
+    /// </summary>
+    public Task ExecuteScriptAsync(
+        string connectionString, string script,
+        IReadOnlyList<LedgerEntry> ledgerEntries, CancellationToken cancellationToken = default)
+        => PgScriptExecutor.ExecuteAsync(
+            connectionString,
+            $"SET LOCAL search_path TO {DesiredStateRenderer.Quote(TargetSchemaOf(connectionString))};\n{script}",
+            ledgerEntries, cancellationToken);
+
+    /// <summary>
+    /// P3: views, functions, procedures and triggers, analyzed by
+    /// <see cref="PgProgrammables"/> from the files <see cref="PgDesiredState"/>
+    /// classified as exactly one programmable statement.
     /// </summary>
     public Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(IDesiredState desiredState, CancellationToken cancellationToken = default)
-    {
-        PgDesiredState.From(desiredState);   // the guard, not the data
-        return Task.FromResult(new ProgrammableAnalysis(
-            Array.Empty<ProgrammableObjectInfo>(), Array.Empty<RawMessage>()));
-    }
+        => Task.FromResult(PgProgrammables.Analyze(PgDesiredState.From(desiredState).ProgrammableFiles));
+
+    /// <summary>
+    /// Brownfield reconciliation is not attempted (unlike the SQL Server
+    /// provider's <c>sys.sql_modules</c> text match): <c>pg_get_viewdef</c> and
+    /// its siblings return the engine's re-rendered canonical form, not the
+    /// deployed text verbatim, so a textual comparison would almost never
+    /// match even when the definitions agree. Returning nothing here is safe,
+    /// not merely simple — every history-less object goes through
+    /// <c>CREATE OR REPLACE</c> once, which is idempotent by construction, and
+    /// the ledger records it from then on. The cost is one redundant
+    /// re-definition on first adoption of an already-matching live object, not
+    /// a false match that would silently adopt a differing one.
+    /// </summary>
+    public Task<IReadOnlyList<ProgrammableObjectInfo>> FilterMatchingLiveDefinitionsAsync(
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<ProgrammableObjectInfo>>(Array.Empty<ProgrammableObjectInfo>());
 
     // ------------------------------------------------------------- pipeline
 
@@ -196,7 +228,8 @@ public sealed class PostgresProvider : IDatabaseProvider
         Snapshots Snapshots,
         string? UpdateScript,
         IReadOnlyList<ChangeScript> ChangeScripts,
-        IReadOnlyList<RawMessage> Messages);
+        IReadOnlyList<RawMessage> Messages,
+        IReadOnlyList<string> TablesWithColumnChanges);
 
     /// <summary>
     /// The shadow pipeline (ADR-0007): desired state applied to a scratch
@@ -231,7 +264,8 @@ public sealed class PostgresProvider : IDatabaseProvider
             : Array.Empty<RawMessage>();
 
         return new Compared(changes, new Snapshots(desired, live), updateScript,
-            AttributeStatements(statements, desired, live), messages);
+            AttributeStatements(statements, desired, live), messages,
+            SnapshotComparer.TablesWithColumnChanges(desired, live));
     }
 
     /// <summary>
@@ -435,10 +469,6 @@ public sealed class PostgresProvider : IDatabaseProvider
 
         return (maskedDesired, maskedLive);
     }
-
-    public Task<IReadOnlyList<ProgrammableObjectInfo>> FilterMatchingLiveDefinitionsAsync(
-        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default)
-        => throw Refuse("live-definition matching");
 
     public Task<IReadOnlyList<MigrationLintSignal>> LintMigrationScriptAsync(
         string scriptText, CancellationToken cancellationToken = default)

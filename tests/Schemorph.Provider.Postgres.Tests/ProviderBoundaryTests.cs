@@ -15,14 +15,12 @@ public class ProviderBoundaryTests
     // Walks the whole surface rather than checking capabilities one at a time.
     // Per-member tests are what let schemorph_diff and schemorph_inspect ship
     // with no error handling at all — a new member added without a
-    // refusal must fail here, not be discovered by a user. The declared scope moved load,
-    // compare, apply and programmable analysis off this list; what remains is
-    // the machinery outside it (redefine script execution, migrations).
+    // refusal must fail here, not be discovered by a user. The declared scope
+    // moved load, compare, apply, programmable analysis (P3: views, functions,
+    // procedures, triggers) and redefine script execution off this list; what
+    // remains is migrations (P4, not yet earned).
     public static TheoryData<string, Func<PostgresProvider, Task>> UndeclaredCapabilities => new()
     {
-        { "script execution", p => p.ExecuteScriptAsync("any", "SELECT 1") },
-        { "script execution with ledger", p => p.ExecuteScriptAsync("any", "SELECT 1", []) },
-        { "live-definition matching", p => p.FilterMatchingLiveDefinitionsAsync("any", []) },
         { "migration lint", p => p.LintMigrationScriptAsync("SELECT 1") },
     };
 
@@ -45,7 +43,7 @@ public class ProviderBoundaryTests
         // The declaration and the refusals pin each other: adding a capability
         // without moving it out of the refusal list breaks this.
         var ex = await Assert.ThrowsAsync<UnsupportedByProviderException>(
-            () => Provider.ExecuteScriptAsync("any", "SELECT 1"));
+            () => Provider.LintMigrationScriptAsync("SELECT 1"));
 
         foreach (var declared in Provider.Capabilities.Declared)
         {
@@ -67,7 +65,7 @@ public class ProviderBoundaryTests
     }
 
     [Fact]
-    public void The_declared_surface_is_the_table_core_with_indexes_and_earns_transactional()
+    public void The_declared_surface_is_the_table_core_plus_programmables_and_earns_transactional()
     {
         // The declaration is the promise, so it is spelled out here rather than
         // derived: a capability appears on this line in the same change that
@@ -75,8 +73,14 @@ public class ProviderBoundaryTests
         // transaction (ADR-0007, ADR-0004 addendum), not asserted — the
         // read-only scope declared `inspect` alone with NO atomicity, because a
         // provider without an apply must not claim what one would guarantee.
+        // P3 adds views/functions/triggers/procedures; only migrations (P4)
+        // remains outside the declared surface.
         Assert.Equal(
-            new[] { "inspect", "tables", "columns", "constraints", "indexes", "schemas" },
+            new[]
+            {
+                "inspect", "tables", "columns", "constraints", "indexes", "schemas",
+                "views", "functions", "triggers", "procedures",
+            },
             Provider.Capabilities.Declared);
         Assert.Equal(ApplyAtomicity.Transactional, Provider.Capabilities.Atomicity);
         Assert.Equal(ApplyAtomicity.Transactional, Provider.Capabilities.PlanAtomicity);

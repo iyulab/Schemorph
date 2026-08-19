@@ -177,16 +177,55 @@ stripped of the guarantee. Declare the index without `CONCURRENTLY` to let Schem
 build it inside the apply, or build it by hand outside Schemorph and declare it
 plainly afterwards — the next diff will find it already there and plan nothing.
 
+## A PostgreSQL redefinition that changes shape fails loudly, not gracefully
+
+`CREATE OR REPLACE VIEW`/`FUNCTION`/`PROCEDURE`/`TRIGGER` is PostgreSQL's own
+idempotent form, and Schemorph's redefinition of a programmable object is
+exactly that statement, re-run whenever the file's checksum changes
+(`PgProgrammablesTests`, `PgProgrammablesLoopTests`). The engine itself refuses
+`OR REPLACE` when the new definition is not shape-compatible with the old one —
+a view whose column list or column order changed, a function whose parameter
+list changed — and Schemorph does not catch that refusal and retry as a drop
+and a create. The apply stops, the earlier stages in the same transaction roll
+back with it, and the engine's own error (its SQLSTATE and message) is what you
+see. **What to do:** drop the object yourself first (`DROP VIEW "V";`), or
+change the file to something shape-compatible — adding a new function
+overload, for instance, rather than changing an existing one's signature.
+
+**On SQL Server this is not a gap to compare against**: `CREATE OR ALTER` runs
+through DacFx's own declarative model, which the SQL Server provider already
+uses for structural comparison, so a shape-incompatible redefinition there can
+be planned as a rebuild rather than simply failing. PostgreSQL's programmable
+objects are handled as idempotent text, not diffed structurally, so there is no
+equivalent rebuild path yet — a real difference between the providers, not
+merely an unfinished mirror of one.
+
+## A PostgreSQL programmable object is always redefined once on adoption
+
+Bringing Schemorph to a database that already has a matching view or function
+always re-runs its `CREATE OR REPLACE` once, even when the live definition
+already agrees with the file. SQL Server's provider can skip this: it reads
+`sys.sql_modules`, which stores the deployed text verbatim, and matches it
+against the file before deciding to redefine. PostgreSQL has no such
+verbatim store — `pg_get_viewdef` and its siblings return the engine's
+re-rendered canonical form, so a textual comparison would almost never match
+even when the definitions genuinely agree, and a false match would be worse
+than a redundant redefinition: it would silently adopt a definition that
+actually differs. `CREATE OR REPLACE` is idempotent by construction, so the
+one-time redefinition changes nothing beyond what the file already says; the
+ledger records it and every apply after that is a real no-op, same as SQL
+Server.
+
 ## Two database engines, and one of them is partial
 
 SQL Server is complete. PostgreSQL is released **up to a declared scope** — tables,
-columns, constraints, indexes and the target schema ([ADR-0003](adr/0003-postgres-as-second-provider.md),
+columns, constraints, indexes, the target schema, and views, functions,
+procedures and triggers ([ADR-0003](adr/0003-postgres-as-second-provider.md),
 [ADR-0007](adr/0007-postgres-engine-selection.md)). Everything outside that
-declaration — views, functions, procedures, triggers, versioned
-migrations — is **refused with an error naming what the provider does support**,
-never half-planned. The scope grows in releasable slices, with no committed
-timeline; if you need the refused parts on PostgreSQL today, Atlas, sqldef, or
-Flyway will serve you better.
+declaration — versioned migrations — is **refused with an error naming what
+the provider does support**, never half-planned. The scope grows in releasable
+slices, with no committed timeline; if you need versioned migrations on
+PostgreSQL today, Atlas, sqldef, or Flyway will serve you better.
 
 The refusal is the contract, not a bug: a plan that cannot see a difference must
 not claim a sync. Ask the provider what it covers with `schemorph schema` — the

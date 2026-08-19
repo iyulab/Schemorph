@@ -6,27 +6,41 @@ namespace Schemorph.Provider.Postgres;
 /// <summary>
 /// A desired-state directory, loaded and classified once (the provider
 /// boundary's single-load contract). Classification is parse-based, with the
-/// real PostgreSQL grammar: a file either belongs to the declared slice
-/// (tables, columns, constraints, indexes, schemas), is imperative content
-/// that is not desired state (skipped loudly,
-/// the SQL Server convention), or demands a slice this provider has not
-/// earned yet — and that last case REFUSES rather than skips, because a plan
-/// that silently ignored a view file would claim a sync it cannot see.
+/// real PostgreSQL grammar: a file either belongs to the declared structural
+/// slice (tables, columns, constraints, indexes, schemas), is exactly one
+/// programmable object (view, function, procedure or trigger — P3, routed to
+/// <see cref="PgProgrammables"/> for idempotent re-definition), is imperative
+/// content that is not desired state (skipped loudly, the SQL Server
+/// convention), or demands something this provider has not earned yet — and
+/// that last case REFUSES rather than skips, because a plan that silently
+/// ignored a file would claim a sync it cannot see.
 /// </summary>
 internal sealed class PgDesiredState : IDesiredState
 {
     private PgDesiredState(
         IReadOnlyList<string> modelTexts,
+        IReadOnlyList<ProgrammableFile> programmableFiles,
         IReadOnlyList<RawMessage> warnings,
         IReadOnlyList<RawMessage> errors)
     {
         ModelTexts = modelTexts;
+        ProgrammableFiles = programmableFiles;
         Warnings = warnings;
         Errors = errors;
     }
 
+    /// <summary>One file classified as a single programmable statement (P3).</summary>
+    internal sealed record ProgrammableFile(string Path, string Text);
+
     /// <summary>The model files' texts, in stable (path-ordered) order.</summary>
     public IReadOnlyList<string> ModelTexts { get; }
+
+    /// <summary>
+    /// Files classified as exactly one view/function/procedure/trigger
+    /// definition (P3, ADR-0002 strategy 2) — analyzed by
+    /// <see cref="PgProgrammables"/>, never diffed structurally.
+    /// </summary>
+    internal IReadOnlyList<ProgrammableFile> ProgrammableFiles { get; }
 
     public IReadOnlyList<RawMessage> Warnings { get; }
 
@@ -40,6 +54,7 @@ internal sealed class PgDesiredState : IDesiredState
     public static PgDesiredState Load(string directory)
     {
         var modelTexts = new List<string>();
+        var programmableFiles = new List<ProgrammableFile>();
         var warnings = new List<RawMessage>();
         var errors = new List<RawMessage>();
 
@@ -59,13 +74,25 @@ internal sealed class PgDesiredState : IDesiredState
             }
             if (parsed.Value.Stmts.Count == 0) continue;   // empty or comment-only
 
-            var programmable = parsed.Value.Stmts
-                .Select(s => ProgrammableKind(s.Stmt)).FirstOrDefault(k => k is not null);
-            if (programmable is not null)
+            var programmableCount = parsed.Value.Stmts.Count(s => ProgrammableKind(s.Stmt) is not null);
+            if (programmableCount > 0)
             {
-                // Not the user's error and not ignorable — the honest outcome is
-                // the provider's own refusal, naming what it does not handle.
-                throw Unsupported($"programmable objects ({relative}: {programmable})");
+                // ADR-0002: one programmable object per file, same rule the SQL
+                // Server provider enforces (there, discovered post-hoc across the
+                // whole model; here, discoverable per-file because loading is
+                // already per-file) — a file mixing a view with other statements,
+                // or declaring two, would redefine more than the caller reviewed.
+                if (programmableCount > 1 || programmableCount != parsed.Value.Stmts.Count)
+                {
+                    errors.Add(new RawMessage("Error", "SCHEMORPH004",
+                        $"{relative}: one programmable object per file (ADR-0002) — found " +
+                        $"{programmableCount} programmable statement(s) among " +
+                        $"{parsed.Value.Stmts.Count} total in this file."));
+                    continue;
+                }
+
+                programmableFiles.Add(new ProgrammableFile(relative, text));
+                continue;
             }
 
             // CONCURRENTLY buys its lock-free build by refusing to run inside a
@@ -92,7 +119,7 @@ internal sealed class PgDesiredState : IDesiredState
             }
         }
 
-        return new PgDesiredState(modelTexts, warnings, errors);
+        return new PgDesiredState(modelTexts, programmableFiles, warnings, errors);
     }
 
     private static UnsupportedByProviderException Unsupported(string capability)
