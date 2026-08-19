@@ -25,7 +25,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     internal static readonly string[] DeclaredCapabilities =
         {
             "inspect", "tables", "columns", "constraints", "indexes", "schemas",
-            "views", "functions", "triggers", "procedures",
+            "views", "functions", "triggers", "procedures", "migrations",
         };
 
     public string Name => ProviderName;
@@ -470,10 +470,8 @@ public sealed class PostgresProvider : IDatabaseProvider
         return (maskedDesired, maskedLive);
     }
 
+    /// <summary>P4: dialect judgment delegated to <see cref="PgMigrationLinter"/>.</summary>
     public Task<IReadOnlyList<MigrationLintSignal>> LintMigrationScriptAsync(
         string scriptText, CancellationToken cancellationToken = default)
-        => throw Refuse("migration lint");
-
-    private static UnsupportedByProviderException Refuse(string capability)
-        => new(ProviderName, capability, string.Join(", ", DeclaredCapabilities));
+        => Task.FromResult(PgMigrationLinter.Lint(scriptText));
 }

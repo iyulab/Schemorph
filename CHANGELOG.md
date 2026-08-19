@@ -26,6 +26,17 @@ change **additively**: consumers must ignore properties they do not know.
   brownfield database is redefined once on adoption rather than reconciled by a text match (PG's
   `pg_get_viewdef` and its siblings do not preserve deployed text verbatim, unlike SQL Server's
   `sys.sql_modules`).
+- **PostgreSQL: versioned migrations (P4).** `SCHEMORPH_PROVIDER=postgres` now runs versioned
+  migration scripts (`V<n>__description.sql`) through the same checksummed, run-once ledger
+  strategy 3 already provides for SQL Server (ADR-0002) — the provider only supplies execution
+  and a dialect safety lint; discovery, ordering, tamper detection and ledger bookkeeping were
+  already provider-agnostic. The lint judges the parsed statement tree, never regex-over-text,
+  and flags the same constructs the SQL Server provider does: `TRUNCATE TABLE`, an `UPDATE` or
+  `DELETE` with no `WHERE` clause, and `GRANT`/`REVOKE` riding a migration (PostgreSQL has no
+  `DENY`, the one T-SQL-only construct the SQL Server lint also checks). With this, the
+  PostgreSQL provider's declared capability list reaches the full vocabulary — the same range
+  SQL Server declares (parity is equal range, not equal limitations; see
+  [limitations.md](docs/limitations.md)).
 
 ## 0.10.1 — 2026-08-18
 

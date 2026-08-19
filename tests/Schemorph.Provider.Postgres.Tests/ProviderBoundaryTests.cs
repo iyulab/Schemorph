@@ -12,45 +12,6 @@ public class ProviderBoundaryTests
         Assert.Equal("postgres", Provider.Name);
     }
 
-    // Walks the whole surface rather than checking capabilities one at a time.
-    // Per-member tests are what let schemorph_diff and schemorph_inspect ship
-    // with no error handling at all — a new member added without a
-    // refusal must fail here, not be discovered by a user. The declared scope
-    // moved load, compare, apply, programmable analysis (P3: views, functions,
-    // procedures, triggers) and redefine script execution off this list; what
-    // remains is migrations (P4, not yet earned).
-    public static TheoryData<string, Func<PostgresProvider, Task>> UndeclaredCapabilities => new()
-    {
-        { "migration lint", p => p.LintMigrationScriptAsync("SELECT 1") },
-    };
-
-    [Theory]
-    [MemberData(nameof(UndeclaredCapabilities))]
-    public async Task Undeclared_capabilities_refuse_with_the_machine_contract(
-        string capability, Func<PostgresProvider, Task> invoke)
-    {
-        var ex = await Assert.ThrowsAsync<UnsupportedByProviderException>(() => invoke(Provider));
-
-        Assert.Equal("postgres", ex.ProviderName);
-        Assert.Equal(capability, ex.Capability);
-        Assert.Equal("not_implemented", ex.ToError().Code);
-        Assert.Equal("unsupported", ex.ToError().Kind);
-    }
-
-    [Fact]
-    public async Task The_declared_surface_is_what_the_refusals_point_at()
-    {
-        // The declaration and the refusals pin each other: adding a capability
-        // without moving it out of the refusal list breaks this.
-        var ex = await Assert.ThrowsAsync<UnsupportedByProviderException>(
-            () => Provider.LintMigrationScriptAsync("SELECT 1"));
-
-        foreach (var declared in Provider.Capabilities.Declared)
-        {
-            Assert.Contains(declared, ex.ToError().Hint);
-        }
-    }
-
     /// <summary>
     /// D2: every line this provider declares has to be a real word in the
     /// vocabulary a consumer reads from the CLI manifest — a declared capability
@@ -65,7 +26,7 @@ public class ProviderBoundaryTests
     }
 
     [Fact]
-    public void The_declared_surface_is_the_table_core_plus_programmables_and_earns_transactional()
+    public void The_declared_surface_is_spelled_out_and_earns_transactional()
     {
         // The declaration is the promise, so it is spelled out here rather than
         // derived: a capability appears on this line in the same change that
@@ -73,17 +34,25 @@ public class ProviderBoundaryTests
         // transaction (ADR-0007, ADR-0004 addendum), not asserted — the
         // read-only scope declared `inspect` alone with NO atomicity, because a
         // provider without an apply must not claim what one would guarantee.
-        // P3 adds views/functions/triggers/procedures; only migrations (P4)
-        // remains outside the declared surface.
         Assert.Equal(
             new[]
             {
                 "inspect", "tables", "columns", "constraints", "indexes", "schemas",
-                "views", "functions", "triggers", "procedures",
+                "views", "functions", "triggers", "procedures", "migrations",
             },
             Provider.Capabilities.Declared);
         Assert.Equal(ApplyAtomicity.Transactional, Provider.Capabilities.Atomicity);
         Assert.Equal(ApplyAtomicity.Transactional, Provider.Capabilities.PlanAtomicity);
+    }
+
+    [Fact]
+    public void The_declared_surface_reaches_full_parity_with_the_vocabulary()
+    {
+        // P4 (migrations) is the last line: this provider's declared surface
+        // now covers the same range as the full vocabulary — Phase 4's own
+        // completion criterion for capability range (order-independent; parity
+        // means equal range, not equal limitations — see docs/limitations.md).
+        Assert.Equivalent(CapabilityVocabulary.All, Provider.Capabilities.Declared, strict: true);
     }
 
     [Fact]

@@ -216,16 +216,15 @@ one-time redefinition changes nothing beyond what the file already says; the
 ledger records it and every apply after that is a real no-op, same as SQL
 Server.
 
-## Two database engines, and one of them is partial
+## Two database engines, at equal capability range
 
-SQL Server is complete. PostgreSQL is released **up to a declared scope** — tables,
-columns, constraints, indexes, the target schema, and views, functions,
-procedures and triggers ([ADR-0003](adr/0003-postgres-as-second-provider.md),
-[ADR-0007](adr/0007-postgres-engine-selection.md)). Everything outside that
-declaration — versioned migrations — is **refused with an error naming what
-the provider does support**, never half-planned. The scope grows in releasable
-slices, with no committed timeline; if you need versioned migrations on
-PostgreSQL today, Atlas, sqldef, or Flyway will serve you better.
+SQL Server is complete. PostgreSQL now declares the **same capability range** —
+tables, columns, constraints, indexes, the target schema, views, functions,
+procedures, triggers, and versioned migrations ([ADR-0003](adr/0003-postgres-as-second-provider.md),
+[ADR-0007](adr/0007-postgres-engine-selection.md)). What remains outside the
+declaration — non-transactional DDL such as `CREATE INDEX CONCURRENTLY`, which
+cannot join the one transaction a PostgreSQL apply owns — is **refused with an
+error naming what the provider does support**, never half-planned.
 
 The refusal is the contract, not a bug: a plan that cannot see a difference must
 not claim a sync. Ask the provider what it covers with `schemorph schema` — the
