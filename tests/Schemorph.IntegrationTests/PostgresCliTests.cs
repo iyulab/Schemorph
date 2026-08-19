@@ -60,7 +60,7 @@ public sealed class PostgresCliTests : IDisposable
 
         var provider = JsonDocument.Parse(manifest.StdOut).RootElement.GetProperty("provider");
         Assert.Equal("postgres", provider.GetProperty("name").GetString());
-        Assert.Equal("transactional", provider.GetProperty("atomicity").GetString());
+        Assert.Equal("partial", provider.GetProperty("atomicity").GetString());
     }
 
     [SkippableFact]
@@ -81,7 +81,7 @@ public sealed class PostgresCliTests : IDisposable
         var pending = Run($"diff --schema \"{_dir}\"", Url());
         Assert.Equal(2, pending.ExitCode);
         var plan = JsonDocument.Parse(pending.StdOut).RootElement;
-        Assert.Equal("transactional", plan.GetProperty("atomicity").GetString());
+        Assert.Equal("partial", plan.GetProperty("atomicity").GetString());
         var planHash = plan.GetProperty("planHash").GetString()!;
 
         // gated apply, then convergence — the same machine contract as SQL Server.

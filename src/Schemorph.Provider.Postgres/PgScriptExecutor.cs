@@ -7,9 +7,12 @@ namespace Schemorph.Provider.Postgres;
 /// Tool-owned transactional execution — the control ADR-0007 chose native
 /// execution to get: the script and its ledger rows commit in ONE transaction
 /// (ADR-0004 §2 — either the script ran and is recorded, or neither
-/// happened), and because Schemorph holds the boundary, the future apply can
-/// join its plan-hash re-verification into the same unit. This is what makes
-/// `atomicity: transactional` an earnable claim rather than an observation.
+/// happened). That guarantee is real but scoped to this one call: every
+/// caller (the declarative publish, and each redefine/migration object) opens
+/// its own connection here, so the guarantee is per-call, not a boundary
+/// shared across calls — this alone does not earn `atomicity: transactional`
+/// for the whole apply (ADR-0007's 2026-08-19 addendum). It is what makes
+/// each individual stage's own atomicity real, which is what `partial` means.
 ///
 /// Internal until the provider surface declares the capability it belongs to:
 /// the declared/refused symmetry (§2 of the dev plan) flips per slice, never

@@ -56,7 +56,7 @@ Current version: **`1.7`**.
       "actions": ["redefine"],
       "risk": "safe",
       "sql": "CREATE OR ALTER VIEW dbo.CategoryFullView AS …",
-      "explanation": "The file's checksum differs from the last applied definition; re-defined idempotently (CREATE OR ALTER)."
+      "explanation": "The file's checksum differs from the last applied definition; re-defined idempotently — see sql for the exact statement."
     }
   ],
   "messages": [
@@ -95,7 +95,7 @@ Current version: **`1.7`**.
 | `create` | Object will be created (declarative path) |
 | `alter` | Object will be altered in place (declarative path) |
 | `drop` | Object will be dropped (declarative path; data-holding drops are gated behind `--allow-destructive`) |
-| `redefine` | Programmable object will be idempotently re-defined (`CREATE OR ALTER`, ADR-0002 strategy 2) |
+| `redefine` | Programmable object will be idempotently re-defined, in the provider's own native idempotent form (SQL Server: `CREATE OR ALTER`; PostgreSQL: `CREATE OR REPLACE` — see `sql` for the exact statement; ADR-0002 strategy 2) |
 
 New verbs may appear in minor versions; consumers should treat an unknown verb as
 "a change they cannot classify", not an error.

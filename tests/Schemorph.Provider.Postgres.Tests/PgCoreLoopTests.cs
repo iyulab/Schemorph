@@ -69,11 +69,11 @@ public class PgCoreLoopTests : IAsyncLifetime
     [SkippableFact]
     public async Task Diff_apply_rediff_converges_with_the_gate_and_the_ledger()
     {
-        // diff: two table changes, a transactional plan, an executable script.
+        // diff: two table changes, a partial-atomicity plan, an executable script.
         var diff = await DiffOperation.RunAsync(_provider, _ledger, _schemaDir, _url, allowDestructive: false);
         Assert.True(diff.Success, string.Join("; ", diff.Errors.Select(e => e.Text)));
         var plan = diff.Plan!;
-        Assert.Equal(ApplyAtomicity.Transactional, plan.Atomicity);
+        Assert.Equal(ApplyAtomicity.Partial, plan.Atomicity);
         Assert.Equal(2, plan.Actions.Count);
         Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH006");   // the seed file, loudly skipped
         Assert.NotNull(diff.UpdateScript);
@@ -108,5 +108,56 @@ public class PgCoreLoopTests : IAsyncLifetime
 
         var live = await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, _live.Name);
         Assert.DoesNotContain(live, t => t.Name == "Members");   // nothing executed
+    }
+
+    /// <summary>
+    /// The live proof behind the `atomicity: partial` declaration (ADR-0007's
+    /// 2026-08-19 addendum): a declarative change and a redefine failure in the
+    /// SAME apply — the table from the declarative stage stays committed even
+    /// though the overall apply reports failure. `transactional` would mean
+    /// this cannot happen; it does, because the two stages do not share a
+    /// transaction boundary.
+    /// </summary>
+    [SkippableFact]
+    public async Task A_redefine_failure_leaves_the_already_committed_declarative_stage_in_place()
+    {
+        var schemaDir = Path.Combine(Path.GetTempPath(), "schemorph-pg-partial-" + Guid.NewGuid().ToString("n")[..8]);
+        Directory.CreateDirectory(Path.Combine(schemaDir, "tables"));
+        Directory.CreateDirectory(Path.Combine(schemaDir, "views"));
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(schemaDir, "tables", "Widgets.sql"), $"""
+                CREATE TABLE "{_live.Name}"."Widgets" (
+                    "Id" uuid NOT NULL DEFAULT gen_random_uuid(),
+                    "Name" text NOT NULL,
+                    CONSTRAINT "PK_Widgets" PRIMARY KEY ("Id")
+                );
+                """);
+            // Syntactically valid, semantically broken: the parser accepts it (no
+            // column-existence check), so this only fails when the database
+            // actually executes the CREATE OR REPLACE — exactly the failure mode
+            // that matters here.
+            await File.WriteAllTextAsync(Path.Combine(schemaDir, "views", "BrokenView.sql"), """
+                CREATE VIEW "BrokenView" AS SELECT "Id", "NoSuchColumn" FROM "Widgets";
+                """);
+
+            var diff = await DiffOperation.RunAsync(_provider, _ledger, schemaDir, _url, allowDestructive: false);
+            Assert.True(diff.Success, string.Join("; ", diff.Errors.Select(e => e.Text)));
+            var expected = Schemorph.Core.Planning.PlanFingerprint.Compute(diff.Plan!);
+
+            var outcome = await ApplyOperation.RunAsync(_provider, _ledger,
+                new ApplyOperation.Request(schemaDir, _url, ExpectedPlanHash: expected));
+
+            Assert.False(outcome.Success);
+            Assert.Equal(ApplyOperation.FailureStage.Redefine, outcome.Stage);
+            Assert.Single(outcome.Applied);   // the declarative stage committed...
+
+            var live = await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, _live.Name);
+            Assert.Contains(live, t => t.Name == "Widgets");   // ...and it is still there.
+        }
+        finally
+        {
+            try { Directory.Delete(schemaDir, recursive: true); } catch { }
+        }
     }
 }

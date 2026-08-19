@@ -162,13 +162,16 @@ a generated desired state never emits them, so treating their absence as "delete
 them" would destroy live principals. Manage them through a separate operational
 path.
 
-## A concurrent index build cannot join a transactional apply
+## A concurrent index build cannot join the declarative transaction
 
 `CREATE INDEX CONCURRENTLY` exists to build an index without holding a write lock,
 and PostgreSQL charges a fixed price for that: the statement refuses to run inside
-a transaction. A PostgreSQL apply here *is* one transaction the tool owns — that is
-the `transactional` atomicity the provider declares, and what makes a failed apply
-leave nothing behind.
+a transaction. PostgreSQL's declarative stage here *is* one transaction the tool
+owns — every table, column, constraint and index in that stage lands together or
+not at all, regardless of what the provider's overall `atomicity` declares (see
+[failure-semantics.md](failure-semantics.md) — `atomicity` describes the whole
+apply's three stages, not stage 1 alone; PostgreSQL declares `partial` there, the
+same scope SQL Server declares).
 
 The two cannot both hold, and which one to give up is a decision about your
 database, not about this tool. So a desired state containing `CONCURRENTLY` is
@@ -186,9 +189,11 @@ exactly that statement, re-run whenever the file's checksum changes
 `OR REPLACE` when the new definition is not shape-compatible with the old one —
 a view whose column list or column order changed, a function whose parameter
 list changed — and Schemorph does not catch that refusal and retry as a drop
-and a create. The apply stops, the earlier stages in the same transaction roll
-back with it, and the engine's own error (its SQLSTATE and message) is what you
-see. **What to do:** drop the object yourself first (`DROP VIEW "V";`), or
+and a create. The apply stops where it is: the declarative stage that already
+committed stays committed, any redefinitions before the failing one in this
+run stay redefined, and the engine's own error (its SQLSTATE and message) is
+what you see (same partial-apply shape as any other redefine-stage failure —
+see [failure-semantics.md](failure-semantics.md)). **What to do:** drop the object yourself first (`DROP VIEW "V";`), or
 change the file to something shape-compatible — adding a new function
 overload, for instance, rather than changing an existing one's signature.
 
@@ -223,7 +228,7 @@ tables, columns, constraints, indexes, the target schema, views, functions,
 procedures, triggers, and versioned migrations ([ADR-0003](adr/0003-postgres-as-second-provider.md),
 [ADR-0007](adr/0007-postgres-engine-selection.md)). What remains outside the
 declaration — non-transactional DDL such as `CREATE INDEX CONCURRENTLY`, which
-cannot join the one transaction a PostgreSQL apply owns — is **refused with an
+cannot join the one transaction the declarative stage owns — is **refused with an
 error naming what the provider does support**, never half-planned.
 
 The refusal is the contract, not a bug: a plan that cannot see a difference must

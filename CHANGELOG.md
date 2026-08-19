@@ -38,6 +38,17 @@ change **additively**: consumers must ignore properties they do not know.
   SQL Server declares (parity is equal range, not equal limitations; see
   [limitations.md](docs/limitations.md)).
 
+### Fixed
+
+- **PostgreSQL: `atomicity` corrected from `transactional` to `partial`.** ADR-0007 declared
+  `transactional` from what a bare declarative apply could hold, but never checked that claim
+  against the redefine and migration stages the same slice work above went on to add — each
+  runs through its own connection, with no transaction spanning the three stages, exactly SQL
+  Server's shape. The declarative stage itself is still one tool-owned transaction, unchanged;
+  only the whole-pipeline claim was wrong. Caught before release — no version ever shipped the
+  overclaim. See [ADR-0007's addendum](docs/adr/0007-postgres-engine-selection.md) for the full
+  correction and what reclaiming `transactional` for real would need.
+
 ## 0.10.1 — 2026-08-18
 
 ### Fixed

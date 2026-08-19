@@ -49,8 +49,9 @@ so that running it again converges:
 
 - The declarative publish re-compares against the live database. Changes that already
   applied are simply not in the new plan.
-- Redefinitions are `CREATE OR ALTER` against a checksum. Objects already matching
-  their file are skipped; the one that failed is retried.
+- Redefinitions are the provider's own idempotent re-definition (SQL Server:
+  `CREATE OR ALTER`; PostgreSQL: `CREATE OR REPLACE`) against a checksum. Objects
+  already matching their file are skipped; the one that failed is retried.
 - Migrations are run-once by checksum. Applied ones are not re-run; the failed one is.
 
 So the safe recovery is: **fix what caused the failure, then run the same `apply`

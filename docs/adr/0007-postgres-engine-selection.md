@@ -166,3 +166,42 @@ lock, the apply is one transaction the tool owns, and a concurrent build cannot 
 one. Both are real and only the caller can choose between them. Marking becomes
 implementable when a plan can carry an atomicity of its own; until then the refusal is
 what this ADR's own standard requires — no plan the provider cannot stand behind.
+
+## Addendum (2026-08-19): the `transactional` claim was never earned across the pipeline
+
+The table above scoped Postgres → `transactional` from what the spike measured: a native
+declarative publish can hold the transaction boundary Schemorph itself owns. True as far
+as it goes — the declarative stage (strategy 1) is one tool-owned transaction, same as
+this ADR always said. What the table elided is that `atomicity` (ADR-0004 addendum)
+describes the *whole apply*, and the apply is three stages (ADR-0002), not one.
+`ApplyOperation.RunAsync` — the Core orchestration both providers share — commits the
+declarative publish, then runs redefines, then migrations, each stage its own connection
+and its own transaction, with no boundary spanning them. That is a Core property, not
+something either provider's implementation controls, and it was already true the day
+this ADR was accepted; the table just never checked it against strategies 2 and 3.
+
+The programmable-object slices (this project's cycles 110–111) made the gap concrete
+rather than theoretical: `RedefineRunner` executes each redefinition through its own
+`ExecuteScriptAsync` call, a fresh connection per object, same as `MigrationRunner` does
+per script. A redefine failing after the declarative stage committed is not a corner
+case — it is the ordinary shape of a partial apply, and it now has a live reproduction:
+a table created, committed, and visible, while a view in the same apply fails to
+redefine. **`atomicity: transactional` cannot describe that outcome** — the failure-
+semantics contract for `transactional` is "lands whole or not at all", and this plainly
+did not.
+
+**Corrected: `PostgresProvider` declares `partial`**, the same guarantee scope SQL
+Server declares, for the reason the table above already gave for SQL Server — each
+stage's own transaction is real, but nothing wraps the stages together. This is not a
+capability regression (the declarative stage is still one transaction; `CONCURRENTLY`
+is still refused for exactly the reason given above, unchanged), only a corrected
+declaration: `transactional` was asserted, not earned, once redefines and migrations
+existed to make the pipeline more than one stage. No release ever shipped the
+overclaim — cycles 110–111, which introduced the gap, were still unpushed local commits
+when this addendum caught it.
+
+Reclaiming `transactional` for real is a Core change, not a provider one: something
+would need to hold a single connection/transaction across all three stages of
+`ApplyOperation.RunAsync` for a provider that can support it, which the current
+`IDatabaseProvider.ExecuteScriptAsync(connectionString, …)` shape — a string, not a
+shared handle — does not allow. Left as a future direction, not scoped here.

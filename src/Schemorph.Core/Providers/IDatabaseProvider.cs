@@ -242,7 +242,11 @@ public sealed record RawMessage(string Severity, string Code, string Text);
 /// matching judge THIS snapshot — the one the apply script was derived from —
 /// so what is recorded is always what actually ran, never a later re-read.
 /// </param>
-/// <param name="ApplyScript">Idempotent re-definition script (e.g. CREATE OR ALTER rewrite of the file).</param>
+/// <param name="ApplyScript">
+/// Idempotent re-definition script — each provider's own native idempotent
+/// form of the file (SQL Server: a <c>CREATE OR ALTER</c> rewrite; PostgreSQL:
+/// a <c>CREATE OR REPLACE</c> rewrite).
+/// </param>
 /// <param name="DependsOn">Names of other programmable objects this one references.</param>
 /// <param name="DependsOnTables">
 /// Tables this object reads, directly or through a referenced column. Its own

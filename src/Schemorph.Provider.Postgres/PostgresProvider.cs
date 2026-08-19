@@ -31,12 +31,17 @@ public sealed class PostgresProvider : IDatabaseProvider
     public string Name => ProviderName;
 
     /// <summary>
-    /// This provider earns `transactional` (ADR-0007, ADR-0004 addendum): the
-    /// declarative apply is one tool-owned transaction — the tool holds the
-    /// boundary, it does not merely observe a rollback.
+    /// `atomicity` describes the whole apply (ADR-0004 addendum), not stage 1 in
+    /// isolation — and `ApplyOperation.RunAsync` (Core) commits the declarative
+    /// publish before redefines run, for every provider, with no transaction
+    /// spanning the stages. This provider's declarative publish is itself one
+    /// tool-owned transaction, same as SQL Server's, but that only earns
+    /// `partial`: stages commit independently, exactly SQL Server's mode.
+    /// `transactional` stays unclaimed until something owns the boundary across
+    /// all three stages, which is not this provider today.
     /// </summary>
     public ProviderCapabilities Capabilities { get; } = new(
-        DeclaredCapabilities, ApplyAtomicity.Transactional);
+        DeclaredCapabilities, ApplyAtomicity.Partial);
 
     public async Task<InspectResult> InspectAsync(InspectRequest request, CancellationToken cancellationToken = default)
     {

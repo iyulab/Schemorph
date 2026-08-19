@@ -261,11 +261,11 @@ public sealed record PendingRedefine(ProgrammableObjectInfo Object, RedefineReas
         Explanation: Reason switch
         {
             RedefineReason.ChecksumChanged =>
-                "The file's checksum differs from the last applied definition; re-defined idempotently (CREATE OR ALTER).",
+                "The file's checksum differs from the last applied definition; re-defined idempotently — see sql for the exact statement.",
             RedefineReason.DependencyChanged =>
-                "Its file is unchanged, but a column it depends on is being altered — the object's cached metadata would keep describing the old shape, so it is re-defined idempotently (CREATE OR ALTER).",
+                "Its file is unchanged, but a column it depends on is being altered — the object's cached metadata would keep describing the old shape, so it is re-defined idempotently — see sql for the exact statement.",
             _ =>
-                "No history in the ledger and the live definition does not match the file; defined idempotently (CREATE OR ALTER) and recorded.",
+                "No history in the ledger and the live definition does not match the file; defined idempotently and recorded — see sql for the exact statement.",
         });
 }
 
