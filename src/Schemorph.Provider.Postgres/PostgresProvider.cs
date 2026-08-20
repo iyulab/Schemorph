@@ -105,8 +105,40 @@ public sealed class PostgresProvider : IDatabaseProvider
             compared.UpdateScript, compared.ChangeScripts, compared.TablesWithColumnChanges);
     }
 
+    /// <summary>
+    /// The schema is created here — on its OWN connection, committed, before the
+    /// session's connection ever opens. The session's own transaction runs
+    /// <c>CREATE SCHEMA IF NOT EXISTS</c> again later (<see cref="ComposeScript"/>
+    /// always prepends it), and so does <c>ledger.EnsureInitializedAsync</c> on its
+    /// own separate connection afterward (deliberately kept outside the session —
+    /// see <c>ApplyOperation.RunAsync</c>'s note on why) — both become safe no-ops
+    /// once the schema is already durably committed here.
+    ///
+    /// Skipping this bootstrap step lets those two "IF NOT EXISTS" statements
+    /// race as UNCOMMITTED inserts into <c>pg_namespace</c> on the very first
+    /// apply into a schema that does not exist yet: the session's own transaction
+    /// inserts it but stays open; <c>EnsureInitializedAsync</c>'s separate
+    /// connection then tries the same insert and blocks on the unique index,
+    /// waiting for the first transaction to end — which it never does, because
+    /// the caller (<c>ApplyOperation.RunAsync</c>) is single-threaded and is
+    /// itself waiting on this call to return before it can ever commit or roll
+    /// back the session. Not a Postgres-detectable deadlock — the first
+    /// connection is idle-in-transaction, not blocked on anything — so it only
+    /// resolves via a command timeout, surfacing as an opaque stream-read error
+    /// with nothing applied.
+    /// </summary>
     public async Task<IApplySession?> BeginApplySessionAsync(string connectionString, CancellationToken cancellationToken = default)
-        => await PgApplySession.OpenAsync(connectionString, cancellationToken);
+    {
+        var schema = TargetSchemaOf(connectionString);
+        await using (var bootstrap = new NpgsqlConnection(connectionString))
+        {
+            await bootstrap.OpenAsync(cancellationToken);
+            await using var command = new NpgsqlCommand(
+                $"CREATE SCHEMA IF NOT EXISTS {DesiredStateRenderer.Quote(schema)}", bootstrap);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        return await PgApplySession.OpenAsync(connectionString, cancellationToken);
+    }
 
     public async Task<ApplyResult> ApplyAsync(
         ApplyRequest request,
