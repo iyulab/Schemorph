@@ -88,30 +88,23 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
     };
 
     public async Task<MigrationRunResult> RunAsync(
-        string migrationsDirectory, string connectionString, CancellationToken cancellationToken = default)
+        string migrationsDirectory, string connectionString, IApplySession? session = null, CancellationToken cancellationToken = default)
     {
         var plan = await PlanAsync(migrationsDirectory, connectionString, cancellationToken);
 
-        // Run pending migrations in order. The ledger row commits in the SAME
-        // transaction as the script (ADR-0004): a crash can never leave a migration
-        // applied but unrecorded, which would re-run it and break run-once.
         var applied = new List<string>();
         foreach (var script in plan.Pending)
         {
             var entry = new LedgerEntry(LedgerKind, script.FileName, "Run", script.Checksum, Succeeded: true, Detail: null);
             try
             {
-                // The discovery snapshot runs — the same text the checksum covers.
                 await provider.ExecuteScriptAsync(
-                    connectionString, script.Text, new[] { entry }, cancellationToken: cancellationToken);
+                    connectionString, script.Text, new[] { entry }, session, cancellationToken);
             }
             catch (Exception ex)
             {
                 await ledger.AppendFailureBestEffortAsync(
                     connectionString, entry with { Succeeded = false, Detail = ex.Message }, cancellationToken);
-                // Same reasoning as the redefine stage: the run-once contract makes
-                // "which ones already ran" the operator's first question, and only
-                // this frame knows the answer.
                 throw new MigrationExecutionException(script.FileName, applied.ToList(), ex);
             }
             applied.Add(script.FileName);

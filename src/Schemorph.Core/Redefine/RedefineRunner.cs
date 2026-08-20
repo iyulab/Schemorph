@@ -64,9 +64,9 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
     /// recorded in the ledger.
     /// </summary>
     public async Task<RedefineRunResult> RunAsync(
-        ProgrammableAnalysis analysis, string connectionString, CancellationToken cancellationToken = default)
+        ProgrammableAnalysis analysis, string connectionString, IApplySession? session = null, CancellationToken cancellationToken = default)
         => await RunAsync(analysis,
-            await PlanAsync(analysis, connectionString, cancellationToken), connectionString, cancellationToken);
+            await PlanAsync(analysis, connectionString, cancellationToken), connectionString, session, cancellationToken);
 
     /// <summary>
     /// Execute a plan already computed by <see cref="PlanAsync"/> — the apply
@@ -74,36 +74,30 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
     /// runs, never a silent re-plan.
     /// </summary>
     public async Task<RedefineRunResult> RunAsync(
-        ProgrammableAnalysis analysis, RedefinePlan plan, string connectionString, CancellationToken cancellationToken = default)
+        ProgrammableAnalysis analysis, RedefinePlan plan, string connectionString, IApplySession? session = null, CancellationToken cancellationToken = default)
     {
-
-        // Reconciliation is bookkeeping, not change: the checksum lands in the
-        // ledger so the object has history from here on, but nothing executes.
         if (plan.Reconcilable.Count > 0)
         {
             await ledger.AppendAsync(connectionString, plan.Reconcilable
                 .Select(o => new LedgerEntry(LedgerKind, o.ObjectName, "Reconcile", ChecksumOf(o),
                     Succeeded: true, Detail: o.ObjectType))
-                .ToList(), cancellationToken: cancellationToken);
+                .ToList(), session, cancellationToken);
         }
 
         var redefined = new List<string>();
         foreach (var obj in plan.Pending.Select(p => p.Object))
         {
-            // Ledger row commits in the same transaction as the script (ADR-0004).
             var entry = new LedgerEntry(LedgerKind, obj.ObjectName, "Redefine", ChecksumOf(obj),
                 Succeeded: true, Detail: obj.ObjectType);
             try
             {
-                await provider.ExecuteScriptAsync(connectionString, obj.ApplyScript, new[] { entry }, cancellationToken: cancellationToken);
+                await provider.ExecuteScriptAsync(connectionString, obj.ApplyScript, new[] { entry }, session, cancellationToken);
             }
             catch (Exception ex)
             {
+                // Never through session — see the plan doc's failure-row note.
                 await ledger.AppendFailureBestEffortAsync(
                     connectionString, entry with { Succeeded = false, Detail = ex.Message }, cancellationToken);
-                // What already committed is known HERE and nowhere else — a bare
-                // rethrow discards it, and the caller then cannot say what the
-                // database holds. Carry it out with the failure.
                 throw new RedefineExecutionException(obj.ObjectName, redefined.ToList(), ex);
             }
             redefined.Add(obj.ObjectName);
@@ -118,7 +112,7 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
     /// so this strategy's history never claims a dropped object is still applied.
     /// </summary>
     public Task RecordDropsAsync(
-        string connectionString, IEnumerable<RawChange> appliedChanges, CancellationToken cancellationToken = default)
+        string connectionString, IEnumerable<RawChange> appliedChanges, IApplySession? session = null, CancellationToken cancellationToken = default)
     {
         var tombstones = appliedChanges
             .Where(c => ProgrammableObjects.IsProgrammable(c.ObjectType)
@@ -128,7 +122,7 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
             .ToList();
         return tombstones.Count == 0
             ? Task.CompletedTask
-            : ledger.AppendAsync(connectionString, tombstones, cancellationToken: cancellationToken);
+            : ledger.AppendAsync(connectionString, tombstones, session, cancellationToken);
     }
 
     // The checksum judges the loaded snapshot (never a re-read), so the ledger

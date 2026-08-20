@@ -148,7 +148,7 @@ public static class ApplyOperation
         // (structural prerequisites first). Declarative drops leave a tombstone so
         // re-adding an identical file later still re-creates the object. Executes
         // the SAME redefine plan that was fingerprinted above.
-        await redefineRunner.RecordDropsAsync(request.ConnectionString, result.AppliedChanges, cancellationToken);
+        await redefineRunner.RecordDropsAsync(request.ConnectionString, result.AppliedChanges, cancellationToken: cancellationToken);
 
         // From here on the declarative changes are committed and there is no
         // rollback across stages, so an execution failure below is reported WITH
@@ -160,7 +160,7 @@ public static class ApplyOperation
         RedefineRunResult redefineRun;
         try
         {
-            redefineRun = await redefineRunner.RunAsync(programmables, redefinePlan, request.ConnectionString, cancellationToken);
+            redefineRun = await redefineRunner.RunAsync(programmables, redefinePlan, request.ConnectionString, cancellationToken: cancellationToken);
         }
         catch (RedefineExecutionException ex)
         {
@@ -179,7 +179,7 @@ public static class ApplyOperation
         {
             try
             {
-                migrationRun = await new MigrationRunner(provider, ledger).RunAsync(migrationsDir, request.ConnectionString, cancellationToken);
+                migrationRun = await new MigrationRunner(provider, ledger).RunAsync(migrationsDir, request.ConnectionString, cancellationToken: cancellationToken);
             }
             catch (MigrationExecutionException ex)
             {
