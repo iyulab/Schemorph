@@ -172,7 +172,7 @@ internal sealed class SchemorphTools
         catch (Schemorph.Core.Migrations.MigrationException ex)
         {
             return Error("migration_failed", ex.Message,
-                "Applied migrations are immutable; add a new V####__*.sql instead of editing old ones.");
+                ex.Hint ?? "Applied migrations are immutable; add a new V####__*.sql instead of editing old ones.");
         }
         catch (Exception ex)
         {
@@ -286,7 +286,7 @@ internal sealed class SchemorphTools
         catch (Schemorph.Core.Migrations.MigrationException ex)
         {
             return Error("migration_failed", ex.Message,
-                "Applied migrations are immutable; add a new V####__*.sql instead of editing old ones.");
+                ex.Hint ?? "Applied migrations are immutable; add a new V####__*.sql instead of editing old ones.");
         }
         catch (Schemorph.Core.Redefine.RedefineException ex)
         {

@@ -81,6 +81,8 @@ public sealed class MigrationRunnerTests : IDisposable
 
         Assert.Contains("V1__seed.sql", ex.Message);
         Assert.Empty(_provider.ExecutedScripts);   // fail-fast: pending V2 must not run
+        // Not the transactional-rejection cause — the CLI's own fixed wording covers this one.
+        Assert.Null(ex.Hint);
     }
 
     [Fact]
@@ -89,7 +91,9 @@ public sealed class MigrationRunnerTests : IDisposable
         WriteMigration("V1__a.sql", "A;");
         WriteMigration("V01__b.sql", "B;");
 
-        await Assert.ThrowsAsync<MigrationException>(() => Runner.RunAsync(_dir, "conn"));
+        var ex = await Assert.ThrowsAsync<MigrationException>(() => Runner.RunAsync(_dir, "conn"));
+
+        Assert.Null(ex.Hint);
     }
 
     [Fact]
@@ -180,6 +184,12 @@ public sealed class MigrationRunnerTests : IDisposable
 
         Assert.Contains("V1__boom.sql", ex.Message);
         Assert.Contains("transaction", ex.Message, StringComparison.OrdinalIgnoreCase);
+        // This cause's hint is distinct from the CLI's fixed "immutable migrations"
+        // wording (that one is wrong here) — it names the actual fix: split the
+        // construct out, or drop it.
+        Assert.NotNull(ex.Hint);
+        Assert.Contains("transaction", ex.Hint, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("immutable", ex.Hint, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

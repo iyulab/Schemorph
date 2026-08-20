@@ -57,13 +57,18 @@ internal sealed class PgApplySession : IApplySession
     /// Rolls back if neither <see cref="CommitAsync"/> nor
     /// <see cref="RollbackAsync"/> ran first (e.g. a plan-hash mismatch, which
     /// aborts before anything executes) — standard ADO.NET transaction
-    /// disposal semantics, made explicit here rather than left implicit.
+    /// disposal semantics, made explicit here rather than left implicit. The
+    /// implicit rollback is best-effort: a broken connection can make it throw,
+    /// and disposing the transaction and the connection below must still run
+    /// regardless — a connection leaked out of the pool here is worse than an
+    /// already-dead transaction failing to roll back cleanly.
     /// </summary>
     public async ValueTask DisposeAsync()
     {
         if (!_completed)
         {
-            await Transaction.RollbackAsync();
+            try { await Transaction.RollbackAsync(); }
+            catch { /* best-effort — the transaction may already be dead; disposal below must still run */ }
         }
         await Transaction.DisposeAsync();
         await Connection.DisposeAsync();

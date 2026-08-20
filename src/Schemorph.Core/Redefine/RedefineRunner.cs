@@ -76,6 +76,8 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
     public async Task<RedefineRunResult> RunAsync(
         ProgrammableAnalysis analysis, RedefinePlan plan, string connectionString, IApplySession? session = null, CancellationToken cancellationToken = default)
     {
+        // Reconciliation is bookkeeping, not change: the checksum lands in the
+        // ledger so the object has history from here on, but nothing executes.
         if (plan.Reconcilable.Count > 0)
         {
             await ledger.AppendAsync(connectionString, plan.Reconcilable
@@ -87,6 +89,9 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
         var redefined = new List<string>();
         foreach (var obj in plan.Pending.Select(p => p.Object))
         {
+            // Ledger row commits in the same transaction as the script
+            // (ADR-0004) — the session's shared one when given, this call's
+            // own otherwise.
             var entry = new LedgerEntry(LedgerKind, obj.ObjectName, "Redefine", ChecksumOf(obj),
                 Succeeded: true, Detail: obj.ObjectType);
             try
@@ -98,6 +103,9 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
                 // Never through session — see the plan doc's failure-row note.
                 await ledger.AppendFailureBestEffortAsync(
                     connectionString, entry with { Succeeded = false, Detail = ex.Message }, cancellationToken);
+                // What already committed is known HERE and nowhere else — a bare
+                // rethrow discards it, and the caller then cannot say what the
+                // database holds. Carry it out with the failure.
                 throw new RedefineExecutionException(obj.ObjectName, redefined.ToList(), ex);
             }
             redefined.Add(obj.ObjectName);

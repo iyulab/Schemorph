@@ -128,13 +128,24 @@ public static class ApplyOperation
                 new[] { new RawMessage("Error", "plan_mismatch", ex.Message) }) with { Plan = plan };
         }
 
-        // The ledger TABLE'S existence must survive independently of whatever
-        // this apply does next — including a session this call's own failure
-        // path is about to roll back — so it is never created through the
-        // session (plan doc addendum): a session-scoped EnsureInitializedAsync
-        // would vanish along with a rolled-back first apply, taking the
-        // failure row below down with it (INSERT into a table that no longer
-        // exists).
+        // The ledger is initialized HERE — after the gate has recomputed and
+        // matched the plan, before anything is recorded — and it must NOT exist
+        // during the comparison: a target the tool just wrote a ledger table
+        // into is no longer the pristine schema diff compared, and the
+        // generated update script would carry a spurious ledger DROP
+        // (DropObjectsNotInSource) that trips the fingerprint gate on a plan
+        // that never changed.
+        //
+        // The ledger TABLE'S existence must also survive independently of
+        // whatever this apply does next — including a session this call's own
+        // failure path is about to roll back — so it is never created through
+        // the session (plan doc addendum): a session-scoped
+        // EnsureInitializedAsync would vanish along with a rolled-back first
+        // apply, taking the failure row below down with it (INSERT into a
+        // table that no longer exists) — exactly the hazard a first apply into
+        // a not-yet-existing schema hit before this call's own
+        // BeginApplySessionAsync started bootstrapping the schema itself
+        // (final-review Critical fix).
         await ledger.EnsureInitializedAsync(request.ConnectionString, session: null, cancellationToken);
 
         // Classification skip warnings surface once per operation, ahead of the
@@ -145,10 +156,10 @@ public static class ApplyOperation
         {
             var errorText = string.Join("; ", messages
                 .Where(m => m.Severity == "Error").Select(m => $"{m.Code}: {m.Text}"));
-            if (session is not null) await session.RollbackAsync(cancellationToken);
+            var rollbackError = await TryRollbackAsync(session);
             await ledger.AppendFailureBestEffortAsync(request.ConnectionString, new LedgerEntry(
                 "declarative", "(publish)", "Publish", Checksum: null,
-                Succeeded: false, Detail: errorText), cancellationToken);
+                Succeeded: false, Detail: WithRollbackNote(errorText, rollbackError)), cancellationToken);
             return Failure(FailureStage.Publish, messages) with { Plan = plan };
         }
 
@@ -166,13 +177,20 @@ public static class ApplyOperation
         // the SAME redefine plan that was fingerprinted above.
         await redefineRunner.RecordDropsAsync(request.ConnectionString, result.AppliedChanges, session, cancellationToken);
 
-        // From here on the declarative changes are committed and there is no
-        // rollback across stages, so an execution failure below is reported WITH
-        // what it left behind — never as a bare error that implies nothing ran.
-        // Only execution failures are caught: RedefineException (dependency cycle)
-        // and MigrationException (duplicate version / edited migration) describe an
-        // invalid desired state, are raised before their stage executes anything,
-        // and keep propagating to the invalid_state mapping they always had.
+        // What "committed" means below depends on the provider's declared
+        // atomicity. Under Partial, the declarative changes above are already
+        // committed and stay committed no matter what happens next — there is
+        // no cross-stage rollback, so an execution failure below is reported
+        // WITH what it left behind, never as a bare error that implies nothing
+        // ran. Under Transactional, nothing below is durable yet either: it all
+        // shares the ONE session this whole method threads through, so a later
+        // failure rolls this back too — "committed" in that outcome only
+        // describes what the caller attempted, not what the database still
+        // holds. Only execution failures are caught: RedefineException
+        // (dependency cycle) and MigrationException (duplicate version /
+        // edited migration) describe an invalid desired state, are raised
+        // before their stage executes anything, and keep propagating to the
+        // invalid_state mapping they always had.
         RedefineRunResult redefineRun;
         try
         {
@@ -180,9 +198,9 @@ public static class ApplyOperation
         }
         catch (RedefineExecutionException ex)
         {
-            if (session is not null) await session.RollbackAsync(cancellationToken);
+            var rollbackError = await TryRollbackAsync(session);
             return Failure(FailureStage.Redefine,
-                new[] { new RawMessage("Error", "redefine_execution_failed", ex.Message) }) with
+                new[] { new RawMessage("Error", "redefine_execution_failed", WithRollbackNote(ex.Message, rollbackError)) }) with
             {
                 Plan = plan,
                 Applied = result.AppliedChanges,
@@ -200,9 +218,9 @@ public static class ApplyOperation
             }
             catch (MigrationExecutionException ex)
             {
-                if (session is not null) await session.RollbackAsync(cancellationToken);
+                var rollbackError = await TryRollbackAsync(session);
                 return Failure(FailureStage.Migration,
-                    new[] { new RawMessage("Error", "migration_execution_failed", ex.Message) }) with
+                    new[] { new RawMessage("Error", "migration_execution_failed", WithRollbackNote(ex.Message, rollbackError)) }) with
                 {
                     Plan = plan,
                     Applied = result.AppliedChanges,
@@ -232,4 +250,33 @@ public static class ApplyOperation
     private static Outcome Failure(FailureStage stage, IReadOnlyList<RawMessage> errors) =>
         new(false, stage, errors, null, Array.Empty<RawChange>(), Array.Empty<RawChange>(),
             Array.Empty<RawMessage>(), null, null);
+
+    /// <summary>
+    /// Best-effort rollback of a possibly-null session, on every cleanup path
+    /// (final-review fix). Deliberately never cancellable — cleanup is already
+    /// responding to a failure, often a broken connection (a likely reason the
+    /// stage failed in the first place), so honoring the caller's token here
+    /// too would let a rollback throw replace the structured
+    /// <see cref="Failure"/> outcome (and, on the publish path, the ADR-0004
+    /// failure-row write) with an unhandled exception instead. A throw is
+    /// caught and its message returned rather than logged — this codebase has
+    /// no logging infrastructure, so the message rides the caller's own error
+    /// text via <see cref="WithRollbackNote"/> instead of being invented here.
+    /// </summary>
+    private static async Task<string?> TryRollbackAsync(IApplySession? session)
+    {
+        if (session is null) return null;
+        try
+        {
+            await session.RollbackAsync(CancellationToken.None);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
+    }
+
+    private static string WithRollbackNote(string text, string? rollbackError) =>
+        rollbackError is null ? text : $"{text} (rollback also failed: {rollbackError})";
 }

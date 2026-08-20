@@ -207,9 +207,10 @@ mean "nothing is at stake", which is not what silence here has ever guaranteed.
 | `SCHEMORPH106` | Warning | A pending migration changes permissions (GRANT/REVOKE/DENY) |
 | `SCHEMORPH107` | Warning | A change re-creates a column instead of altering it — that column's current values do not survive, though the table and its other columns do |
 | `SCHEMORPH108` | Warning | A change drops an index the desired state does not declare — no data is lost and it is not gated, but every query that relied on it falls back to a scan |
+| `SCHEMORPH109` | Warning | A pending migration contains a construct that cannot run inside a transaction (e.g. `CREATE INDEX CONCURRENTLY`) — informational here, for a provider that does not run migrations inside a shared transaction. A provider whose apply is one transaction it owns (`atomicity: transactional`) rejects this outright instead (`migration_failed`), with a hint of its own — see `MigrationException.Hint` |
 
 Plan-side findings (`101`–`103`, `107`–`108`) ride the plan's `messages`; migration-side
-findings (`104`–`106`) ride the `migrations.warnings` list on `status` and `apply`
+findings (`104`–`106`, `109`) ride the `migrations.warnings` list on `status` and `apply`
 output (text mode renders both under their section). Codes are assigned in the order
 the rules were added, so a new plan-side rule does not renumber the band — a code is
 an identifier, and consumers pin policy to it.

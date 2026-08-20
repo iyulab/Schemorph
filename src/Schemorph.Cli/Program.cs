@@ -263,7 +263,7 @@ async Task<int> RunApply(string[] args, string format)
     catch (MigrationException ex)
     {
         return Fail(format, "migration_failed", ex.Message,
-            "Applied migrations are immutable; add a new V####__*.sql instead of editing old ones.");
+            ex.Hint ?? "Applied migrations are immutable; add a new V####__*.sql instead of editing old ones.");
     }
     catch (RedefineException ex)
     {
@@ -373,7 +373,7 @@ async Task<int> RunStatus(string[] args, string format)
     catch (MigrationException ex)
     {
         return Fail(format, "migration_failed", ex.Message,
-            "Applied migrations are immutable; add a new V####__*.sql instead of editing old ones.");
+            ex.Hint ?? "Applied migrations are immutable; add a new V####__*.sql instead of editing old ones.");
     }
     catch (RedefineException ex)
     {

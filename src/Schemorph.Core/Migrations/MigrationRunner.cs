@@ -79,7 +79,10 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
                     $"{script.FileName}: contains a construct that cannot run inside a transaction " +
                     "(e.g. CREATE INDEX CONCURRENTLY), and this provider's apply is one transaction it " +
                     "owns (atomicity: transactional) — split it into a migration run outside this tool, " +
-                    "or drop CONCURRENTLY if a lock-holding index build is acceptable here.");
+                    "or drop CONCURRENTLY if a lock-holding index build is acceptable here.",
+                    hint: "This provider's apply is one transaction it owns; split the migration so the " +
+                    "non-transactional statement runs on its own, outside this tool, or drop the " +
+                    "construct if it isn't actually needed here.");
             }
 
             warnings.AddRange(signals.Select(signal => Warn(script.FileName, signal)));
@@ -112,12 +115,18 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
     {
         var plan = await PlanAsync(migrationsDirectory, connectionString, cancellationToken);
 
+        // Run pending migrations in order. The ledger row commits in the SAME
+        // transaction as the script (ADR-0004) — the session's shared one when
+        // given, this call's own otherwise — so a crash can never leave a
+        // migration applied but unrecorded, which would re-run it and break
+        // run-once.
         var applied = new List<string>();
         foreach (var script in plan.Pending)
         {
             var entry = new LedgerEntry(LedgerKind, script.FileName, "Run", script.Checksum, Succeeded: true, Detail: null);
             try
             {
+                // The discovery snapshot runs — the same text the checksum covers.
                 await provider.ExecuteScriptAsync(
                     connectionString, script.Text, new[] { entry }, session, cancellationToken);
             }
@@ -125,6 +134,9 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
             {
                 await ledger.AppendFailureBestEffortAsync(
                     connectionString, entry with { Succeeded = false, Detail = ex.Message }, cancellationToken);
+                // Same reasoning as the redefine stage: the run-once contract
+                // makes "which ones already ran" the operator's first question,
+                // and only this frame knows the answer.
                 throw new MigrationExecutionException(script.FileName, applied.ToList(), ex);
             }
             applied.Add(script.FileName);
@@ -147,7 +159,18 @@ public sealed record MigrationRunResult(
     IReadOnlyList<string> IgnoredFiles,
     IReadOnlyList<RawMessage> Warnings);
 
-public sealed class MigrationException(string message) : Exception(message);
+/// <summary>
+/// A desired-state problem found before anything runs — see the three throw
+/// sites in <see cref="MigrationRunner.PlanAsync"/>. <see cref="Hint"/> is null
+/// for the original two causes (duplicate version, an edited applied
+/// migration): the CLI's own fixed wording already covers those. The third
+/// cause (a non-transactional construct rejected because the provider's apply
+/// is one transaction it owns) needs different advice, so it carries its own.
+/// </summary>
+public sealed class MigrationException(string message, string? hint = null) : Exception(message)
+{
+    public string? Hint { get; } = hint;
+}
 
 /// <summary>
 /// A migration script failed against the database. Distinct from
