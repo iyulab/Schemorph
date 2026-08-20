@@ -64,6 +64,24 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
         foreach (var script in pending)
         {
             var signals = await provider.LintMigrationScriptAsync(script.Text, cancellationToken);
+
+            // A construct that cannot run inside a transaction is fatal, not a
+            // warning, when the provider's apply is one transaction it owns
+            // (ADR-0004 addendum) — the same reason PgDesiredState refuses
+            // CONCURRENTLY in desired-state files, extended here: a migration
+            // now executes inside that SAME session (RedefineRunner and
+            // MigrationRunner both thread it through), so the constraint is
+            // identical; only the file's role differs.
+            if (provider.Capabilities.PlanAtomicity == ApplyAtomicity.Transactional
+                && signals.Contains(MigrationLintSignal.NonTransactional))
+            {
+                throw new MigrationException(
+                    $"{script.FileName}: contains a construct that cannot run inside a transaction " +
+                    "(e.g. CREATE INDEX CONCURRENTLY), and this provider's apply is one transaction it " +
+                    "owns (atomicity: transactional) — split it into a migration run outside this tool, " +
+                    "or drop CONCURRENTLY if a lock-holding index build is acceptable here.");
+            }
+
             warnings.AddRange(signals.Select(signal => Warn(script.FileName, signal)));
         }
 
@@ -84,6 +102,8 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
             $"{fileName}: DELETE without a WHERE clause removes every row. Add a filter, or a guard proving the intent."),
         MigrationLintSignal.PermissionChange => new RawMessage("Warning", "SCHEMORPH106",
             $"{fileName}: GRANT/REVOKE/DENY — permission changes riding a migration; consider managing security separately."),
+        MigrationLintSignal.NonTransactional => new RawMessage("Warning", "SCHEMORPH109",
+            $"{fileName}: contains a construct that cannot run inside a transaction (e.g. CREATE INDEX CONCURRENTLY) — informational here because this provider does not run migrations inside a shared transaction."),
         _ => new RawMessage("Warning", "SCHEMORPH106", $"{fileName}: {signal}"),
     };
 

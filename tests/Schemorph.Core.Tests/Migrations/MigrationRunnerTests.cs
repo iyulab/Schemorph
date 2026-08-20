@@ -165,5 +165,34 @@ public sealed class MigrationRunnerTests : IDisposable
         Assert.Equal(new[] { "notes.sql" }, result.IgnoredFiles);
     }
 
+    [Fact]
+    public async Task A_transactional_providers_non_transactional_migration_signal_is_fatal()
+    {
+        WriteMigration("V1__boom.sql", "CREATE INDEX CONCURRENTLY ix ON t (c);");
+        var provider = new FakeProvider
+        {
+            Capabilities = new(new[] { "fake" }, ApplyAtomicity.Transactional),
+        };
+        provider.LintSignals.Add(MigrationLintSignal.NonTransactional);
+
+        var ex = await Assert.ThrowsAsync<MigrationException>(
+            () => new MigrationRunner(provider, _ledger).PlanAsync(_dir, "conn"));
+
+        Assert.Contains("V1__boom.sql", ex.Message);
+        Assert.Contains("transaction", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_partial_providers_non_transactional_migration_signal_is_only_a_warning()
+    {
+        WriteMigration("V1__ok.sql", "CREATE INDEX CONCURRENTLY ix ON t (c);");
+        var provider = new FakeProvider();   // default Capabilities: Partial
+        provider.LintSignals.Add(MigrationLintSignal.NonTransactional);
+
+        var plan = await new MigrationRunner(provider, _ledger).PlanAsync(_dir, "conn");
+
+        Assert.Contains(plan.Warnings, m => m.Code == "SCHEMORPH109" && m.Text.Contains("V1__ok.sql"));
+    }
+
     public void Dispose() => Directory.Delete(_dir, recursive: true);
 }

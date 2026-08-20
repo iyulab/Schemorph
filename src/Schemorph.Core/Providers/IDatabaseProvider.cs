@@ -132,6 +132,14 @@ public enum MigrationLintSignal
     UnfilteredDelete,
     /// <summary>GRANT / REVOKE / DENY — permission changes riding a migration.</summary>
     PermissionChange,
+    /// <summary>
+    /// A construct that cannot run inside a transaction (e.g. PostgreSQL's
+    /// <c>CREATE INDEX CONCURRENTLY</c>). Only fatal when the provider's
+    /// apply is one transaction it owns (<see cref="ApplyAtomicity.Transactional"/>)
+    /// — a <see cref="ApplyAtomicity.Partial"/> provider already runs each
+    /// migration script in its own transaction, so this never applies there.
+    /// </summary>
+    NonTransactional,
 }
 
 /// <summary>

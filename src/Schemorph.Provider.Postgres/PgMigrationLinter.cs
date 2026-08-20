@@ -43,6 +43,9 @@ internal static class PgMigrationLinter
             // One node covers GRANT and REVOKE alike (IsGrant); PostgreSQL has no
             // DENY (a T-SQL-only construct SQL Server's linter also checks).
             if (node.GrantStmt is not null) signals.Add(MigrationLintSignal.PermissionChange);
+            // Same field, same semantics as PgDesiredState's CONCURRENTLY refusal
+            // for desired-state files — here it flags migration scripts instead.
+            if (node.IndexStmt is { Concurrent: true }) signals.Add(MigrationLintSignal.NonTransactional);
         }
 
         foreach (var field in message.Descriptor.Fields.InDeclarationOrder())
