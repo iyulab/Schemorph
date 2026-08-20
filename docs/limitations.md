@@ -170,8 +170,7 @@ a transaction. PostgreSQL's declarative stage here *is* one transaction the tool
 owns — every table, column, constraint and index in that stage lands together or
 not at all, regardless of what the provider's overall `atomicity` declares (see
 [failure-semantics.md](failure-semantics.md) — `atomicity` describes the whole
-apply's three stages, not stage 1 alone; PostgreSQL declares `partial` there, the
-same scope SQL Server declares).
+apply's three stages, not stage 1 alone; PostgreSQL declares `transactional` there).
 
 The two cannot both hold, and which one to give up is a decision about your
 database, not about this tool. So a desired state containing `CONCURRENTLY` is
@@ -189,13 +188,21 @@ exactly that statement, re-run whenever the file's checksum changes
 `OR REPLACE` when the new definition is not shape-compatible with the old one —
 a view whose column list or column order changed, a function whose parameter
 list changed — and Schemorph does not catch that refusal and retry as a drop
-and a create. The apply stops where it is: the declarative stage that already
-committed stays committed, any redefinitions before the failing one in this
-run stay redefined, and the engine's own error (its SQLSTATE and message) is
-what you see (same partial-apply shape as any other redefine-stage failure —
-see [failure-semantics.md](failure-semantics.md)). **What to do:** drop the object yourself first (`DROP VIEW "V";`), or
-change the file to something shape-compatible — adding a new function
-overload, for instance, rather than changing an existing one's signature.
+and a create. The apply stops where it is, and rolls back: the declarative
+stage that already succeeded and any redefinitions before the failing one in
+this run all roll back together with the failing statement — one
+provider-owned session
+([ADR-0004's 2026-08-20 addendum](adr/0004-failure-semantics-and-resume.md#addendum-2026-08-20-postgresql-earns-transactional))
+covers the whole apply — and the engine's own error (its SQLSTATE and message)
+is what you see. **What to do:** change the file to something shape-compatible
+— adding a new function overload, for instance, rather than changing an
+existing one's signature — or, if the shape change is genuinely wanted, drop
+the object yourself first (`DROP VIEW "V";`) so `OR REPLACE` lands as a fresh
+create next time. Either way, the fix is: change the file (and the live
+object, if you took the drop route) and re-run `apply` — the same recovery as
+any other rolled-back failure ([failure-semantics.md](failure-semantics.md)).
+Nothing from the failed attempt is left partially committed to reconcile by
+hand.
 
 **On SQL Server this is not a gap to compare against**: `CREATE OR ALTER` runs
 through DacFx's own declarative model, which the SQL Server provider already

@@ -205,3 +205,21 @@ would need to hold a single connection/transaction across all three stages of
 `ApplyOperation.RunAsync` for a provider that can support it, which the current
 `IDatabaseProvider.ExecuteScriptAsync(connectionString, …)` shape — a string, not a
 shared handle — does not allow. Left as a future direction, not scoped here.
+
+## Addendum (2026-08-20): the future direction taken — `transactional` reclaimed
+
+The Core change the 2026-08-19 addendum above described as "a future direction, not
+scoped here" is done. Consequences §69–71 above wrote, at acceptance, that "the
+plan-hash gate, ledger write, and apply can share one transaction" — a capability this
+ADR scored the provider on, not yet a thing any provider had built. It is now literally
+true for PostgreSQL: `ApplyOperation.RunAsync` (Core) threads a single provider-owned
+session across the declarative publish, every redefine, and every migration of one
+apply, committing once at the end or rolling every stage back together on the first
+failure.
+
+The mechanism — `IApplySession`, `BeginApplySessionAsync`, and how it closes the gap
+the 2026-08-19 addendum measured — is recorded at
+[ADR-0004's 2026-08-20 addendum](0004-failure-semantics-and-resume.md#addendum-2026-08-20-postgresql-earns-transactional),
+not repeated here. **`PostgresProvider` again declares `transactional`**, this time
+earned across the whole pipeline rather than asserted from the declarative stage alone.
+SQL Server's `partial` declaration and reasoning (the table above) are unaffected.

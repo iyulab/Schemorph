@@ -189,3 +189,25 @@ Two consequences worth naming:
   question it answers ("the 17th of 31 statements failed — what is in the database now?")
   has two answers now, and a reader must be able to tell which one applies to the run in
   front of them without knowing which engine produced it.
+
+## Addendum (2026-08-20): PostgreSQL earns `transactional`
+
+The 2026-07-22 addendum above described `transactional` as a claim a *second* provider
+*could* hold, not one any provider had yet earned. This addendum records that the
+PostgreSQL provider now does.
+
+Mechanism: `PostgresProvider.BeginApplySessionAsync` opens a single `IApplySession`
+(`PgApplySession`) before the pipeline's first stage, and `ApplyOperation.RunAsync`
+(core) threads it through every execution call the apply makes — the declarative
+publish, every redefine, every migration, and their ledger rows — via the
+`ExecuteScriptAsync(..., IApplySession?)` overload each stage already called through.
+The apply commits the session once, at the end, if every stage succeeded; the first
+stage to fail rolls the session back, taking every earlier stage's work out with it,
+before a best-effort failure row (decision 4) is written on a separate connection so it
+survives the rollback. The tool owns the connection across the whole apply — the bar this
+ADR's 2026-07-22 addendum set for the declaration — rather than merely observing that one
+stage rolled back on its own.
+
+SQL Server is unaffected by this addendum: DacFx still owns the declarative publish's own
+connection, nothing spans it and the redefine/migration stages, and it continues to
+declare `partial` exactly as decisions 1–6 above describe.

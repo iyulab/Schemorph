@@ -26,6 +26,11 @@ resolves to:
 - **Failed during the 23 redefinitions** → all 8 alters are committed, and the views
   up to the failing one are re-defined. The database is part-way, on purpose.
 
+(This walkthrough is `partial`-specific — SQL Server, from here on. A PostgreSQL apply,
+which declares `transactional`, does not have a "part-way, on purpose" outcome at all:
+whichever stage fails rolls back everything the apply had done, including stages that
+had already succeeded on their own terms, and only the ADR-0004 failure row survives.)
+
 **There is no rollback across stages.** Stage 2 failing does not undo stage 1. That
 is deliberate: undoing a committed structural change is itself a destructive
 operation, and the tool does not perform destructive operations you did not ask for.
@@ -36,7 +41,10 @@ on this page describes `atomicity: "partial"` — stages commit independently �
 that is what SQL Server declares. A provider that owns the whole transaction boundary
 declares `transactional` instead: the apply lands whole or not at all, and "part-way,
 on purpose" cannot happen. Read the field, not the engine name
-([ADR-0004 addendum](adr/0004-failure-semantics-and-resume.md)).
+([ADR-0004 addendum](adr/0004-failure-semantics-and-resume.md)). PostgreSQL is that
+provider, from the release that ships the `IApplySession` pipeline-wide session
+described in [ADR-0004's 2026-08-20 addendum](adr/0004-failure-semantics-and-resume.md#addendum-2026-08-20-postgresql-earns-transactional)
+(see `CHANGELOG.md`) onward.
 
 Stage 3's atomicity is per script, and the run-once record commits *in the same
 transaction as the script itself*, so a crash can never leave a migration applied but

@@ -26,16 +26,18 @@ public class ProviderBoundaryTests
     }
 
     [Fact]
-    public void The_declared_surface_is_spelled_out_and_earns_partial()
+    public void The_declared_surface_is_spelled_out_and_earns_transactional()
     {
         // The declaration is the promise, so it is spelled out here rather than
         // derived: a capability appears on this line in the same change that
         // makes it real. The apply guarantee is earned by what the pipeline
-        // actually shares a transaction boundary across (ADR-0007's 2026-08-19
-        // addendum, ADR-0004 addendum), not asserted — the declarative stage is
-        // one tool-owned transaction, but nothing spans it and the redefine and
-        // migration stages, so the whole-apply claim is `partial`, same scope
-        // SQL Server declares. The read-only scope declared `inspect` alone with
+        // actually shares a transaction boundary across (ADR-0004's 2026-08-20
+        // addendum), not asserted — every execution call one apply makes
+        // (declarative publish, every redefine, every migration, and their
+        // ledger rows) is threaded through the single `IApplySession` this
+        // provider opens and holds until the apply commits or a stage fails
+        // and it rolls back as a unit, so the whole-apply claim is
+        // `transactional`. The read-only scope declared `inspect` alone with
         // NO atomicity, because a provider without an apply must not claim what
         // one would guarantee.
         Assert.Equal(
@@ -45,8 +47,8 @@ public class ProviderBoundaryTests
                 "views", "functions", "triggers", "procedures", "migrations",
             },
             Provider.Capabilities.Declared);
-        Assert.Equal(ApplyAtomicity.Partial, Provider.Capabilities.Atomicity);
-        Assert.Equal(ApplyAtomicity.Partial, Provider.Capabilities.PlanAtomicity);
+        Assert.Equal(ApplyAtomicity.Transactional, Provider.Capabilities.Atomicity);
+        Assert.Equal(ApplyAtomicity.Transactional, Provider.Capabilities.PlanAtomicity);
     }
 
     [Fact]

@@ -38,6 +38,22 @@ change **additively**: consumers must ignore properties they do not know.
   SQL Server declares (parity is equal range, not equal limitations; see
   [limitations.md](docs/limitations.md)).
 
+- **PostgreSQL: `atomicity` reads `transactional` — the whole apply is one transaction.**
+  `SCHEMORPH_PROVIDER=postgres` now opens a single provider-owned session
+  (`IApplySession`) before the pipeline's first stage and threads it through every
+  execution call one apply makes — the declarative publish, every redefine, every
+  migration, and their ledger rows — committing once at the end or rolling every stage
+  back together the first time one fails. This earns the claim the "Fixed" entry below
+  walked back: `partial` is no longer this provider's declaration, `transactional` is,
+  this time across the whole pipeline rather than the declarative stage alone (see
+  [ADR-0004's addendum](docs/adr/0004-failure-semantics-and-resume.md) and
+  [ADR-0007's addendum](docs/adr/0007-postgres-engine-selection.md)). SQL Server is
+  unaffected and continues to declare `partial`. A migration containing a construct that
+  cannot run inside a transaction (`CREATE INDEX CONCURRENTLY` and kin) is now a fatal
+  `MigrationException` rather than the `SCHEMORPH109` warning a `partial` provider gets
+  — the same constraint `PgDesiredState` already enforces for declarative files, extended
+  to migrations now that they run inside the same session.
+
 ### Fixed
 
 - **PostgreSQL: `atomicity` corrected from `transactional` to `partial`.** ADR-0007 declared
