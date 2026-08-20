@@ -12,6 +12,14 @@ namespace Schemorph.Provider.Postgres;
 /// </summary>
 public sealed class PostgresLedgerStore : ILedgerStore
 {
+    /// <summary>
+    /// Deliberately never joins <paramref name="session"/> even when given
+    /// one — the ledger table's existence must survive independently of
+    /// whatever the apply that opened the session does next (ADR-0004
+    /// decision 4's failure row depends on this table already being durably
+    /// there — see the plan doc's addendum). Always its own connection, same
+    /// as before <see cref="IApplySession"/> existed.
+    /// </summary>
     public async Task EnsureInitializedAsync(string connectionString, IApplySession? session = null, CancellationToken cancellationToken = default)
     {
         var schema = PostgresProvider.TargetSchemaOf(connectionString);
@@ -33,9 +41,19 @@ public sealed class PostgresLedgerStore : ILedgerStore
         if (entries.Count == 0) return;
 
         var schema = PostgresProvider.TargetSchemaOf(connectionString);
+
+        if (session is not null)
+        {
+            var pg = PgApplySession.From(session);
+            foreach (var entry in entries)
+            {
+                await PgLedgerSql.InsertAsync(pg.Connection, pg.Transaction, schema, entry, cancellationToken);
+            }
+            return;
+        }
+
         await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
-
         foreach (var entry in entries)
         {
             await PgLedgerSql.InsertAsync(connection, transaction: null, schema, entry, cancellationToken);
