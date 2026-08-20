@@ -30,8 +30,16 @@ public static class ApplyOperation
     /// this enum, so the stage says what came before it — and everything before it
     /// committed. There is no cross-stage rollback (ADR-0004), which is exactly why
     /// the stage has to be reported rather than folded into a generic failure.
+    ///
+    /// <see cref="Commit"/> is the exception: it names a failure AFTER every
+    /// stage above it already ran clean. Under Transactional atomicity nothing
+    /// is durable until the session's own commit succeeds, so a commit that
+    /// throws (e.g. the connection drops between the last statement and the
+    /// acknowledgement) leaves the caller unable to tell whether the database
+    /// actually persisted the work — it must be told the attempt, not handed a
+    /// false success.
     /// </summary>
-    public enum FailureStage { None, DesiredState, PlanMismatch, Publish, Redefine, Migration }
+    public enum FailureStage { None, DesiredState, PlanMismatch, Publish, Redefine, Migration, Commit }
 
     public sealed record Outcome(
         bool Success,
@@ -231,7 +239,33 @@ public static class ApplyOperation
             }
         }
 
-        if (session is not null) await session.CommitAsync(cancellationToken);
+        if (session is not null)
+        {
+            try
+            {
+                await session.CommitAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                // Symmetric with every other stage's cleanup (final-review
+                // Important #1, rollback-path version): a throw here must not
+                // escape as an unhandled exception in place of a structured
+                // Outcome. Best-effort rollback is attempted on the same
+                // session — it may itself fail (the same broken connection
+                // that likely caused the commit to throw), which is exactly
+                // what TryRollbackAsync/WithRollbackNote already exist to
+                // report rather than swallow.
+                var rollbackError = await TryRollbackAsync(session);
+                return Failure(FailureStage.Commit,
+                    new[] { new RawMessage("Error", "commit_failed", WithRollbackNote(ex.Message, rollbackError)) }) with
+                {
+                    Plan = plan,
+                    Applied = result.AppliedChanges,
+                    Redefines = redefineRun,
+                    Migrations = migrationRun,
+                };
+            }
+        }
 
         // Schemorph's own bookkeeping stays invisible in user-facing output, and
         // redefine-routed exclusions are not "excluded" — they show as redefinitions.

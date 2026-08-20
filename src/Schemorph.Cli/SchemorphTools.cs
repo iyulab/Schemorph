@@ -228,17 +228,27 @@ internal sealed class SchemorphTools
                 var text = string.Join("; ", outcome.Errors.Select(m => $"{m.Code}: {m.Text}"));
                 // Stages that ran after the publish committed carry what they left
                 // behind — same envelope the CLI emits, so an agent reads one shape.
-                if (outcome.Stage is ApplyOperation.FailureStage.Redefine or ApplyOperation.FailureStage.Migration)
+                if (outcome.Stage is ApplyOperation.FailureStage.Redefine or ApplyOperation.FailureStage.Migration
+                    or ApplyOperation.FailureStage.Commit)
                 {
-                    var redefine = outcome.Stage == ApplyOperation.FailureStage.Redefine;
+                    var (stageCode, stageLabel) = outcome.Stage switch
+                    {
+                        ApplyOperation.FailureStage.Redefine => ("redefine_execution_failed", "redefine"),
+                        ApplyOperation.FailureStage.Migration => ("migration_execution_failed", "migration"),
+                        // Everything ran; only the session's own commit failed to
+                        // confirm — can only happen under Transactional atomicity.
+                        _ => ("commit_failed", "commit"),
+                    };
                     var committed = new CommittedWork(
                         outcome.Applied.Count,
                         outcome.Redefines?.Redefined.Count ?? 0,
                         outcome.Migrations?.Applied.Count ?? 0);
-                    return Error(
-                        redefine ? "redefine_execution_failed" : "migration_execution_failed", text,
-                        "Re-running is the resume path (apply is convergent); see docs/failure-semantics.md.",
-                        redefine ? "redefine" : "migration", committed);
+                    var hint = stageLabel == "commit"
+                        ? "The session's own commit did not confirm, so it is not known whether the " +
+                          "database kept it. Call schemorph_status (or schemorph_diff) to find out, then " +
+                          "apply again if needed — apply is convergent either way; see docs/failure-semantics.md."
+                        : "Re-running is the resume path (apply is convergent); see docs/failure-semantics.md.";
+                    return Error(stageCode, text, hint, stageLabel, committed);
                 }
 
                 var code = outcome.Stage switch

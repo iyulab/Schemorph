@@ -50,6 +50,35 @@ Stage 3's atomicity is per script, and the run-once record commits *in the same
 transaction as the script itself*, so a crash can never leave a migration applied but
 unrecorded — the case that would silently run it twice.
 
+## Commit-acknowledgement failures
+
+The three stages above cover every failure that happens *while* something is
+running. There is one more, narrower than any of them: under
+`atomicity: "transactional"` (PostgreSQL), stages 1–3 share a single session, and
+that session's own commit can itself fail to confirm — most plausibly the
+connection drops in the gap between the last statement succeeding and the commit
+acknowledgement arriving.
+
+This is not the same as a stage failing. Every stage already ran; the database
+may well have the work durably, or the transaction may have rolled back at the
+server end — from the client side these are indistinguishable. Reporting this as
+`redefine_execution_failed` or `migration_execution_failed` would claim work
+*didn't* happen when it may well have; reporting it as an ordinary `apply_failed`
+would claim nothing happened at all, which is equally unjustified. So it gets its
+own stage, `commit`, and its own code, `commit_failed`
+([errors.md](errors.md#a-failed-apply-stage-and-committed)) — `committed` on this
+one response means "ran", not "confirmed persisted".
+
+**Recovery is the same re-run as everything else on this page** — every stage
+converges whether or not the prior attempt actually landed:
+
+- If the commit *did* land, the re-run's comparison sees the work already done
+  and applies an empty (or smaller) plan.
+- If it did *not* land, the re-run redoes it fresh.
+
+Run `status` (or `diff`) first if you want to know which case you are in before
+re-running — the point of convergence is that you do not have to.
+
 ## Recovery: re-run the same command
 
 There is no `schemorph repair`, and that is not an omission. Every stage is written

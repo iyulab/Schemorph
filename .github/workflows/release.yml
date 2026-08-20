@@ -15,6 +15,34 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+    # Same live-DB service containers as ci.yml's `integration` job — release
+    # gating must be at least as strong as CI, or a contract regression that
+    # only a live-DB test catches can slip through a green release (see the
+    # v0.11.0 post-release PostgresCliTests incident, cycle-113).
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: Schemorph_CI_2026!
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Schemorph_CI_2026!' -C -Q 'SELECT 1' || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: Schemorph_CI_2026
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v5
 
@@ -32,7 +60,18 @@ jobs:
       - name: Resolve version from tag
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
+      # Same R1-baseline restricted role as ci.yml — a permissive superuser
+      # would skip the scratch-schema path the provider actually ships.
+      - name: Create the restricted Postgres role
+        run: >-
+          docker exec ${{ job.services.postgres.id }} psql -U postgres
+          -c "CREATE ROLE schemorph_ci LOGIN PASSWORD 'ci' NOSUPERUSER NOCREATEDB NOCREATEROLE;"
+          -c "CREATE DATABASE schemorph_ci OWNER schemorph_ci;"
+
       - name: Test
+        env:
+          SCHEMORPH_TEST_URL: Server=localhost,1433;User ID=sa;Password=Schemorph_CI_2026!;Encrypt=False;TrustServerCertificate=True
+          SCHEMORPH_PG_TEST_URL: Host=localhost;Port=5432;Username=schemorph_ci;Password=ci;Database=schemorph_ci
         run: dotnet test -c Release
 
       - name: Pack dotnet tool

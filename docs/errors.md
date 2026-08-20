@@ -66,7 +66,11 @@ depends on where it stopped. A failed apply says so:
 - **`stage`** — `desiredState` failures and `planMismatch` never reach the database,
   so they carry no stage; `redefine` and `migration` are the stages that can leave
   work behind. The declarative publish is one transaction: it commits fully or not
-  at all.
+  at all. Under `atomicity: "transactional"` (PostgreSQL) there is a fourth stage,
+  `commit`: every strategy ran inside one session and only the session's own
+  commit failed to confirm, so `committed` counts what *ran*, not what is known to
+  have persisted — see
+  [failure-semantics.md](failure-semantics.md#commit-acknowledgement-failures).
 - **`committed`** — counts, not names. The ledger is the per-object record
   ([failure-semantics.md](failure-semantics.md) explains how to read it); this
   exists so a caller can learn *whether anything changed* without querying.
@@ -97,6 +101,7 @@ hand: the ledger is what makes the run-once and redefine contracts hold.
 | `redefine_failed` | `invalid_state` | Dependency cycle among programmable objects — found before any re-definition runs |
 | `redefine_execution_failed` | `execution` | A re-definition script failed against the database. Carries `stage` and `committed`; the declarative publish had already committed |
 | `migration_execution_failed` | `execution` | A migration script failed against the database. Carries `stage` and `committed` |
+| `commit_failed` | `execution` | `atomicity: "transactional"` only: every strategy ran, but the session's own commit did not confirm (e.g. the connection dropped between the last statement and the acknowledgement). Carries `stage: "commit"` and `committed`; whether the database actually kept the work is unknown — see [failure-semantics.md](failure-semantics.md#commit-acknowledgement-failures) |
 | `plan_mismatch` | `invalid_state` | `apply --expect-plan` (or MCP `expectedPlanHash`): the plan computed at apply time differs from the reviewed fingerprint — nothing was applied; re-run `diff`, review, retry with the new hash |
 | `compare_failed` | `execution` | `diff` could not compare (connection, engine error) |
 | `apply_failed` | `execution` | `apply` failed (publish errors, script failure, connection) |

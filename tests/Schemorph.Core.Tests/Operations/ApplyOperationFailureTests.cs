@@ -176,6 +176,39 @@ public sealed class ApplyOperationFailureTests
     }
 
     [Fact]
+    public async Task A_transactional_providers_commit_failure_is_reported_not_thrown()
+    {
+        var ledger = new FakeLedger();
+        var session = new FakeApplySession { CommitThrows = true };
+        var provider = new FakeProvider
+        {
+            Ledger = ledger,
+            Session = session,
+            Capabilities = new(new[] { "fake" }, ApplyAtomicity.Transactional),
+            DesiredState = new FakeDesiredState(),
+            Programmables = new ProgrammableAnalysis(Array.Empty<ProgrammableObjectInfo>(), Array.Empty<RawMessage>()),
+            ApplyOutcome = Published(Change("dbo.Orders")),
+        };
+
+        // Every stage before commit ran clean — a throw from CommitAsync must
+        // still come back as a structured Outcome, not an unhandled exception
+        // propagating out of RunAsync.
+        var outcome = await ApplyOperation.RunAsync(
+            provider, ledger, new ApplyOperation.Request("schema", Conn));
+
+        Assert.False(outcome.Success);
+        Assert.Equal(ApplyOperation.FailureStage.Commit, outcome.Stage);
+        Assert.Equal("commit_failed", outcome.Errors[0].Code);
+        Assert.Contains("connection lost", outcome.Errors[0].Text);
+        Assert.Equal(new[] { "dbo.Orders" }, outcome.Applied.Select(c => c.ObjectName));
+
+        // Best-effort rollback was attempted on the same session and succeeded.
+        Assert.True(session.RolledBack);
+        Assert.False(session.Committed);
+        Assert.True(session.Disposed);
+    }
+
+    [Fact]
     public async Task A_partial_providers_apply_never_opens_a_session()
     {
         var ledger = new FakeLedger();

@@ -195,7 +195,8 @@ async Task<int> RunApply(string[] args, string format)
                 ApplyOperation.FailureStage.PlanMismatch =>
                     Fail(format, "plan_mismatch", outcome.Errors[0].Text,
                         "Re-run diff, review the new plan, and pass its hash with --expect-plan."),
-                ApplyOperation.FailureStage.Redefine or ApplyOperation.FailureStage.Migration =>
+                ApplyOperation.FailureStage.Redefine or ApplyOperation.FailureStage.Migration
+                    or ApplyOperation.FailureStage.Commit =>
                     FailApplyStage(format, outcome),
                 _ => Fail(format, "apply_failed",
                     Detail(format, outcome.Errors, "Apply reported errors."), SeeMessages(format)),
@@ -567,8 +568,15 @@ static int Fail(string format, string code, string message, string? hint)
 static int FailApplyStage(string format, ApplyOperation.Outcome outcome)
 {
     var message = Detail(format, outcome.Errors, outcome.Errors[0].Text);
-    var redefine = outcome.Stage == ApplyOperation.FailureStage.Redefine;
-    var code = redefine ? "redefine_execution_failed" : "migration_execution_failed";
+    var (code, stageLabel) = outcome.Stage switch
+    {
+        ApplyOperation.FailureStage.Redefine => ("redefine_execution_failed", "redefine"),
+        ApplyOperation.FailureStage.Migration => ("migration_execution_failed", "migration"),
+        // Everything ran; only the session's own commit failed to confirm
+        // (docs/failure-semantics.md#commit-acknowledgement-failures) — this
+        // can only happen under Transactional atomicity.
+        _ => ("commit_failed", "commit"),
+    };
     var committed = new CommittedWork(
         outcome.Applied.Count,
         outcome.Redefines?.Redefined.Count ?? 0,
@@ -576,12 +584,19 @@ static int FailApplyStage(string format, ApplyOperation.Outcome outcome)
 
     // Re-running is the resume path (ADR-0004): apply converges, so the fix is to
     // correct the source and run it again — never to finish the job by hand.
-    var hint = $"{Describe(committed)} Fix the failing object and re-run — apply is convergent; " +
-        "see docs/failure-semantics.md.";
+    // A Commit failure is convergent for a different reason than the other two:
+    // whether the session actually persisted is unknown, but re-running either
+    // sees the work already done (an empty plan) or redoes it — never doubles it.
+    var hint = outcome.Stage == ApplyOperation.FailureStage.Commit
+        ? $"{DescribeAttempted(committed)} but the session's own commit did not confirm, so it is not " +
+          "known whether the database kept it. Run `status` (or `diff`) to find out, then `apply` " +
+          "again if needed — apply is convergent either way; see docs/failure-semantics.md."
+        : $"{Describe(committed)} Fix the failing object and re-run — apply is convergent; " +
+          "see docs/failure-semantics.md.";
 
     return Emit(format, SchemorphError.Create(code, Redaction.Redact(message), hint) with
     {
-        Stage = redefine ? "redefine" : "migration",
+        Stage = stageLabel,
         Committed = committed,
     });
 }
@@ -591,6 +606,16 @@ static string Describe(CommittedWork c) =>
         ? "Nothing was committed."
         : $"Committed before the failure: {c.Declarative} declarative change(s), " +
           $"{c.Redefines} re-definition(s), {c.Migrations} migration(s).";
+
+/// <summary>
+/// Same shape as <see cref="Describe"/>, worded for the one stage where "committed"
+/// cannot be asserted as fact — the session's own commit is what failed.
+/// </summary>
+static string DescribeAttempted(CommittedWork c) =>
+    c is { Declarative: 0, Redefines: 0, Migrations: 0 }
+        ? "Nothing was attempted,"
+        : $"Ran {c.Declarative} declarative change(s), " +
+          $"{c.Redefines} re-definition(s), {c.Migrations} migration(s),";
 
 static int Emit(string format, SchemorphError error)
 {
