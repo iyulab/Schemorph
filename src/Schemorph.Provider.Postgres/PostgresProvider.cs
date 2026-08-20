@@ -165,6 +165,7 @@ public sealed class PostgresProvider : IDatabaseProvider
                     request.ConnectionString,
                     ComposeScript(TargetSchemaOf(request.ConnectionString), statements),
                     Array.Empty<LedgerEntry>(),
+                    session is null ? null : PgApplySession.From(session),
                     cancellationToken);
             }
             catch (PostgresException ex)
@@ -198,7 +199,9 @@ public sealed class PostgresProvider : IDatabaseProvider
         => PgScriptExecutor.ExecuteAsync(
             connectionString,
             $"SET LOCAL search_path TO {DesiredStateRenderer.Quote(TargetSchemaOf(connectionString))};\n{script}",
-            ledgerEntries, cancellationToken);
+            ledgerEntries,
+            session is null ? null : PgApplySession.From(session),
+            cancellationToken);
 
     /// <summary>
     /// P3: views, functions, procedures and triggers, analyzed by
