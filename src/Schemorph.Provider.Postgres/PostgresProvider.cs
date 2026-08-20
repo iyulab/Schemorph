@@ -103,8 +103,8 @@ public sealed class PostgresProvider : IDatabaseProvider
             compared.UpdateScript, compared.ChangeScripts, compared.TablesWithColumnChanges);
     }
 
-    public Task<IApplySession?> BeginApplySessionAsync(string connectionString, CancellationToken cancellationToken = default)
-        => Task.FromResult<IApplySession?>(null);   // wired for real in Task 4
+    public async Task<IApplySession?> BeginApplySessionAsync(string connectionString, CancellationToken cancellationToken = default)
+        => await PgApplySession.OpenAsync(connectionString, cancellationToken);
 
     public async Task<ApplyResult> ApplyAsync(
         ApplyRequest request,
