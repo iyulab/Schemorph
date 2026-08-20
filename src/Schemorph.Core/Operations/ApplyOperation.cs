@@ -79,6 +79,16 @@ public static class ApplyOperation
         var basePlan = await redefineRunner.PlanAsync(programmables, request.ConnectionString, cancellationToken);
         var redefinePlan = basePlan;
 
+        // Every execution call below shares ONE session when the provider
+        // promises atomicity: transactional (ADR-0004 addendum) — opened here,
+        // right before the first execution call, never during the read-only
+        // planning above. `await using` disposes it on every return path,
+        // committed or not (a no-op if it was never opened).
+        var transactional = provider.Capabilities.PlanAtomicity == ApplyAtomicity.Transactional;
+        await using var session = transactional
+            ? await provider.BeginApplySessionAsync(request.ConnectionString, cancellationToken)
+            : null;
+
         // The plan is announced from the SAME comparison session that applies
         // (provider hook), so what is gated and shown is exactly what runs.
         Plan? plan = null;
@@ -106,23 +116,26 @@ public static class ApplyOperation
                     }
                     onPlan?.Invoke(plan);
                 },
-                cancellationToken: cancellationToken);
+                session,
+                cancellationToken);
         }
         catch (PlanMismatchException ex)
         {
+            // Nothing executed yet — the gate runs inside the hook, before the
+            // provider does any DDL — so a session opened above holds no
+            // work. Leaving it uncommitted is enough; `await using` discards it.
             return Failure(FailureStage.PlanMismatch,
                 new[] { new RawMessage("Error", "plan_mismatch", ex.Message) }) with { Plan = plan };
         }
 
-        // The ledger is created here — after the gate has recomputed and matched the
-        // plan, before anything is recorded. It must NOT exist during the comparison:
-        // a target the tool just wrote a ledger table into is no longer the pristine
-        // schema diff compared, and the generated update script would carry a spurious
-        // ledger DROP (DropObjectsNotInSource) that trips the fingerprint gate on a
-        // plan that never changed. Recording still precedes any user-visible success
-        // (ADR-0004): a publish failure below is appended to a ledger that exists by
-        // the time we reach it.
-        await ledger.EnsureInitializedAsync(request.ConnectionString, cancellationToken: cancellationToken);
+        // The ledger TABLE'S existence must survive independently of whatever
+        // this apply does next — including a session this call's own failure
+        // path is about to roll back — so it is never created through the
+        // session (plan doc addendum): a session-scoped EnsureInitializedAsync
+        // would vanish along with a rolled-back first apply, taking the
+        // failure row below down with it (INSERT into a table that no longer
+        // exists).
+        await ledger.EnsureInitializedAsync(request.ConnectionString, session: null, cancellationToken);
 
         // Classification skip warnings surface once per operation, ahead of the
         // provider's own messages (they used to ride the comparison session).
@@ -132,23 +145,26 @@ public static class ApplyOperation
         {
             var errorText = string.Join("; ", messages
                 .Where(m => m.Severity == "Error").Select(m => $"{m.Code}: {m.Text}"));
+            if (session is not null) await session.RollbackAsync(cancellationToken);
             await ledger.AppendFailureBestEffortAsync(request.ConnectionString, new LedgerEntry(
                 "declarative", "(publish)", "Publish", Checksum: null,
                 Succeeded: false, Detail: errorText), cancellationToken);
             return Failure(FailureStage.Publish, messages) with { Plan = plan };
         }
 
-        // Every applied change is recorded in the history ledger — the audit trail.
+        // Every applied change is recorded in the history ledger — the audit
+        // trail. Session-scoped: if a later stage fails and rolls back, this
+        // row must not survive claiming a change that no longer happened.
         await ledger.AppendAsync(request.ConnectionString, result.AppliedChanges
             .Select(c => new LedgerEntry("declarative", c.ObjectName, c.Operation, Checksum: null,
                 Succeeded: true, Detail: c.ObjectType))
-            .ToList(), cancellationToken: cancellationToken);
+            .ToList(), session, cancellationToken);
 
         // Strategy 2: idempotent re-definitions run after the declarative publish
         // (structural prerequisites first). Declarative drops leave a tombstone so
         // re-adding an identical file later still re-creates the object. Executes
         // the SAME redefine plan that was fingerprinted above.
-        await redefineRunner.RecordDropsAsync(request.ConnectionString, result.AppliedChanges, cancellationToken: cancellationToken);
+        await redefineRunner.RecordDropsAsync(request.ConnectionString, result.AppliedChanges, session, cancellationToken);
 
         // From here on the declarative changes are committed and there is no
         // rollback across stages, so an execution failure below is reported WITH
@@ -160,10 +176,11 @@ public static class ApplyOperation
         RedefineRunResult redefineRun;
         try
         {
-            redefineRun = await redefineRunner.RunAsync(programmables, redefinePlan, request.ConnectionString, cancellationToken: cancellationToken);
+            redefineRun = await redefineRunner.RunAsync(programmables, redefinePlan, request.ConnectionString, session, cancellationToken);
         }
         catch (RedefineExecutionException ex)
         {
+            if (session is not null) await session.RollbackAsync(cancellationToken);
             return Failure(FailureStage.Redefine,
                 new[] { new RawMessage("Error", "redefine_execution_failed", ex.Message) }) with
             {
@@ -179,10 +196,11 @@ public static class ApplyOperation
         {
             try
             {
-                migrationRun = await new MigrationRunner(provider, ledger).RunAsync(migrationsDir, request.ConnectionString, cancellationToken: cancellationToken);
+                migrationRun = await new MigrationRunner(provider, ledger).RunAsync(migrationsDir, request.ConnectionString, session, cancellationToken);
             }
             catch (MigrationExecutionException ex)
             {
+                if (session is not null) await session.RollbackAsync(cancellationToken);
                 return Failure(FailureStage.Migration,
                     new[] { new RawMessage("Error", "migration_execution_failed", ex.Message) }) with
                 {
@@ -194,6 +212,8 @@ public static class ApplyOperation
                 };
             }
         }
+
+        if (session is not null) await session.CommitAsync(cancellationToken);
 
         // Schemorph's own bookkeeping stays invisible in user-facing output, and
         // redefine-routed exclusions are not "excluded" — they show as redefinitions.

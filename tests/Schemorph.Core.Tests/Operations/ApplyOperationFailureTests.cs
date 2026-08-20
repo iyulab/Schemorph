@@ -92,4 +92,104 @@ public sealed class ApplyOperationFailureTests
         Assert.Empty(outcome.Applied);
         Assert.Null(outcome.Redefines);
     }
+
+    [Fact]
+    public async Task A_transactional_providers_redefine_failure_rolls_back_the_session_and_still_records_a_failure_row()
+    {
+        var ledger = new FakeLedger();
+        var session = new FakeApplySession();
+        var provider = new FakeProvider
+        {
+            Ledger = ledger,
+            Session = session,
+            Capabilities = new(new[] { "fake" }, ApplyAtomicity.Transactional),
+            DesiredState = new FakeDesiredState(),
+            Programmables = new ProgrammableAnalysis(
+                new[] { Obj("dbo.Boom") }, Array.Empty<RawMessage>()),
+            ApplyOutcome = Published(Change("dbo.Orders")),
+            FailOnScriptContaining = "dbo.Boom",
+        };
+
+        var outcome = await ApplyOperation.RunAsync(
+            provider, ledger, new ApplyOperation.Request("schema", Conn));
+
+        Assert.False(outcome.Success);
+        Assert.Equal(ApplyOperation.FailureStage.Redefine, outcome.Stage);
+
+        Assert.True(session.RolledBack);
+        Assert.False(session.Committed);
+        Assert.True(session.Disposed);
+
+        // Every session-scoped call (ApplyAsync + the declarative ledger
+        // append) actually got the session, and the redefine failure row is
+        // still recorded via the failure path, which never sees a session.
+        Assert.All(provider.SessionsSeen, s => Assert.Same(session, s));
+        Assert.Contains(session, ledger.AppendSessionsSeen);
+        var failure = Assert.Single(ledger.Entries, e => !e.Succeeded);
+        Assert.Equal("dbo.Boom", failure.ObjectName);
+    }
+
+    [Fact]
+    public async Task A_transactional_providers_ledger_bootstrap_never_joins_the_session()
+    {
+        var ledger = new FakeLedger();
+        var session = new FakeApplySession();
+        var provider = new FakeProvider
+        {
+            Ledger = ledger,
+            Session = session,
+            Capabilities = new(new[] { "fake" }, ApplyAtomicity.Transactional),
+            DesiredState = new FakeDesiredState(),
+            Programmables = new ProgrammableAnalysis(Array.Empty<ProgrammableObjectInfo>(), Array.Empty<RawMessage>()),
+            ApplyOutcome = Published(Change("dbo.Orders")),
+        };
+
+        await ApplyOperation.RunAsync(provider, ledger, new ApplyOperation.Request("schema", Conn));
+
+        // EnsureInitializedAsync is the ledger TABLE'S bootstrap — always
+        // outside the session (spec addendum), even when one is open.
+        Assert.Contains(null, ledger.EnsureInitializedSessionsSeen);
+        Assert.DoesNotContain(session, ledger.EnsureInitializedSessionsSeen);
+    }
+
+    [Fact]
+    public async Task A_transactional_providers_successful_apply_commits_the_session_once()
+    {
+        var ledger = new FakeLedger();
+        var session = new FakeApplySession();
+        var provider = new FakeProvider
+        {
+            Ledger = ledger,
+            Session = session,
+            Capabilities = new(new[] { "fake" }, ApplyAtomicity.Transactional),
+            DesiredState = new FakeDesiredState(),
+            Programmables = new ProgrammableAnalysis(Array.Empty<ProgrammableObjectInfo>(), Array.Empty<RawMessage>()),
+            ApplyOutcome = Published(Change("dbo.Orders")),
+        };
+
+        var outcome = await ApplyOperation.RunAsync(provider, ledger, new ApplyOperation.Request("schema", Conn));
+
+        Assert.True(outcome.Success);
+        Assert.True(session.Committed);
+        Assert.False(session.RolledBack);
+        Assert.True(session.Disposed);
+    }
+
+    [Fact]
+    public async Task A_partial_providers_apply_never_opens_a_session()
+    {
+        var ledger = new FakeLedger();
+        var provider = new FakeProvider
+        {
+            Ledger = ledger,
+            Session = new FakeApplySession(),   // set, but Capabilities stays Partial — must never be handed out
+            DesiredState = new FakeDesiredState(),
+            Programmables = new ProgrammableAnalysis(Array.Empty<ProgrammableObjectInfo>(), Array.Empty<RawMessage>()),
+            ApplyOutcome = Published(Change("dbo.Orders")),
+        };
+
+        await ApplyOperation.RunAsync(provider, ledger, new ApplyOperation.Request("schema", Conn));
+
+        Assert.All(provider.SessionsSeen, Assert.Null);
+    }
 }
