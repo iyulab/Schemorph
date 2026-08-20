@@ -1,5 +1,6 @@
 using Npgsql;
 using Schemorph.Core.Ledger;
+using Schemorph.Core.Providers;
 
 namespace Schemorph.Provider.Postgres;
 
@@ -11,7 +12,7 @@ namespace Schemorph.Provider.Postgres;
 /// </summary>
 public sealed class PostgresLedgerStore : ILedgerStore
 {
-    public async Task EnsureInitializedAsync(string connectionString, CancellationToken cancellationToken = default)
+    public async Task EnsureInitializedAsync(string connectionString, IApplySession? session = null, CancellationToken cancellationToken = default)
     {
         var schema = PostgresProvider.TargetSchemaOf(connectionString);
         await using var connection = new NpgsqlConnection(connectionString);
@@ -27,7 +28,7 @@ public sealed class PostgresLedgerStore : ILedgerStore
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task AppendAsync(string connectionString, IReadOnlyList<LedgerEntry> entries, CancellationToken cancellationToken = default)
+    public async Task AppendAsync(string connectionString, IReadOnlyList<LedgerEntry> entries, IApplySession? session = null, CancellationToken cancellationToken = default)
     {
         if (entries.Count == 0) return;
 

@@ -1,5 +1,6 @@
 using Microsoft.Data.SqlClient;
 using Schemorph.Core.Ledger;
+using Schemorph.Core.Providers;
 
 namespace Schemorph.Provider.SqlServer;
 
@@ -9,7 +10,7 @@ namespace Schemorph.Provider.SqlServer;
 /// </summary>
 public sealed class SqlServerLedgerStore : ILedgerStore
 {
-    public async Task EnsureInitializedAsync(string connectionString, CancellationToken cancellationToken = default)
+    public async Task EnsureInitializedAsync(string connectionString, IApplySession? session = null, CancellationToken cancellationToken = default)
     {
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
@@ -33,7 +34,7 @@ public sealed class SqlServerLedgerStore : ILedgerStore
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task AppendAsync(string connectionString, IReadOnlyList<LedgerEntry> entries, CancellationToken cancellationToken = default)
+    public async Task AppendAsync(string connectionString, IReadOnlyList<LedgerEntry> entries, IApplySession? session = null, CancellationToken cancellationToken = default)
     {
         if (entries.Count == 0) return;
 

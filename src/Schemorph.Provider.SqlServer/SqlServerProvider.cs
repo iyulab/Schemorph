@@ -46,7 +46,10 @@ public sealed class SqlServerProvider : IDatabaseProvider
     public Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken cancellationToken = default)
         => Task.Run(() => Compare(request, cancellationToken), cancellationToken);
 
-    public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, ChangeScript?, bool> includeChange, Action<CompareResult>? onChangesComputed = null, CancellationToken cancellationToken = default)
+    public Task<IApplySession?> BeginApplySessionAsync(string connectionString, CancellationToken cancellationToken = default)
+        => Task.FromResult<IApplySession?>(null);
+
+    public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, ChangeScript?, bool> includeChange, Action<CompareResult>? onChangesComputed = null, IApplySession? session = null, CancellationToken cancellationToken = default)
         => Task.Run(() => Apply(request, includeChange, onChangesComputed, cancellationToken), cancellationToken);
 
     public Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(IDesiredState desiredState, CancellationToken cancellationToken = default)
@@ -87,13 +90,16 @@ public sealed class SqlServerProvider : IDatabaseProvider
         string scriptText, CancellationToken cancellationToken = default)
         => Task.FromResult(MigrationScriptLinter.Lint(scriptText));
 
-    public Task ExecuteScriptAsync(string connectionString, string script, CancellationToken cancellationToken = default)
-        => ExecuteScriptAsync(connectionString, script, Array.Empty<Schemorph.Core.Ledger.LedgerEntry>(), cancellationToken);
+    public Task ExecuteScriptAsync(string connectionString, string script, IApplySession? session = null, CancellationToken cancellationToken = default)
+        => ExecuteScriptAsync(connectionString, script, Array.Empty<Schemorph.Core.Ledger.LedgerEntry>(), session, cancellationToken);
 
     public async Task ExecuteScriptAsync(
         string connectionString, string script,
-        IReadOnlyList<Schemorph.Core.Ledger.LedgerEntry> ledgerEntries, CancellationToken cancellationToken = default)
+        IReadOnlyList<Schemorph.Core.Ledger.LedgerEntry> ledgerEntries, IApplySession? session = null, CancellationToken cancellationToken = default)
     {
+        // session is always null here — this provider declares Partial and
+        // never hands one out, so every stage keeps opening its own
+        // connection+transaction exactly as before this parameter existed.
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction();

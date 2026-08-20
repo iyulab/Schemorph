@@ -1,3 +1,5 @@
+using Schemorph.Core.Providers;
+
 namespace Schemorph.Core.Ledger;
 
 /// <summary>
@@ -9,10 +11,10 @@ namespace Schemorph.Core.Ledger;
 public interface ILedgerStore
 {
     /// <summary>Create the ledger table if it does not exist.</summary>
-    Task EnsureInitializedAsync(string connectionString, CancellationToken cancellationToken = default);
+    Task EnsureInitializedAsync(string connectionString, IApplySession? session = null, CancellationToken cancellationToken = default);
 
     /// <summary>Append entries for changes that were applied.</summary>
-    Task AppendAsync(string connectionString, IReadOnlyList<LedgerEntry> entries, CancellationToken cancellationToken = default);
+    Task AppendAsync(string connectionString, IReadOnlyList<LedgerEntry> entries, IApplySession? session = null, CancellationToken cancellationToken = default);
 
     /// <summary>Read all entries of one kind (e.g. "migration"), oldest first.</summary>
     Task<IReadOnlyList<LedgerEntry>> ReadAsync(string connectionString, string kind, CancellationToken cancellationToken = default);
@@ -35,7 +37,7 @@ public static class LedgerStoreExtensions
         }
         try
         {
-            await ledger.AppendAsync(connectionString, new[] { failure }, cancellationToken);
+            await ledger.AppendAsync(connectionString, new[] { failure }, cancellationToken: cancellationToken);
         }
         catch
         {

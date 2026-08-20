@@ -103,10 +103,14 @@ public sealed class PostgresProvider : IDatabaseProvider
             compared.UpdateScript, compared.ChangeScripts, compared.TablesWithColumnChanges);
     }
 
+    public Task<IApplySession?> BeginApplySessionAsync(string connectionString, CancellationToken cancellationToken = default)
+        => Task.FromResult<IApplySession?>(null);   // wired for real in Task 4
+
     public async Task<ApplyResult> ApplyAsync(
         ApplyRequest request,
         Func<RawChange, ChangeScript?, bool> includeChange,
         Action<CompareResult>? onChangesComputed = null,
+        IApplySession? session = null,
         CancellationToken cancellationToken = default)
     {
         // Same-snapshot invariant: the comparison announced through the hook is
@@ -173,8 +177,8 @@ public sealed class PostgresProvider : IDatabaseProvider
         return new ApplyResult(true, included, excluded, Array.Empty<RawMessage>());
     }
 
-    public Task ExecuteScriptAsync(string connectionString, string script, CancellationToken cancellationToken = default)
-        => ExecuteScriptAsync(connectionString, script, Array.Empty<LedgerEntry>(), cancellationToken);
+    public Task ExecuteScriptAsync(string connectionString, string script, IApplySession? session = null, CancellationToken cancellationToken = default)
+        => ExecuteScriptAsync(connectionString, script, Array.Empty<LedgerEntry>(), session, cancellationToken);
 
     /// <summary>
     /// Redefine scripts (P3) carry bare, unqualified object names — the same
@@ -190,7 +194,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// </summary>
     public Task ExecuteScriptAsync(
         string connectionString, string script,
-        IReadOnlyList<LedgerEntry> ledgerEntries, CancellationToken cancellationToken = default)
+        IReadOnlyList<LedgerEntry> ledgerEntries, IApplySession? session = null, CancellationToken cancellationToken = default)
         => PgScriptExecutor.ExecuteAsync(
             connectionString,
             $"SET LOCAL search_path TO {DesiredStateRenderer.Quote(TargetSchemaOf(connectionString))};\n{script}",

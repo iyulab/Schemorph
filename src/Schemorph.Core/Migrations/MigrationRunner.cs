@@ -103,7 +103,7 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
             {
                 // The discovery snapshot runs — the same text the checksum covers.
                 await provider.ExecuteScriptAsync(
-                    connectionString, script.Text, new[] { entry }, cancellationToken);
+                    connectionString, script.Text, new[] { entry }, cancellationToken: cancellationToken);
             }
             catch (Exception ex)
             {

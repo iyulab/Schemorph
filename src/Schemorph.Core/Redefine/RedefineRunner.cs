@@ -84,7 +84,7 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
             await ledger.AppendAsync(connectionString, plan.Reconcilable
                 .Select(o => new LedgerEntry(LedgerKind, o.ObjectName, "Reconcile", ChecksumOf(o),
                     Succeeded: true, Detail: o.ObjectType))
-                .ToList(), cancellationToken);
+                .ToList(), cancellationToken: cancellationToken);
         }
 
         var redefined = new List<string>();
@@ -95,7 +95,7 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
                 Succeeded: true, Detail: obj.ObjectType);
             try
             {
-                await provider.ExecuteScriptAsync(connectionString, obj.ApplyScript, new[] { entry }, cancellationToken);
+                await provider.ExecuteScriptAsync(connectionString, obj.ApplyScript, new[] { entry }, cancellationToken: cancellationToken);
             }
             catch (Exception ex)
             {
@@ -128,7 +128,7 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
             .ToList();
         return tombstones.Count == 0
             ? Task.CompletedTask
-            : ledger.AppendAsync(connectionString, tombstones, cancellationToken);
+            : ledger.AppendAsync(connectionString, tombstones, cancellationToken: cancellationToken);
     }
 
     // The checksum judges the loaded snapshot (never a re-read), so the ledger

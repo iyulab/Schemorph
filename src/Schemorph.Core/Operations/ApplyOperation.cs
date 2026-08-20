@@ -106,7 +106,7 @@ public static class ApplyOperation
                     }
                     onPlan?.Invoke(plan);
                 },
-                cancellationToken);
+                cancellationToken: cancellationToken);
         }
         catch (PlanMismatchException ex)
         {
@@ -122,7 +122,7 @@ public static class ApplyOperation
         // plan that never changed. Recording still precedes any user-visible success
         // (ADR-0004): a publish failure below is appended to a ledger that exists by
         // the time we reach it.
-        await ledger.EnsureInitializedAsync(request.ConnectionString, cancellationToken);
+        await ledger.EnsureInitializedAsync(request.ConnectionString, cancellationToken: cancellationToken);
 
         // Classification skip warnings surface once per operation, ahead of the
         // provider's own messages (they used to ride the comparison session).
@@ -142,7 +142,7 @@ public static class ApplyOperation
         await ledger.AppendAsync(request.ConnectionString, result.AppliedChanges
             .Select(c => new LedgerEntry("declarative", c.ObjectName, c.Operation, Checksum: null,
                 Succeeded: true, Detail: c.ObjectType))
-            .ToList(), cancellationToken);
+            .ToList(), cancellationToken: cancellationToken);
 
         // Strategy 2: idempotent re-definitions run after the declarative publish
         // (structural prerequisites first). Declarative drops leave a tombstone so
