@@ -14,6 +14,7 @@ Start from the question, not the filename.
 | Why is it planning to drop something I did not ask it to drop? | [limitations](limitations.md) — start with the rename entry, which is the most common surprise |
 | How do I make a person sign off before anything runs? | [recipe: human approval gate](recipes/human-approval-gate.md) — `--expect-plan` makes the reviewed document binding |
 | How do I show the plan on a pull request? | [recipe: plan as a PR comment](recipes/github-actions-plan-comment.md) |
+| I run an ORM alongside Schemorph — how do I catch it drifting from the deployed schema? | [recipe: catching ORM/schema drift](recipes/orm-schema-drift-check.md) |
 
 ## Building on it
 

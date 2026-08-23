@@ -104,4 +104,5 @@ itself, and does not require literally re-writing an ORM's model as `.sql` files
 first: it compares the desired-state directory you already maintain against the
 live database's current definitions and reports a plan, empty when nothing has
 drifted. This format governs the *shape* of files either side of that comparison
-was produced from — not the comparison itself.
+was produced from — not the comparison itself. For the comparison itself, see the
+[ORM/schema drift recipe](recipes/orm-schema-drift-check.md).

@@ -136,7 +136,7 @@ Standalone self-contained binaries (win-x64, linux-x64, osx-arm64) are attached 
 - [Errors and exit codes](./docs/errors.md) — the typed error envelope callers branch on, and the safety-lint warning band
 - [When an apply fails](./docs/failure-semantics.md) — what the database looks like after a partial apply, how to recover, and how to read the ledger
 - [Limitations](./docs/limitations.md) — what does not converge or is out of scope, and what to do instead
-- [Recipes](./docs/recipes/) — ready-made integrations: [plan-on-PR comment](./docs/recipes/github-actions-plan-comment.md), [human approval gate](./docs/recipes/human-approval-gate.md)
+- [Recipes](./docs/recipes/) — ready-made integrations: [plan-on-PR comment](./docs/recipes/github-actions-plan-comment.md), [human approval gate](./docs/recipes/human-approval-gate.md), [catching ORM/schema drift](./docs/recipes/orm-schema-drift-check.md)
 - [Architecture Decision Records](./docs/adr/) — why the foundational choices were made
 - [Changelog](./CHANGELOG.md) — what changed per release, and what is unreleased
 
