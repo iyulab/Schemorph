@@ -5,6 +5,26 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## 0.11.1 — 2026-08-23
+
+### Fixed
+
+- **The release pipeline's own test step ran without the live SQL Server / PostgreSQL service
+  containers CI already provides**, so any test gated on those environment variables silently
+  skipped there — a contract regression that only a live database can catch could have passed
+  release verification. The release workflow now reuses CI's service-container and
+  restricted-role setup verbatim, so release gating is at least as strong as CI.
+- **A session commit that throws is no longer left uncaught under `atomicity: transactional`.**
+  If the connection drops between the last statement and the commit acknowledgement, `apply`
+  now attempts a best-effort rollback and returns a structured outcome
+  (`FailureStage.Commit`) instead of letting the exception escape. The CLI and MCP surfaces
+  render it through the same "what ran" envelope as the other post-publish failure stages,
+  worded as "ran" rather than "committed" — that is the one fact a commit-acknowledgement
+  failure cannot know. This path is exercised at the unit level (a fake session throwing from
+  `CommitAsync`); reproducing a dropped connection at the exact acknowledgement instant needs
+  fault injection and is recorded as a live coverage gap in
+  [limitations.md](docs/limitations.md) rather than built out.
+
 ## 0.11.0 — 2026-08-21
 
 ### Added
