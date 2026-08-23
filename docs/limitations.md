@@ -228,6 +228,21 @@ one-time redefinition changes nothing beyond what the file already says; the
 ledger records it and every apply after that is a real no-op, same as SQL
 Server.
 
+## A connection lost right at commit acknowledgement is not reproduced live
+
+`FailureStage.Commit` covers the moment the provider's session has sent the
+commit and the connection drops before the acknowledgement returns — the apply
+cannot tell whether the database actually committed. This path is exercised at
+the unit level, where a fake session throws from `CommitAsync`, but there is no
+integration test that drops a real connection at that exact instant against a
+live database: reproducing it deterministically needs fault injection (holding
+a proxy connection open and severing it right after the commit statement is
+sent), and a test built on that kind of timing is prone to flake in ways that
+would cost more reliability than the coverage buys back. The stage is
+documented, and the outcome it reports —
+[failure-semantics.md](failure-semantics.md) — is what a caller should act on;
+whether it is exercised live is a coverage gap, not a behavior gap.
+
 ## Two database engines, at equal capability range
 
 SQL Server is complete. PostgreSQL now declares the **same capability range** —
