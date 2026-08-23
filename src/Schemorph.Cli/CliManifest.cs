@@ -19,9 +19,11 @@ internal static class CliManifest
     // block (capability lines + apply atomicity, sourced from the provider's own
     // declaration) · 1.5: provider.vocabulary — the full capability line set,
     // so a consumer can compute "not supported" for this provider without
-    // hand-maintaining another provider's declared list. All additive;
+    // hand-maintaining another provider's declared list. 1.6: desiredStateFormatVersion
+    // — versions the `inspect`/`schemorph://schema` file-tree rendering contract
+    // (docs/desired-state-format.md), independent of planFormatVersion. All additive;
     // consumers ignore properties they do not know.
-    public const string ManifestVersion = "1.5";
+    public const string ManifestVersion = "1.6";
 
     public static string ToJson(string toolVersion) => JsonSerializer.Serialize(new
     {
@@ -30,6 +32,7 @@ internal static class CliManifest
         version = toolVersion,
         description = "Declarative, SQL-first schema management for humans and AI agents.",
         planFormatVersion = Plan.CurrentFormatVersion,
+        desiredStateFormatVersion = DesiredStateFormat.CurrentVersion,
         provider = ProviderBlock(),
         environment = new[]
         {
@@ -141,6 +144,7 @@ internal static class CliManifest
         docs = new
         {
             planFormat = "docs/plan-format.md",
+            desiredStateFormat = "docs/desired-state-format.md",
             errors = "docs/errors.md",
             failureSemantics = "docs/failure-semantics.md",
             repository = "https://github.com/iyulab/Schemorph",

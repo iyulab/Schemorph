@@ -80,6 +80,23 @@ public sealed class CliContractTests : IDisposable
             .EnumerateArray().Select(e => e.GetInt32()).ToArray());
     }
 
+    /// <summary>
+    /// Manifest 1.6: `desiredStateFormatVersion` versions the `inspect`/`schemorph://schema`
+    /// file-tree rendering contract (docs/desired-state-format.md), independently of
+    /// `planFormatVersion` — this is what lets a consumer diffing its own copy of rendered
+    /// output against a fresh inspect tell "the schema drifted" apart from "the rendering
+    /// rules changed across an upgrade".
+    /// </summary>
+    [Fact]
+    public void Manifest_carries_the_desired_state_format_version()
+    {
+        var manifest = JsonDocument.Parse(Run("schema").StdOut).RootElement;
+
+        Assert.Equal("1.6", manifest.GetProperty("manifestVersion").GetString());
+        Assert.Equal("1.0", manifest.GetProperty("desiredStateFormatVersion").GetString());
+        Assert.Equal("docs/desired-state-format.md", manifest.GetProperty("docs").GetProperty("desiredStateFormat").GetString());
+    }
+
     [Fact]
     public void Manifest_carries_the_provider_declaration()
     {

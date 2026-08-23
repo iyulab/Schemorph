@@ -200,6 +200,31 @@ public sealed record DesiredStateFile(string RelativePath, string Content)
 
 public sealed record InspectResult(IReadOnlyList<DesiredStateFile> Files);
 
+/// <summary>
+/// Version of the desired-state SQL rendering contract every provider's inspect
+/// renderer follows — the kind-subdirectory layout, one file per object,
+/// <see cref="DesiredStateFile.SafeSegment"/> name sanitization, and per-provider
+/// statement shape (docs/desired-state-format.md is the single source of truth,
+/// mirroring how docs/plan-format.md documents <c>Plan.CurrentFormatVersion</c>).
+/// </summary>
+/// <remarks>
+/// Independent of the product version and of <c>Plan.CurrentFormatVersion</c> — this
+/// versions the *file tree* `inspect --out` writes (and `schemorph://schema` renders
+/// identically), not the change plan. Exposed on the CLI manifest
+/// (<c>desiredStateFormatVersion</c>) so a consumer diffing its own copy of rendered
+/// output against a fresh inspect — the mechanism for answering "does my ORM model
+/// match the deployed schema" — can detect a rendering-rule change across a Schemorph
+/// upgrade instead of misreading it as schema drift.
+/// </remarks>
+public static class DesiredStateFormat
+{
+    // 1.0: initial documented contract — kind subdirectories (tables/views/procedures/
+    // functions/triggers), one file per object, DesiredStateFile.SafeSegment name
+    // sanitization, every identifier quoted, constraints/indexes folded into their
+    // table's file, statements end with ";\n".
+    public const string CurrentVersion = "1.0";
+}
+
 public sealed record CompareRequest(IDesiredState DesiredState, string ConnectionString);
 
 /// <summary>

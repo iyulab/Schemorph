@@ -132,6 +132,7 @@ Standalone self-contained binaries (win-x64, linux-x64, osx-arm64) are attached 
 - [Design Principles](./docs/design-principles.md) — the project's anchors; read this first
 - [Architecture](./docs/architecture.md) — the three-strategy model, ledger, provider boundary
 - [The plan format](./docs/plan-format.md) — the machine-readable plan contract and its versioning
+- [The desired-state format](./docs/desired-state-format.md) — the versioned `inspect`/`schemorph://schema` file-tree rendering contract, for consumers checking an ORM model against the deployed schema
 - [Errors and exit codes](./docs/errors.md) — the typed error envelope callers branch on, and the safety-lint warning band
 - [When an apply fails](./docs/failure-semantics.md) — what the database looks like after a partial apply, how to recover, and how to read the ledger
 - [Limitations](./docs/limitations.md) — what does not converge or is out of scope, and what to do instead

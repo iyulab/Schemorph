@@ -79,6 +79,24 @@ public class DesiredStateRendererTests
         Assert.DoesNotContain("GO", sql, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Backs the round-trip-stability half of the desired-state format contract
+    /// (docs/desired-state-format.md) — a consumer diffing its own copy of rendered
+    /// output against a fresh <c>inspect</c> to answer "does my ORM model match the
+    /// deployed schema" can only trust that comparison if the renderer itself is a
+    /// pure function of the catalog state it was given, never picking up incidental
+    /// nondeterminism (dictionary/hash-set enumeration order, etc.) of its own.
+    /// </summary>
+    [Fact]
+    public void Rendering_the_same_table_twice_is_byte_identical()
+    {
+        var first = DesiredStateRenderer.Render([Workspaces()]);
+        var second = DesiredStateRenderer.Render([Workspaces()]);
+
+        Assert.Equal(first.Select(f => f.RelativePath), second.Select(f => f.RelativePath));
+        Assert.Equal(first.Select(f => f.Content), second.Select(f => f.Content));
+    }
+
     [Fact]
     public void An_embedded_quote_in_an_identifier_is_doubled()
     {

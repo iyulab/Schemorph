@@ -20,6 +20,7 @@ Start from the question, not the filename.
 | Your question | Where it is answered |
 |---|---|
 | What is in the plan JSON, and what may change without warning? | [plan format](plan-format.md) — versioned, additive-only |
+| I run an ORM alongside Schemorph — how do I tell if my model drifted from the deployed schema? | [desired-state format](desired-state-format.md) — the versioned `inspect`/`schemorph://schema` rendering contract, and why `schemorph diff` is the actual check |
 | What does the CLI expose, and how do I discover it from a script? | `schemorph schema` prints the manifest; [errors](errors.md) covers the envelope |
 | How is the codebase arranged, and where does a provider end? | [architecture](architecture.md) |
 | What is fixed about this project, and what is still open? | [design principles](design-principles.md) — changing that page requires an ADR |
