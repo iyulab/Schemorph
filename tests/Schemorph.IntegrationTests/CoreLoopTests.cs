@@ -229,6 +229,31 @@ public sealed class CoreLoopTests : IDisposable
     }
 
     [SkippableFact]
+    public async Task Migration_edited_after_being_applied_throws_on_checksum_mismatch()
+    {
+        _db.Execute("CREATE TABLE dbo.Data (Id INT NOT NULL PRIMARY KEY)");
+        await _ledger.EnsureInitializedAsync(_db.Url);
+        var runner = new MigrationRunner(_provider, _ledger);
+        var migrations = Directory.CreateDirectory(Path.Combine(_dir, "migrations")).FullName;
+        var file = Path.Combine(migrations, "V1__seed.sql");
+        File.WriteAllText(file, "INSERT INTO dbo.Data (Id) VALUES (1);\n");
+
+        var firstRun = await runner.RunAsync(migrations, _db.Url);
+        Assert.Equal(new[] { "V1__seed.sql" }, firstRun.Applied);
+
+        // Applied migrations are immutable (MigrationRunner.PlanAsync): editing the
+        // file after a successful run must be caught before anything executes.
+        File.WriteAllText(file, "INSERT INTO dbo.Data (Id) VALUES (2);\n");
+        var ex = await Assert.ThrowsAsync<MigrationException>(() => runner.RunAsync(migrations, _db.Url));
+        Assert.Contains("V1__seed.sql", ex.Message);
+        Assert.Contains("modified after being applied", ex.Message);
+
+        // Rejected before execution: no new row, no new data.
+        Assert.Equal(1, _db.Scalar<int>("SELECT COUNT(*) FROM dbo.Data"));
+        Assert.Single(await _ledger.ReadAsync(_db.Url, MigrationRunner.LedgerKind));
+    }
+
+    [SkippableFact]
     public async Task Redefines_apply_in_dependency_order_and_skip_when_unchanged()
     {
         // dbo.AProc depends on dbo.ZView: alphabetical order would fail on first apply.
