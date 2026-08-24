@@ -401,7 +401,13 @@ public sealed class SqlServerProvider : IDatabaseProvider
         }
     }
 
-    private static IReadOnlyList<DesiredStateFile> RenderDesiredState(TSqlModel model)
+    // DacFx does not document TSqlModel.GetObjects' enumeration order as stable
+    // (unlike the Postgres provider, whose catalog queries carry an explicit
+    // ORDER BY). Every GetObjects() call below is sorted by full object name so
+    // the rendered desired state is reproducible across runs and independent of
+    // however the objects were added to the model — see
+    // SqlServerDesiredStateDeterminismTests.
+    internal static IReadOnlyList<DesiredStateFile> RenderDesiredState(TSqlModel model)
     {
         // Conventional layout (architecture.md): one file per object, grouped by kind.
         var kinds = new (ModelTypeClass Type, string Directory)[]
@@ -417,27 +423,30 @@ public sealed class SqlServerProvider : IDatabaseProvider
         // Constraints and indexes are separate top-level elements in the DacFx
         // model even when declared inline; fold them into their table's file so
         // each file is a complete, self-applicable desired state.
-        var attachments = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var attachments = new Dictionary<string, List<(string Name, string Script)>>(StringComparer.OrdinalIgnoreCase);
         var attachmentTypes = new[]
         {
             PrimaryKeyConstraint.TypeClass, ForeignKeyConstraint.TypeClass,
             UniqueConstraint.TypeClass, CheckConstraint.TypeClass,
             DefaultConstraint.TypeClass, Index.TypeClass,
         };
-        foreach (var obj in model.GetObjects(DacQueryScopes.UserDefined, attachmentTypes))
+        foreach (var obj in model.GetObjects(DacQueryScopes.UserDefined, attachmentTypes)
+                     .OrderBy(FullName, StringComparer.Ordinal))
         {
             if (!obj.TryGetScript(out var script)) continue;
             var table = obj.GetReferenced(DacQueryScopes.UserDefined)
                 .FirstOrDefault(r => r.ObjectType == Table.TypeClass);
             if (table is null) continue;
             var key = string.Join(".", table.Name.Parts);
-            (attachments.TryGetValue(key, out var list) ? list : attachments[key] = new List<string>()).Add(script);
+            (attachments.TryGetValue(key, out var list) ? list : attachments[key] = new())
+                .Add((FullName(obj), script));
         }
 
         var rendered = new List<DesiredStateFile>();
         foreach (var (type, directory) in kinds)
         {
-            foreach (var obj in model.GetObjects(DacQueryScopes.UserDefined, type))
+            foreach (var obj in model.GetObjects(DacQueryScopes.UserDefined, type)
+                         .OrderBy(FullName, StringComparer.Ordinal))
             {
                 if (!obj.TryGetScript(out var script)) continue;
 
@@ -446,9 +455,11 @@ public sealed class SqlServerProvider : IDatabaseProvider
                 var content = new StringBuilder().AppendLine(script.Trim()).AppendLine("GO");
                 if (type == Table.TypeClass && attachments.TryGetValue(fullName, out var extras))
                 {
-                    foreach (var extra in extras)
+                    // Already sorted by name — attachments were appended in the same
+                    // FullName-ordered pass that built this dictionary, above.
+                    foreach (var (_, extraScript) in extras)
                     {
-                        content.AppendLine(extra.Trim()).AppendLine("GO");
+                        content.AppendLine(extraScript.Trim()).AppendLine("GO");
                     }
                 }
 

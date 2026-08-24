@@ -84,17 +84,17 @@ An already-clean name passes through verbatim.
 ## Stability
 
 The renderer itself is a pure function of the object list it is given — the same
-input list produces byte-identical output on every call (`Rendering_the_same_table_twice_is_byte_identical`
-in `DesiredStateRendererTests`, Postgres side). What that does **not** yet cover:
-whether each provider's own catalog query returns objects (and, within one object,
-its constraints/indexes) in a stable order run over run. Neither provider's inspect
-query currently declares an explicit deterministic order (Postgres: no `ORDER BY`
-in `PostgresProvider`'s catalog queries; SQL Server: DacFx's `TSqlModel.GetObjects`
-enumeration order is not documented as stable). In practice this only matters to a
-byte-diff-based drift check if it diffs raw file content rather than normalizing
-first (e.g. via `schemorph diff`, which compares parsed models, not text) — but it
-is a real gap in the letter of "round-trip stable," tracked as a follow-up hardening
-pass rather than closed by this version.
+input list produces byte-identical output on every call
+(`Rendering_the_same_table_twice_is_byte_identical` in `DesiredStateRendererTests`,
+Postgres side; `Rendering_the_same_model_twice_is_byte_identical` in
+`SqlServerDesiredStateDeterminismTests`, SQL Server side). Object order is also
+stable run over run and independent of the order objects were declared or added in:
+Postgres's catalog queries carry an explicit `ORDER BY`; SQL Server's renderer sorts
+every object list by full name before rendering, since DacFx's `TSqlModel.GetObjects`
+does not document its own enumeration order as stable
+(`Rendering_is_independent_of_the_order_objects_were_added_in`, same test class).
+This means a byte-diff-based drift check can compare raw rendered output directly,
+without needing to normalize through a parser first.
 
 ## Relationship to `schemorph diff`
 
