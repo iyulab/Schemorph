@@ -5,6 +5,28 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## 0.12.0 — 2026-08-24
+
+### Added
+
+- **The desired-state SQL rendering contract (`inspect`, `schemorph://schema`) is now versioned.**
+  `desiredStateFormatVersion` (currently `1.0`) is a new field on the CLI manifest
+  (`manifestVersion` 1.5 → 1.6), independent of `planFormatVersion`. It versions the file-tree
+  contract itself — directory layout, filename rules, statement shape — the same way
+  `planFormatVersion` already versions plan output. A consumer running an ORM alongside
+  Schemorph and diffing `inspect` output against its own stored copy can now tell "the schema
+  drifted" apart from "the rendering rules changed across an upgrade". Documented in the new
+  [`docs/desired-state-format.md`](docs/desired-state-format.md), with a companion recipe at
+  [`docs/recipes/orm-schema-drift-check.md`](docs/recipes/orm-schema-drift-check.md) for the
+  actual consumption pattern this enables.
+
+  **Known gap, recorded rather than fixed here**: neither provider's catalog query declares an
+  explicit deterministic order (no `ORDER BY` in the PostgreSQL provider; DacFx's `TSqlModel`
+  enumeration order is undocumented for SQL Server). `schemorph diff` compares parsed models
+  rather than raw file text, so this has no effect on diffing today, but the "round-trip stable"
+  half of the contract is not yet literally true at the byte level — see
+  `docs/desired-state-format.md`'s Stability section.
+
 ## 0.11.1 — 2026-08-23
 
 ### Fixed
