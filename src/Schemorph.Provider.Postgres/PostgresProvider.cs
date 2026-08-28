@@ -204,8 +204,14 @@ public sealed class PostgresProvider : IDatabaseProvider
             }
             catch (PostgresException ex)
             {
+                // The engine's own message, plus a curated hint for the SQLSTATE codes an
+                // apply actually hits in practice (ROADMAP §3, cycle-122) — an unrecognized
+                // code passes through with no addition rather than a guessed one.
+                var text = PgSqlStateHints.TryGet(ex.SqlState) is { } hint
+                    ? $"{ex.MessageText} ({hint})"
+                    : ex.MessageText;
                 return new ApplyResult(false, Array.Empty<RawChange>(), excluded,
-                    new[] { new RawMessage("Error", ex.SqlState, ex.MessageText) });
+                    new[] { new RawMessage("Error", ex.SqlState, text) });
             }
         }
 
