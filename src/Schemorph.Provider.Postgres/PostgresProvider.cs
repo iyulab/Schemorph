@@ -353,7 +353,8 @@ public sealed class PostgresProvider : IDatabaseProvider
                     liveByName.GetValueOrDefault(g.Key)),
                 DropsIndex: DropsIndex(
                     desiredByName.GetValueOrDefault(g.Key),
-                    liveByName.GetValueOrDefault(g.Key))))
+                    liveByName.GetValueOrDefault(g.Key)),
+                StatementCount: g.Count()))
             .ToList();
     }
 

@@ -34,6 +34,8 @@ internal static partial class UpdateScriptAttributor
         public required string AnnouncedName { get; init; }
         public StringBuilder Sql { get; } = new();
         public bool Rebuild { get; set; }
+        /// <summary>Batches appended to this segment — each is one DacFx-emitted statement.</summary>
+        public int StatementCount { get; set; }
     }
 
     public static IReadOnlyList<ChangeScript> Attribute(string updateScript, IReadOnlyList<RawChange> changes)
@@ -89,10 +91,11 @@ internal static partial class UpdateScriptAttributor
 
             if (current.Sql.Length > 0) current.Sql.AppendLine("GO");
             current.Sql.AppendLine(trimmed);
+            current.StatementCount++;
         }
 
-        // objectName -> (sql, rebuild), preserving first-seen order.
-        var attributed = new Dictionary<string, (StringBuilder Sql, bool Rebuild)>(StringComparer.OrdinalIgnoreCase);
+        // objectName -> (sql, rebuild, statementCount), preserving first-seen order.
+        var attributed = new Dictionary<string, (StringBuilder Sql, bool Rebuild, int StatementCount)>(StringComparer.OrdinalIgnoreCase);
         var order = new List<string>();
 
         foreach (var segment in segments)
@@ -105,19 +108,20 @@ internal static partial class UpdateScriptAttributor
 
             if (!attributed.TryGetValue(owner, out var entry))
             {
-                entry = (new StringBuilder(), false);
+                entry = (new StringBuilder(), false, 0);
                 order.Add(owner);
             }
             if (entry.Sql.Length > 0) entry.Sql.AppendLine("GO");
             entry.Sql.Append(segment.Sql);
-            attributed[owner] = (entry.Sql, entry.Rebuild || segment.Rebuild);
+            attributed[owner] = (entry.Sql, entry.Rebuild || segment.Rebuild, entry.StatementCount + segment.StatementCount);
         }
 
         return order
             .Select(name =>
             {
                 var sql = attributed[name].Sql.ToString().TrimEnd();
-                return new ChangeScript(name, sql, attributed[name].Rebuild, AddsNotNullWithoutDefault(sql));
+                return new ChangeScript(name, sql, attributed[name].Rebuild, AddsNotNullWithoutDefault(sql),
+                    StatementCount: attributed[name].StatementCount);
             })
             .Where(s => s.Sql.Length > 0)
             .ToList();

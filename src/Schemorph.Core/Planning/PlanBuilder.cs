@@ -77,7 +77,8 @@ public static class PlanBuilder
 
             actions.Add(new PlanAction(change.ObjectName, change.ObjectType, operation, risk,
                 Sql: script?.Sql,
-                Explanation: Explain(operation, risk, script?.Rebuild == true)));
+                Explanation: Explain(operation, risk, script?.Rebuild == true),
+                StatementCount: script?.StatementCount));
         }
 
         // Redefines execute after the declarative publish; the plan mirrors that

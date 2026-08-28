@@ -96,6 +96,24 @@ public class IndexPlanningTests : IAsyncLifetime
         await AssertConvergedAsync();
     }
 
+    // `changes.Count` folds every index on a table into one entry (parity above) —
+    // which is exactly the shape `statementCount` exists to explain: reading the
+    // change count alone would say "1", while three statements execute.
+    [SkippableFact]
+    public async Task Several_new_indexes_on_the_same_table_count_every_statement()
+    {
+        await DeclareAsync(
+            """CREATE INDEX "IX_Doc_OwnerId" ON <s>."Doc" ("OwnerId");""",
+            """CREATE INDEX "IX_Doc_Name" ON <s>."Doc" ("Name");""",
+            """CREATE INDEX "IX_Doc_Score" ON <s>."Doc" ("Score");""");
+
+        var plan = await ApplyAsync();
+
+        var docChange = Assert.Single(plan.Actions, a => a.ObjectName.EndsWith("Doc"));
+        Assert.Equal(3, docChange.StatementCount);
+        await AssertConvergedAsync();
+    }
+
     [SkippableFact]
     public async Task An_index_the_desired_state_no_longer_declares_is_dropped()
     {

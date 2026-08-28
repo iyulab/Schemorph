@@ -21,13 +21,23 @@ public enum RiskLevel
 }
 
 /// <summary>A single planned change. The central unit of Schemorph's contract with humans and agents.</summary>
+/// <param name="StatementCount">
+/// How many statements <see cref="Sql"/> executes — the count `changes.Count`
+/// cannot answer, since one action can fold several statements against the
+/// same object (e.g. three `CREATE INDEX` on one table become a single
+/// `alter`). Null exactly when <see cref="Sql"/> is: a missing count is honest
+/// about an unknown attribution, the way a missing slice already is. Excluded
+/// from <see cref="PlanFingerprint"/> — it describes the same executed text
+/// <see cref="Sql"/> already binds, not a different execution.
+/// </param>
 public sealed record PlanAction(
     string ObjectName,
     string ObjectType,
     PlanOperation Operation,
     RiskLevel Risk,
     string? Sql = null,
-    string? Explanation = null);
+    string? Explanation = null,
+    int? StatementCount = null);
 
 /// <summary>Diagnostic attached to a plan (e.g. engine warnings, gated-out actions).</summary>
 /// <param name="ObjectName">
@@ -108,7 +118,7 @@ public sealed record Plan(
     /// additions (consumers must ignore unknown properties); the major version
     /// increments for breaking changes. Independent of the product version.
     /// </summary>
-    public const string CurrentFormatVersion = "1.7";   // 1.7: messages[].objectName — attributes a plan-level message to the change that caused it, where there is one (see docs/plan-format.md)
+    public const string CurrentFormatVersion = "1.8";   // 1.8: changes[].statementCount — how many statements an action's sql executes, since changes.Count folds several into one object-level entry (see docs/plan-format.md)
 
     public bool HasChanges => Actions.Count > 0;
 

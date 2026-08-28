@@ -19,10 +19,11 @@ independent of the product version:
 - **Major** increments are breaking changes to existing properties. These are
   rare and deliberate.
 
-Current version: **`1.7`**.
+Current version: **`1.8`**.
 
 | Version | Change |
 |---|---|
+| `1.8` | Adds `changes[].statementCount` (additive). `changes.Count` is an object count, not a size — several statements against one object (e.g. three `CREATE INDEX` on the same table) fold into a single `alter` entry, so a consumer summing plan size from `changes.Count` alone always undercounts. `statementCount` says how many statements that entry's `sql` runs. Computed by the provider that attributed `sql` — mirrors its nullability exactly (present iff `sql` is). **`planHash` is unchanged** — it describes the same executed text `sql` already binds, not a different execution; a hash captured under ≤1.7 still matches |
 | `1.0` | Initial stable shape: `changes[]` with per-change `actions` lists |
 | `1.1` | Added `planHash` (additive) — the apply-gate fingerprint |
 | `1.2` | `explanation` populated on every change; `sql` populated on `redefine` changes (the exact idempotent script) and on declarative changes whose slice of the update script is attributable (additive — both fields were reserved as `null` since 1.0) |
@@ -36,7 +37,7 @@ Current version: **`1.7`**.
 
 ```json
 {
-  "formatVersion": "1.7",
+  "formatVersion": "1.8",
   "planHash": "bd270dd7f6ba…(64 hex)",
   "atomicity": "partial",
   "hasChanges": true,
@@ -48,6 +49,7 @@ Current version: **`1.7`**.
       "actions": ["alter"],
       "risk": "warning",
       "sql": "ALTER TABLE [dbo].[Category]\n    ADD [Slug] NVARCHAR (100) NULL;",
+      "statementCount": 1,
       "explanation": "The live definition differs from the desired state; altered in place by the declarative publish."
     },
     {
@@ -56,6 +58,7 @@ Current version: **`1.7`**.
       "actions": ["redefine"],
       "risk": "safe",
       "sql": "CREATE OR ALTER VIEW dbo.CategoryFullView AS …",
+      "statementCount": 1,
       "explanation": "The file's checksum differs from the last applied definition; re-defined idempotently — see sql for the exact statement."
     }
   ],
@@ -81,6 +84,7 @@ Current version: **`1.7`**.
 | `changes[].actions` | string[] | What will be done, in order. Today always one verb; composite operations (e.g. a rebuild = `["drop", "create"]`) become expressible without a breaking change |
 | `changes[].risk` | string | `safe` \| `warning` \| `destructive` (design principle §4: destructive = the change loses data that cannot be recomputed — a DROP of an object that holds data, or an ALTER that removes a column the desired state no longer declares) |
 | `changes[].sql` | string? | The SQL this change will execute. On `redefine` changes: the exact idempotent script, verbatim. On declarative changes: this change's slice of the update script. How the slice is obtained is the provider's business and differs by engine — where the script comes from a generator it is attributed from that generator's own per-object markers (or, when the work is announced under a dependent object the generator names in its own right — a check, default, or foreign-key constraint — from the table the segment's `ALTER TABLE` statements target); where the provider synthesizes the script itself, each statement records the object it belongs to as it is emitted, so attribution is exact. `null` whenever attribution is not certain: an unreadable segment, statements spanning more than one object, or a target the comparison did not report. A missing slice is honest, a wrong one is not. What executes on the declarative path is always the whole publish, not these slices — but they are **bound by `planHash`** (since 1.4), so a slice that changes invalidates a reviewed hash |
+| `changes[].statementCount` | int? | How many statements `sql` executes (since 1.8). Present exactly when `sql` is (`null` on the same unattributed cases). One `alter` entry can fold several statements against the same object — e.g. three `CREATE INDEX` on one table — so `changes.Count` alone always undercounts a plan's real size; sum this field instead. Excluded from `planHash`: it describes `sql`, it is not a different execution |
 | `changes[].explanation` | string? | Deterministic rationale for the change: why it is planned and how it will be performed (e.g. checksum-difference reasoning on redefines, data-loss statement on destructive drops). Descriptive only: excluded from `planHash` |
 | `messages` | array | Diagnostics attached to the plan (gated-out destructive changes, skipped non-model files, engine warnings) — see [errors.md § Provider messages](errors.md#provider-messages) |
 | `messages[].objectName` | string? | The `changes[].objectName` this message is about, when it is about one (since 1.7). Absent on messages that are not about a single object — an engine-level diagnostic, or a desired-state file problem raised before a plan exists. Excluded from `planHash` (messages always are) |

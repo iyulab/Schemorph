@@ -332,10 +332,33 @@ public class PlanBuilderTests
         var rebuilt = plan.Actions.Single(a => a.ObjectName == "dbo.Rebuilt");
         Assert.Contains("tmp_ms_xx_Rebuilt", rebuilt.Sql);
         Assert.Contains("rebuilt", rebuilt.Explanation);
-        // Unattributed changes stay honestly silent on sql, generic on explanation.
-        var plain = plan.Actions.Single(a => a.ObjectName == "dbo.Plain");
-        Assert.Null(plain.Sql);
-        Assert.Contains("altered in place", plain.Explanation);
+    }
+
+    // The provider counts its own statements (ChangeScript.StatementCount); the
+    // builder's only job is to carry that count onto the action untouched — and
+    // to say "unknown" (null), exactly when Sql itself is unattributed (null).
+    [Fact]
+    public void StatementCount_is_carried_from_the_change_script_untouched()
+    {
+        var result = new CompareResult(
+            new[]
+            {
+                new RawChange("Change", "Table", "dbo.Indexed"),
+                new RawChange("Change", "Table", "dbo.Unattributed"),
+            },
+            Array.Empty<RawMessage>(), UpdateScript: "(whole script)",
+            ChangeScripts: new[]
+            {
+                new ChangeScript("dbo.Indexed", "CREATE INDEX a; CREATE INDEX b; CREATE INDEX c;",
+                    Rebuild: false, StatementCount: 3),
+            });
+
+        var plan = PlanBuilder.Build(result, allowDestructive: false);
+
+        var unattributed = plan.Actions.Single(a => a.ObjectName == "dbo.Unattributed");
+        Assert.Equal(3, plan.Actions.Single(a => a.ObjectName == "dbo.Indexed").StatementCount);
+        Assert.Null(unattributed.StatementCount);
+        Assert.Null(unattributed.Sql);   // stays honestly silent, the same as StatementCount
     }
 
     [Fact]

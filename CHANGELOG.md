@@ -5,6 +5,17 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## [Unreleased]
+
+### Added
+
+- **Plan format `1.8`: `changes[].statementCount`.** `changes.Count` is an object count, not a
+  size — several statements against one object (e.g. three `CREATE INDEX` on the same table)
+  fold into a single `alter` entry, so summing plan size from `changes.Count` alone always
+  undercounts. The new field says how many statements each entry's `sql` runs; present exactly
+  when `sql` is, and excluded from `planHash` (it describes `sql`, not a different execution) —
+  a hash captured under `1.7` still matches. See [docs/plan-format.md](docs/plan-format.md).
+
 ## 0.13.0 — 2026-08-28
 
 ### Added

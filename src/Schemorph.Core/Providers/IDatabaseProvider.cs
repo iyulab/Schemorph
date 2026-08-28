@@ -266,6 +266,10 @@ public sealed record CompareResult(
 /// no longer declares. Not destructive — an index holds no data of its own — but
 /// the queries it answered fall back to a scan, so it is a cost the reviewer is
 /// changing rather than one they are keeping.
+/// <paramref name="StatementCount"/>: how many statements <see cref="Sql"/>
+/// executes. Computed by the provider that built <see cref="Sql"/> — dialect
+/// knowledge stays there instead of core re-parsing attributed text. Defaults
+/// to 1 (the common case: one object, one statement).
 /// </summary>
 public sealed record ChangeScript(
     string ObjectName,
@@ -274,7 +278,8 @@ public sealed record ChangeScript(
     bool AddsNotNullWithoutDefault = false,
     bool RecreatesColumn = false,
     bool DropsColumn = false,
-    bool DropsIndex = false);
+    bool DropsIndex = false,
+    int StatementCount = 1);
 
 public sealed record RawChange(string Operation, string ObjectType, string ObjectName);
 

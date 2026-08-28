@@ -41,6 +41,7 @@ public static class PlanRenderer
             Actions = new[] { a.Operation },
             a.Risk,
             a.Sql,
+            a.StatementCount,
             a.Explanation,
         }).ToList(),
         plan.Messages,

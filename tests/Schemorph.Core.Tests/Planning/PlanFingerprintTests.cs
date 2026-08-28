@@ -95,6 +95,21 @@ public class PlanFingerprintTests
         Assert.Equal(PlanFingerprint.Compute(bare), PlanFingerprint.Compute(decorated));
     }
 
+    // StatementCount (1.8) describes the same executed text Sql already binds, not
+    // a different execution — it must stay out of identity the same way messages,
+    // atomicity and explanation already do, above.
+    [Fact]
+    public void StatementCount_does_not_change_the_hash()
+    {
+        var action = new PlanAction("s.T", "Table", PlanOperation.Alter, RiskLevel.Warning, Sql: "x");
+        const string script = "ALTER TABLE s.T ADD COLUMN a int;";
+
+        var withoutCount = PlanWith(script, action);
+        var withCount = PlanWith(script, action with { StatementCount = 3 });
+
+        Assert.Equal(PlanFingerprint.Compute(withoutCount), PlanFingerprint.Compute(withCount));
+    }
+
     // The hash is built by concatenating two inputs, so where one ends and the
     // next begins has to be decidable from the string itself. Both inputs are
     // SQL text: a slice ending in "X" beside a script "Y" concatenates to

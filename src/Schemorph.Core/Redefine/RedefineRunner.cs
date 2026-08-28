@@ -260,6 +260,7 @@ public sealed record PendingRedefine(ProgrammableObjectInfo Object, RedefineReas
     public PlanAction ToPlanAction() => new(
         Object.ObjectName, Object.ObjectType, PlanOperation.Redefine, RiskLevel.Safe,
         Sql: Object.ApplyScript,
+        StatementCount: 1,   // the provider's own idempotent form (CREATE OR ALTER / CREATE OR REPLACE) is always one statement
         Explanation: Reason switch
         {
             RedefineReason.ChecksumChanged =>

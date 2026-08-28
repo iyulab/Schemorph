@@ -76,6 +76,7 @@ public sealed class UpdateScriptAttributorTests
 
         Assert.Equal("DROP TABLE [dbo].[Gone];", byName["dbo.Gone"].Sql);
         Assert.False(byName["dbo.Gone"].Rebuild);
+        Assert.Equal(1, byName["dbo.Gone"].StatementCount);
     }
 
     [Fact]
@@ -88,6 +89,37 @@ public sealed class UpdateScriptAttributorTests
         Assert.True(inPlace.Sql.IndexOf("ALTER TABLE", StringComparison.Ordinal)
                     < inPlace.Sql.IndexOf("CREATE NONCLUSTERED", StringComparison.Ordinal));
         Assert.False(inPlace.Rebuild);
+        // Two DacFx-announced batches (the ALTER, the CREATE INDEX) landed on one
+        // change — exactly the shape `changes.Count` cannot see (docs/plan-format.md).
+        Assert.Equal(2, inPlace.StatementCount);
+    }
+
+    // The issue this field exists for: several indexes announced under the same
+    // table fold into one `changes[]` entry, so the entry must still say how many
+    // statements it runs.
+    [Fact]
+    public void Multiple_indexes_on_the_same_table_count_every_created_index()
+    {
+        var script = """
+            PRINT N'Creating Index [dbo].[Doc].[IX_Doc_A]...';
+            GO
+            CREATE NONCLUSTERED INDEX [IX_Doc_A] ON [dbo].[Doc]([A] ASC);
+            GO
+            PRINT N'Creating Index [dbo].[Doc].[IX_Doc_B]...';
+            GO
+            CREATE NONCLUSTERED INDEX [IX_Doc_B] ON [dbo].[Doc]([B] ASC);
+            GO
+            PRINT N'Creating Index [dbo].[Doc].[IX_Doc_C]...';
+            GO
+            CREATE NONCLUSTERED INDEX [IX_Doc_C] ON [dbo].[Doc]([C] ASC);
+            GO
+            """;
+
+        var result = UpdateScriptAttributor.Attribute(script,
+            new[] { new RawChange("Change", "Table", "dbo.Doc") });
+
+        var slice = Assert.Single(result);
+        Assert.Equal(3, slice.StatementCount);
     }
 
     [Fact]
