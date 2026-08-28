@@ -5,6 +5,24 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## 0.12.1 — 2026-08-28
+
+### Fixed
+
+- **SQL Server desired-state rendering is now order-deterministic.** `TSqlModel.GetObjects`'
+  enumeration order is undocumented by DacFx, unlike the PostgreSQL provider's catalog
+  queries (which already carry an explicit `ORDER BY`). Every object list is now sorted by
+  full name before rendering, so desired-state output is reproducible across runs and
+  independent of the order objects were added to the model — closing the "Known gap"
+  recorded in 0.12.0 for the SQL Server side (the PostgreSQL side turned out to already be
+  ordered; that gap note was itself inaccurate).
+
+### Changed
+
+- **`ModelContextProtocol` upgraded `1.4.0` → `2.2.0`.** No API-visible change — `schemorph
+  mcp` uses stdio transport only, which the SDK's 2.0 breaking changes (session headers,
+  SSE) do not touch.
+
 ## 0.12.0 — 2026-08-24
 
 ### Added
