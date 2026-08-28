@@ -10,7 +10,26 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// </summary>
 public sealed class PgTestSchema : IAsyncDisposable
 {
-    public static string? ServerUrl => Environment.GetEnvironmentVariable("SCHEMORPH_PG_TEST_URL");
+    /// <summary>
+    /// The env var, with pooling forced off. Every live test here builds its own connection
+    /// string from a distinct schema name (via <see cref="Npgsql.NpgsqlConnectionStringBuilder.SearchPath"/>),
+    /// so Npgsql — which pools per exact connection string — opens a brand new pool per test
+    /// method and never closes its physical connection within one short `dotnet test` run
+    /// (default pool idle lifetime is 300s). Confirmed empirically
+    /// (issues/ISSUE-Schemorph-20260828-postgres-indexplanningtests-flaky-under-repeated-runs.md
+    /// §6): with pooling on, a full run of this project accumulates up to ~86-97 concurrent
+    /// server connections against a 97-connection non-superuser limit; with it off, peak
+    /// concurrent connections dropped to 2. Forcing it off here — the one place every live test
+    /// gets its server URL from — makes every "closed" connection a real one.
+    /// </summary>
+    public static string? ServerUrl
+    {
+        get
+        {
+            var raw = Environment.GetEnvironmentVariable("SCHEMORPH_PG_TEST_URL");
+            return raw is null ? null : new NpgsqlConnectionStringBuilder(raw) { Pooling = false }.ConnectionString;
+        }
+    }
 
     private PgTestSchema(string name) => Name = name;
 
