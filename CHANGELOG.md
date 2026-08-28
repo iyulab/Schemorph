@@ -5,6 +5,16 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## 0.13.0 — 2026-08-28
+
+### Added
+
+- **PostgreSQL apply failures now carry a curated, actionable hint alongside the raw SQLSTATE
+  code and engine message.** A curated (not exhaustive) mapping covers the SQLSTATE codes an
+  apply can plausibly hit in practice — constraint violations, auth/connection/permission
+  failures, object-existence races, timeouts — appended to the existing message. An
+  unrecognized code passes through unchanged, same as before.
+
 ## 0.12.1 — 2026-08-28
 
 ### Fixed
