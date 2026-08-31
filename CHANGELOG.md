@@ -7,6 +7,8 @@ change **additively**: consumers must ignore properties they do not know.
 
 ## [Unreleased]
 
+## 0.14.0 — 2026-08-31
+
 ### Added
 
 - **Plan format `1.8`: `changes[].statementCount`.** `changes.Count` is an object count, not a
