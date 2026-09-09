@@ -1,6 +1,7 @@
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using PgSqlParser;
+using Schemorph.Core.Planning;
 using Schemorph.Core.Providers;
 
 namespace Schemorph.Provider.Postgres;
@@ -24,6 +25,19 @@ namespace Schemorph.Provider.Postgres;
 /// </summary>
 internal static class PgProgrammables
 {
+    /// <summary>
+    /// <c>CREATE OR REPLACE VIEW</c> only ever
+    /// appends — PostgreSQL raises <c>42P16</c> the moment an existing output
+    /// column is renamed, reordered, or retyped, and the shadow-schema
+    /// DROP+CREATE alternative that would cover that case does not exist yet.
+    /// Until it does, "safe" would be a claim this redefinition cannot back up.
+    /// </summary>
+    internal const string ViewRedefineRiskNote =
+        "PostgreSQL's CREATE OR REPLACE VIEW can only append output columns — " +
+        "renaming, reordering, or retyping an existing one is rejected at apply " +
+        "time (SQLSTATE 42P16) even though this plan reports the statement itself. " +
+        "Review the view's column list if it changed anywhere but the end.";
+
     public static ProgrammableAnalysis Analyze(IReadOnlyList<PgDesiredState.ProgrammableFile> files)
     {
         var messages = new List<RawMessage>();
@@ -92,7 +106,9 @@ internal static class PgProgrammables
             DependsOn: o.Referenced.Where(names.Contains)
                 .OrderBy(n => n, StringComparer.Ordinal).ToList(),
             DependsOnTables: o.Referenced.Where(n => !names.Contains(n))
-                .OrderBy(n => n, StringComparer.Ordinal).ToList()))
+                .OrderBy(n => n, StringComparer.Ordinal).ToList(),
+            RiskOverride: o.ObjectType == "View" ? RiskLevel.Warning : null,
+            RiskNote: o.ObjectType == "View" ? ViewRedefineRiskNote : null))
             .ToList();
 
         return new ProgrammableAnalysis(objects, messages);

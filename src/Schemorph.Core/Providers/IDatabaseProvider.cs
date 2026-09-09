@@ -1,4 +1,5 @@
 ﻿using Schemorph.Core.Ledger;
+using Schemorph.Core.Planning;
 
 namespace Schemorph.Core.Providers;
 
@@ -303,6 +304,24 @@ public sealed record RawMessage(string Severity, string Code, string Text);
 /// which is why a column change there must invalidate this object even when its
 /// file has not moved.
 /// </param>
+/// <param name="RiskOverride">
+/// Replaces the redefine strategy's default <see cref="RiskLevel.Safe"/>
+/// judgment when a provider's idempotent form is not unconditionally safe for
+/// this object type: PostgreSQL's
+/// <c>CREATE OR REPLACE VIEW</c> rejects renaming, reordering, or retyping an
+/// existing output column — it can only append — so a view redefinition is
+/// <see cref="RiskLevel.Warning"/> there even though the statement count and
+/// re-definition mechanics are otherwise identical to a function's. Null
+/// (the default) keeps the strategy's original judgment: every dialect that
+/// has no such restriction (T-SQL's <c>CREATE OR ALTER VIEW</c> among them)
+/// reports nothing here and stays <see cref="RiskLevel.Safe"/>.
+/// </param>
+/// <param name="RiskNote">
+/// Provider-authored prose appended to the plan explanation when
+/// <see cref="RiskOverride"/> is set — the specific reason a human reviewing
+/// the plan should not trust the generic redefine explanation alone. Null
+/// whenever <see cref="RiskOverride"/> is.
+/// </param>
 public sealed record ProgrammableObjectInfo(
     string ObjectName,
     string ObjectType,
@@ -310,7 +329,9 @@ public sealed record ProgrammableObjectInfo(
     string FileText,
     string ApplyScript,
     IReadOnlyList<string> DependsOn,
-    IReadOnlyList<string>? DependsOnTables = null);
+    IReadOnlyList<string>? DependsOnTables = null,
+    RiskLevel? RiskOverride = null,
+    string? RiskNote = null);
 
 public sealed record ProgrammableAnalysis(
     IReadOnlyList<ProgrammableObjectInfo> Objects,

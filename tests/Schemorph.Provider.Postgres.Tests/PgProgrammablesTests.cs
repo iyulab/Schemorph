@@ -27,6 +27,33 @@ public class PgProgrammablesTests
         Assert.Contains("Users", obj.DependsOnTables ?? []);
     }
 
+    /// <summary>
+    /// <c>CREATE OR REPLACE VIEW</c> can only
+    /// append output columns — PostgreSQL rejects renaming, reordering, or
+    /// retyping an existing one (SQLSTATE 42P16) — so a view redefinition must
+    /// not be reported as unconditionally safe the way a function's is.
+    /// </summary>
+    [Fact]
+    public void A_view_redefinition_carries_a_risk_override_a_function_does_not()
+    {
+        var analysis = PgProgrammables.Analyze(new[]
+        {
+            new ProgrammableFile("v.sql", """CREATE VIEW "V" AS SELECT 1;"""),
+            new ProgrammableFile("f.sql", """
+                CREATE FUNCTION "make_slug"(input text) RETURNS text
+                LANGUAGE sql AS $$ SELECT lower(input) $$;
+                """),
+        });
+
+        var view = analysis.Objects.Single(o => o.ObjectType == "View");
+        Assert.Equal(Schemorph.Core.Planning.RiskLevel.Warning, view.RiskOverride);
+        Assert.Contains("42P16", view.RiskNote);
+
+        var function = analysis.Objects.Single(o => o.ObjectType == "ScalarFunction");
+        Assert.Null(function.RiskOverride);
+        Assert.Null(function.RiskNote);
+    }
+
     [Fact]
     public void A_view_already_written_as_or_replace_stays_idempotent()
     {

@@ -7,6 +7,19 @@ change **additively**: consumers must ignore properties they do not know.
 
 ## [Unreleased]
 
+### Fixed
+
+- **PostgreSQL view redefinitions no longer report `risk: "safe"` unconditionally.** `CREATE OR
+  REPLACE VIEW` can only append output columns — PostgreSQL rejects renaming, reordering, or
+  retyping an existing one at apply time (`SQLSTATE 42P16`), so a redefinition plan for a view
+  whose column list changed anywhere but the end was previously shown as safe and then failed on
+  `apply`, sometimes leaving the database partially updated (the table's column added, the view
+  still on its old definition). The plan now reports `risk: "warning"` for a PostgreSQL view
+  redefinition and explains why in the plan's `explanation` field, so the failure is visible
+  before `apply` runs it, not after. SQL Server's `CREATE OR ALTER VIEW`, and every other
+  programmable object type on both engines, is unaffected — this dialect's `CREATE OR REPLACE
+  VIEW` restriction has no equivalent there.
+
 ## 0.14.0 — 2026-08-31
 
 ### Added

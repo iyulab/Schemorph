@@ -298,6 +298,35 @@ public class PlanBuilderTests
         Assert.Contains("checksum", redefine.Explanation);
     }
 
+    /// <summary>
+    /// A provider that cannot vouch for its own
+    /// idempotent form (PostgreSQL's <c>CREATE OR REPLACE VIEW</c>, which
+    /// rejects renaming/reordering/retyping an existing output column) must be
+    /// able to override the strategy's default "redefine is always safe"
+    /// judgment — the override, and only the override, decides the reported
+    /// risk, and its note rides along on the explanation so a reviewer sees
+    /// *why* without re-deriving the provider's dialect knowledge.
+    /// </summary>
+    [Fact]
+    public void Pending_redefine_risk_override_replaces_the_default_safe_judgment()
+    {
+        var pending = new[]
+        {
+            new PendingRedefine(
+                new ProgrammableObjectInfo("dbo.V", "View", "v.sql", "CREATE VIEW ...", "CREATE OR REPLACE VIEW ...",
+                    Array.Empty<string>(), RiskOverride: RiskLevel.Warning, RiskNote: "can only append columns"),
+                RedefineReason.ChecksumChanged).ToPlanAction(),
+        };
+
+        var plan = PlanBuilder.Build(
+            Result(new RawChange("Add", "Table", "dbo.T")), allowDestructive: false, pending);
+
+        var redefine = plan.Actions[1];
+        Assert.Equal(RiskLevel.Warning, redefine.Risk);
+        Assert.Contains("checksum", redefine.Explanation);
+        Assert.Contains("can only append columns", redefine.Explanation);
+    }
+
     [Fact]
     public void Every_change_carries_a_deterministic_explanation()
     {

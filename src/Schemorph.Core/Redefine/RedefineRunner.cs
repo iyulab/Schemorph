@@ -258,18 +258,21 @@ public enum RedefineReason
 public sealed record PendingRedefine(ProgrammableObjectInfo Object, RedefineReason Reason)
 {
     public PlanAction ToPlanAction() => new(
-        Object.ObjectName, Object.ObjectType, PlanOperation.Redefine, RiskLevel.Safe,
+        Object.ObjectName, Object.ObjectType, PlanOperation.Redefine,
+        Object.RiskOverride ?? RiskLevel.Safe,
         Sql: Object.ApplyScript,
         StatementCount: 1,   // the provider's own idempotent form (CREATE OR ALTER / CREATE OR REPLACE) is always one statement
-        Explanation: Reason switch
-        {
-            RedefineReason.ChecksumChanged =>
-                "The file's checksum differs from the last applied definition; re-defined idempotently — see sql for the exact statement.",
-            RedefineReason.DependencyChanged =>
-                "Its file is unchanged, but a column it depends on is being altered — the object's cached metadata would keep describing the old shape, so it is re-defined idempotently — see sql for the exact statement.",
-            _ =>
-                "No history in the ledger and the live definition does not match the file; defined idempotently and recorded — see sql for the exact statement.",
-        });
+        Explanation: BaseExplanation(Reason) + (Object.RiskNote is { } note ? " " + note : ""));
+
+    private static string BaseExplanation(RedefineReason reason) => reason switch
+    {
+        RedefineReason.ChecksumChanged =>
+            "The file's checksum differs from the last applied definition; re-defined idempotently — see sql for the exact statement.",
+        RedefineReason.DependencyChanged =>
+            "Its file is unchanged, but a column it depends on is being altered — the object's cached metadata would keep describing the old shape, so it is re-defined idempotently — see sql for the exact statement.",
+        _ =>
+            "No history in the ledger and the live definition does not match the file; defined idempotently and recorded — see sql for the exact statement.",
+    };
 }
 
 /// <summary>The runner's read-only judgment: what to re-apply, what to merely record.</summary>
