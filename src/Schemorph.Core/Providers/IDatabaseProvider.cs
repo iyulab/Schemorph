@@ -113,6 +113,30 @@ public interface IDatabaseProvider
         string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Refines a programmable-object analysis against the live database — dialect
+    /// knowledge that only a connection can supply, distinct from
+    /// <see cref="AnalyzeProgrammablesAsync"/>'s offline classification. PostgreSQL
+    /// uses this to decide, per view, whether <c>CREATE OR REPLACE VIEW</c> can
+    /// express the file's current column list against what is live: when it
+    /// cannot (a rename, reorder, retype, or removal — SQLSTATE 42P16), the
+    /// object's <see cref="ProgrammableObjectInfo.ApplyScript"/> is replaced with
+    /// a DROP+CREATE script when nothing depends on the view, or the analysis
+    /// gains an <c>Error</c> message naming the object when something does
+    /// (automatic CASCADE is not implemented — see docs/errors.md SCHEMORPH010).
+    /// <paramref name="desiredState"/> is threaded through (rather than only the
+    /// connection string) because the desired column list has to be computed
+    /// against the desired *table* shape, not the live one — at <c>diff</c> time
+    /// the live tables may not carry a column the view's query already depends
+    /// on. A dialect with no such gap (T-SQL's <c>CREATE OR ALTER VIEW</c>)
+    /// returns <paramref name="analysis"/> unchanged, which is why this has a
+    /// default body rather than forcing every provider to implement a no-op.
+    /// </summary>
+    Task<ProgrammableAnalysis> RefineProgrammablesAsync(
+        ProgrammableAnalysis analysis, IDesiredState desiredState, string connectionString,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(analysis);
+
+    /// <summary>
     /// Safety-lint dialect judgment on a migration script: which risky
     /// constructs it provably contains. Conservative by contract — a script
     /// that cannot be parsed yields no signals (a missing warning is honest,
@@ -322,6 +346,12 @@ public sealed record RawMessage(string Severity, string Code, string Text);
 /// the plan should not trust the generic redefine explanation alone. Null
 /// whenever <see cref="RiskOverride"/> is.
 /// </param>
+/// <param name="StatementCount">
+/// How many statements <see cref="ApplyScript"/> executes. Every provider's
+/// idempotent form (<c>CREATE OR ALTER</c> / <c>CREATE OR REPLACE</c>) is one
+/// statement, hence the default — the one documented exception is PostgreSQL's
+/// DROP+CREATE fallback (<see cref="RiskOverride"/>'s view case), which is two.
+/// </param>
 public sealed record ProgrammableObjectInfo(
     string ObjectName,
     string ObjectType,
@@ -331,7 +361,8 @@ public sealed record ProgrammableObjectInfo(
     IReadOnlyList<string> DependsOn,
     IReadOnlyList<string>? DependsOnTables = null,
     RiskLevel? RiskOverride = null,
-    string? RiskNote = null);
+    string? RiskNote = null,
+    int StatementCount = 1);
 
 public sealed record ProgrammableAnalysis(
     IReadOnlyList<ProgrammableObjectInfo> Objects,

@@ -126,6 +126,7 @@ Warnings never change the exit code.
 | `SCHEMORPH007` | Error | A `.sql` file failed to parse (file, line, and column are named) |
 | `SCHEMORPH008` | Warning | The comparison could not read the target completely. The engine's own reason is echoed in the message. It accompanies an engine error, so the verb fails — see below |
 | `SCHEMORPH009` | Error | The comparison reported a change the provider produced no statement for, and names it. Nothing is applied and no plan is emitted — the verb fails. A disagreement inside the provider, not a fault in the desired state; please report it |
+| `SCHEMORPH010` | Error | PostgreSQL only: a view's column list changed in a way `CREATE OR REPLACE VIEW` cannot express (rename, reorder, retype, or removal — SQLSTATE 42P16), so the provider planned a DROP+CREATE instead, but another object depends on the view. Automatic `CASCADE` is not implemented — drop the dependents yourself (or restructure to avoid the incompatible change) and re-run |
 
 #### An incomplete comparison is a failure, not a partial answer
 

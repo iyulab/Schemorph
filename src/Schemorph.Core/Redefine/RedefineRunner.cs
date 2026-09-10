@@ -261,7 +261,7 @@ public sealed record PendingRedefine(ProgrammableObjectInfo Object, RedefineReas
         Object.ObjectName, Object.ObjectType, PlanOperation.Redefine,
         Object.RiskOverride ?? RiskLevel.Safe,
         Sql: Object.ApplyScript,
-        StatementCount: 1,   // the provider's own idempotent form (CREATE OR ALTER / CREATE OR REPLACE) is always one statement
+        StatementCount: Object.StatementCount,
         Explanation: BaseExplanation(Reason) + (Object.RiskNote is { } note ? " " + note : ""));
 
     private static string BaseExplanation(RedefineReason reason) => reason switch

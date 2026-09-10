@@ -179,38 +179,50 @@ stripped of the guarantee. Declare the index without `CONCURRENTLY` to let Schem
 build it inside the apply, or build it by hand outside Schemorph and declare it
 plainly afterwards — the next diff will find it already there and plan nothing.
 
-## A PostgreSQL redefinition that changes shape fails loudly, not gracefully
+## A PostgreSQL function/procedure/trigger that changes shape fails loudly, not gracefully
 
-`CREATE OR REPLACE VIEW`/`FUNCTION`/`PROCEDURE`/`TRIGGER` is PostgreSQL's own
+`CREATE OR REPLACE FUNCTION`/`PROCEDURE`/`TRIGGER` is PostgreSQL's own
 idempotent form, and Schemorph's redefinition of a programmable object is
 exactly that statement, re-run whenever the file's checksum changes
 (`PgProgrammablesTests`, `PgProgrammablesLoopTests`). The engine itself refuses
-`OR REPLACE` when the new definition is not shape-compatible with the old one —
-a view whose column list or column order changed, a function whose parameter
-list changed — and Schemorph does not catch that refusal and retry as a drop
-and a create. The apply stops where it is, and rolls back: the declarative
-stage that already succeeded and any redefinitions before the failing one in
-this run all roll back together with the failing statement — one
-provider-owned session
+`OR REPLACE` when the new definition is not shape-compatible with the old one
+— a function whose parameter list or return type changed, most commonly — and
+Schemorph does not catch that refusal and retry as a drop and a create (unlike
+views, see below). The apply stops where it is, and rolls back: the
+declarative stage that already succeeded and any redefinitions before the
+failing one in this run all roll back together with the failing statement —
+one provider-owned session
 ([ADR-0004's 2026-08-20 addendum](adr/0004-failure-semantics-and-resume.md#addendum-2026-08-20-postgresql-earns-transactional))
 covers the whole apply — and the engine's own error (its SQLSTATE and message)
 is what you see. **What to do:** change the file to something shape-compatible
 — adding a new function overload, for instance, rather than changing an
 existing one's signature — or, if the shape change is genuinely wanted, drop
-the object yourself first (`DROP VIEW "V";`) so `OR REPLACE` lands as a fresh
-create next time. Either way, the fix is: change the file (and the live
-object, if you took the drop route) and re-run `apply` — the same recovery as
-any other rolled-back failure ([failure-semantics.md](failure-semantics.md)).
-Nothing from the failed attempt is left partially committed to reconcile by
-hand.
+the object yourself first (`DROP FUNCTION "f"(...);`) so `OR REPLACE` lands as
+a fresh create next time. Either way, the fix is: change the file (and the
+live object, if you took the drop route) and re-run `apply` — the same
+recovery as any other rolled-back failure
+([failure-semantics.md](failure-semantics.md)). Nothing from the failed
+attempt is left partially committed to reconcile by hand.
 
 **On SQL Server this is not a gap to compare against**: `CREATE OR ALTER` runs
 through DacFx's own declarative model, which the SQL Server provider already
 uses for structural comparison, so a shape-incompatible redefinition there can
 be planned as a rebuild rather than simply failing. PostgreSQL's programmable
 objects are handled as idempotent text, not diffed structurally, so there is no
-equivalent rebuild path yet — a real difference between the providers, not
-merely an unfinished mirror of one.
+equivalent rebuild path yet for functions/procedures/triggers — a real
+difference between the providers, not merely an unfinished mirror of one.
+
+**Views are the one exception**: before
+planning a `CREATE OR REPLACE VIEW`, the provider creates the file's query
+under a throwaway name and compares its columns against the live definition.
+When they are not append-compatible (a rename, reorder, retype, or removal —
+the shape `CREATE OR REPLACE VIEW` cannot express, SQLSTATE 42P16), the plan
+becomes a `DROP VIEW` + `CREATE VIEW` instead — automatically, with no file
+change needed — *provided* nothing else references the view. When something
+does, `diff`/`apply` refuse up front (`SCHEMORPH010`,
+[docs/errors.md](docs/errors.md)) rather than attempt an automatic `CASCADE`,
+which is not implemented: drop the dependent objects yourself first, or
+restructure to avoid the incompatible change, then re-run.
 
 ## A PostgreSQL programmable object is always redefined once on adoption
 

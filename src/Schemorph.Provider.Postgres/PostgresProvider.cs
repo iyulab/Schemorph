@@ -267,6 +267,14 @@ public sealed class PostgresProvider : IDatabaseProvider
         string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyList<ProgrammableObjectInfo>>(Array.Empty<ProgrammableObjectInfo>());
 
+    /// <inheritdoc/>
+    public Task<ProgrammableAnalysis> RefineProgrammablesAsync(
+        ProgrammableAnalysis analysis, IDesiredState desiredState, string connectionString,
+        CancellationToken cancellationToken = default)
+        => ViewRedefinePlanner.RefineAsync(
+            analysis, PgDesiredState.From(desiredState).ModelTexts,
+            connectionString, TargetSchemaOf(connectionString), cancellationToken);
+
     // ------------------------------------------------------------- pipeline
 
     private sealed record Snapshots(IReadOnlyList<PgTable> Desired, IReadOnlyList<PgTable> Live);

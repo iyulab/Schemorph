@@ -62,6 +62,14 @@ public static class DiffOperation
         {
             return new DiffResult(null, programmables.Messages, FailureStage.DesiredState);
         }
+        // Dialect knowledge only a connection can supply (e.g. PostgreSQL: can
+        // CREATE OR REPLACE VIEW express this file's column list against what is
+        // live?) — a no-op for a provider with no such gap.
+        programmables = await provider.RefineProgrammablesAsync(programmables, state, connectionString, cancellationToken);
+        if (programmables.Messages.Any(m => m.Severity == "Error"))
+        {
+            return new DiffResult(null, programmables.Messages, FailureStage.DesiredState);
+        }
         var redefinePlan = RedefineRunner.WithInvalidations(
             await new RedefineRunner(provider, ledger).PlanAsync(programmables, connectionString, cancellationToken),
             programmables, compared.TablesWithColumnChanges);

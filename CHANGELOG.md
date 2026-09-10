@@ -5,6 +5,24 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## [Unreleased]
+
+### Fixed
+
+- **A PostgreSQL view whose column list changes anywhere but the end now redefines
+  successfully instead of failing `apply` at `SQLSTATE 42P16`.** `CREATE OR REPLACE VIEW`
+  can only append output columns, so a rename, reorder, retype, or removal used to reach
+  `apply` (reported `risk: "warning"` since `0.14.1`, but still executed as `CREATE OR
+  REPLACE VIEW`) and fail there, sometimes leaving the database partially updated. The
+  provider now detects the incompatible case ahead of time — by actually creating the
+  file's query under a throwaway name and comparing its columns against the live
+  definition — and plans a `DROP VIEW` + `CREATE VIEW` instead when nothing depends on the
+  view. When something does depend on it, `apply`/`diff` now refuse up front
+  (`SCHEMORPH010`, see [docs/errors.md](docs/errors.md)) rather than attempting an
+  automatic `CASCADE`, which is not implemented. A view whose columns still fit the
+  append-only shape `CREATE OR REPLACE VIEW` allows no longer carries the blanket warning
+  either — only a view that actually needs the fallback does.
+
 ## 0.14.1 — 2026-09-09
 
 ### Fixed

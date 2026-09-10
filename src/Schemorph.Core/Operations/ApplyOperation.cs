@@ -75,6 +75,14 @@ public static class ApplyOperation
         {
             return Failure(FailureStage.DesiredState, programmables.Messages);
         }
+        // Dialect knowledge only a connection can supply — see DiffOperation's
+        // identical call. Ahead of the apply gate below, same as the analysis
+        // it refines: what is fingerprinted and gated is what this call decided.
+        programmables = await provider.RefineProgrammablesAsync(programmables, state, request.ConnectionString, cancellationToken);
+        if (programmables.Messages.Any(m => m.Severity == "Error"))
+        {
+            return Failure(FailureStage.DesiredState, programmables.Messages);
+        }
 
         // The ledger is initialized AFTER the comparison, not before — see the note
         // below. A missing ledger reads as "no history" (like diff), so the redefine
