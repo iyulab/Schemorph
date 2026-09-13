@@ -154,7 +154,36 @@ public class ViewRedefineDropAndCreateTests
             "CREATE OR REPLACE VIEW v AS SELECT a FROM t;", "probe_1", "public", "shadow_x");
 
         Assert.Contains("shadow_x.probe_1", probe);
-        Assert.Contains("shadow_x.t", probe);
+        Assert.DoesNotContain("shadow_x.t", probe);   // bare stays bare — search_path resolves it
+        Assert.Matches(@"FROM t\b", probe);
+    }
+
+    /// <summary>
+    /// A query body is not DDL: a bare name may be a CTE, and a function or a
+    /// type qualified to the source schema lives live, not in the shadow (only
+    /// the desired tables are materialized there). Rewriting any of those the
+    /// way table DDL is rewritten would make the probe fail on a view that
+    /// used to work.
+    /// </summary>
+    [Fact]
+    public void The_probe_leaves_ctes_functions_and_types_alone()
+    {
+        const string script = """
+            CREATE OR REPLACE VIEW public.v AS
+            WITH x AS (SELECT a, b FROM public.t)
+            SELECT x.a, public.fn(x.b) AS f, x.b::public.status AS s
+            FROM x;
+            """;
+
+        var probe = ViewRedefinePlanner.RetargetForProbe(script, "probe_1", "public", "shadow_x");
+
+        Assert.Contains("FROM shadow_x.t", probe);
+        Assert.Matches(@"FROM x\b", probe);
+        Assert.DoesNotContain("shadow_x.x", probe);
+        Assert.Contains("public.fn(", probe);
+        Assert.DoesNotContain("shadow_x.fn", probe);
+        Assert.Contains("public.status", probe);
+        Assert.DoesNotContain("shadow_x.status", probe);
     }
 
     /// <summary>

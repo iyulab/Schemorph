@@ -233,18 +233,20 @@ internal static class ViewRedefinePlanner
     /// <summary>
     /// Rewrites the file's CREATE VIEW into the probe that runs inside the
     /// shadow schema: its own target becomes a throwaway name in the shadow,
-    /// and every reference to the source schema in its query body is
-    /// retargeted there too, through <see cref="Shadow.SchemaRewriter"/> — the
-    /// same tree rewrite (never text) the desired tables themselves went
+    /// and every <em>table</em> reference qualified to the source schema in
+    /// its query body is retargeted there too, through
+    /// <see cref="Shadow.SchemaRewriter.RetargetQueryReferences"/> — a tree
+    /// rewrite (never text), like the one the desired tables themselves went
     /// through to land in the shadow. The probe connection's search_path
-    /// covers bare references, but a body written as
-    /// <c>FROM public.t</c> names its schema explicitly and would otherwise
-    /// resolve past the shadow to the live table — which at <c>diff</c> time
-    /// does not yet carry the column the desired view depends on. Both
-    /// forms are ordinary desired-state SQL; a schema-qualified body is the
-    /// usual shape of generated files. References to some other schema pass
-    /// through untouched, as they do for tables (cross-schema scope is a
-    /// later slice, per ADR-0007).
+    /// covers bare references (which may also be CTE names, so they stay
+    /// bare), but a body written as <c>FROM public.t</c> names its schema
+    /// explicitly and would otherwise resolve past the shadow to the live
+    /// table — which at <c>diff</c> time does not yet carry the column the
+    /// desired view depends on. Both forms are ordinary desired-state SQL; a
+    /// schema-qualified body is the usual shape of generated files. Function
+    /// and type qualifiers, and references to some other schema, pass through
+    /// untouched: routines and types are not in the shadow, and cross-schema
+    /// scope is a later slice (ADR-0007).
     /// </summary>
     internal static string RetargetForProbe(
         string createViewSql, string probeName, string sourceSchema, string shadowSchema)
@@ -261,7 +263,7 @@ internal static class ViewRedefinePlanner
         view.View.Relname = probeName;
         view.View.Schemaname = shadowSchema;   // the probe lands in the shadow, however the file qualified it
         view.Replace = false;                  // the probe name never pre-exists
-        SchemaRewriter.Retarget(parsed.Value, sourceSchema, shadowSchema);
+        SchemaRewriter.RetargetQueryReferences(parsed.Value, sourceSchema, shadowSchema);
 
         var deparsed = Parser.Deparse(parsed.Value);
         if (deparsed.Error is not null || deparsed.Value is null)

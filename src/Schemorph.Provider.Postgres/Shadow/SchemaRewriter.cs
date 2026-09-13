@@ -37,15 +37,22 @@ internal static class SchemaRewriter
         => RetargetSet([sql], sourceSchema, shadowSchema);
 
     /// <summary>
-    /// Retarget an already-parsed tree in place — for a caller that has its
-    /// own reason to hold the tree (it mutates other fields before rendering)
-    /// and must not pay a second parse/deparse round trip. No target-schema
-    /// validation here: that check exists because a mis-qualified CREATE TABLE
-    /// would be executed for real, and this overload's callers execute inside
-    /// a rolled-back transaction or not at all.
+    /// Retarget the <em>table references</em> of a query body — a view's
+    /// SELECT — in place, so it can be probed inside the shadow. This is a
+    /// narrower rewrite than the DDL walk, on purpose: only a
+    /// <c>RangeVar</c> (or three-part column reference) qualified to
+    /// <paramref name="sourceSchema"/> moves to the shadow. An unqualified
+    /// <c>RangeVar</c> is left alone, because in a query it may name a CTE
+    /// rather than a table — the probe connection's search_path resolves a
+    /// bare table into the shadow anyway. Function and type qualifiers are
+    /// left alone too: routines and types are not materialized in the shadow
+    /// (only the desired tables are), so they must keep resolving live, as
+    /// they did before the probe existed. No target-schema validation here:
+    /// that check exists because a mis-qualified CREATE TABLE would execute
+    /// for real, and this caller executes inside a rolled-back transaction.
     /// </summary>
-    public static void Retarget(ParseResult parsed, string sourceSchema, string shadowSchema)
-        => Walk(parsed, sourceSchema, shadowSchema);
+    public static void RetargetQueryReferences(ParseResult parsed, string sourceSchema, string shadowSchema)
+        => Walk(parsed, sourceSchema, shadowSchema, queryBody: true);
 
     /// <summary>
     /// Retarget a whole desired-state set and put its statements into a
@@ -269,7 +276,7 @@ internal static class SchemaRewriter
         ("ColumnRef", "fields"),
     };
 
-    private static void Walk(IMessage message, string source, string shadow)
+    private static void Walk(IMessage message, string source, string shadow, bool queryBody = false)
     {
         var typeName = message.Descriptor.Name;
 
@@ -285,8 +292,11 @@ internal static class SchemaRewriter
                 // RangeVar in single-schema model DDL is target-relative —
                 // left alone it would land wherever the connection's
                 // search_path points, which is precisely not the sandbox.
+                // In a query body it may instead be a CTE name, so there it
+                // stays bare (see RetargetQueryReferences).
                 if (field.Name == "schemaname"
-                    && ((string)value == source || (typeName == "RangeVar" && (string)value == "")))
+                    && ((string)value == source
+                        || (!queryBody && typeName == "RangeVar" && (string)value == "")))
                 {
                     field.Accessor.SetValue(message, shadow);
                 }
@@ -299,16 +309,20 @@ internal static class SchemaRewriter
             {
                 var items = ((System.Collections.IEnumerable)value).OfType<IMessage>().ToList();
 
-                if (QualifiedNameLists.Contains((typeName, field.Name)) && IsQualified(items, field.Name, typeName))
+                // A query body retargets only column references (their head is a
+                // table); routines and types are not in the shadow.
+                var rewritable = queryBody ? typeName == "ColumnRef" : QualifiedNameLists.Contains((typeName, field.Name));
+                if (rewritable && QualifiedNameLists.Contains((typeName, field.Name))
+                    && IsQualified(items, field.Name, typeName))
                 {
                     RewriteFirstString(items[0], source, shadow);
                 }
 
-                foreach (var item in items) Walk(item, source, shadow);
+                foreach (var item in items) Walk(item, source, shadow, queryBody);
             }
             else if (value is IMessage child)
             {
-                Walk(child, source, shadow);
+                Walk(child, source, shadow, queryBody);
             }
         }
     }
