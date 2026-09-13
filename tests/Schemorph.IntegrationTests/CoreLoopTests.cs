@@ -313,6 +313,34 @@ public sealed class CoreLoopTests : IDisposable
     }
 
     [SkippableFact]
+    public async Task An_object_dropped_behind_the_ledgers_back_is_re_created_though_its_file_did_not_change()
+    {
+        Write("schema/views/dbo.Gone.sql",
+            "CREATE VIEW dbo.Gone AS SELECT 1 AS One;\nGO\n");
+        Write("schema/procedures/dbo.Stays.sql",
+            "CREATE PROCEDURE dbo.Stays AS SELECT 1;\nGO\n");
+        await _ledger.EnsureInitializedAsync(_db.Url);
+        var runner = new RedefineRunner(_provider, _ledger);
+        var analysis = await AnalyzeAsync(Path.Combine(_dir, "schema"));
+        await runner.RunAsync(analysis, _db.Url);
+
+        // Something outside this tool removes the view; file and ledger still agree.
+        _db.Execute("DROP VIEW dbo.Gone");
+
+        var plan = await runner.PlanAsync(analysis, _db.Url);
+        var pending = Assert.Single(plan.Pending);
+        Assert.Equal("dbo.Gone", pending.Object.ObjectName);
+        Assert.Equal(RedefineReason.MissingLive, pending.Reason);
+
+        var run = await runner.RunAsync(analysis, plan, _db.Url);
+        Assert.Equal(new[] { "dbo.Gone" }, run.Redefined);
+        Assert.Equal(1, _db.Scalar<int>("SELECT COUNT(*) FROM sys.views WHERE name = 'Gone'"));
+
+        var steady = await runner.PlanAsync(analysis, _db.Url);
+        Assert.Empty(steady.Pending);
+    }
+
+    [SkippableFact]
     public async Task Brownfield_objects_differing_from_their_files_stay_pending()
     {
         _db.Execute("CREATE VIEW dbo.Drifted AS SELECT 1 AS One");

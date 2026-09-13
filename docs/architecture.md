@@ -39,7 +39,7 @@ The core consumes the provider's raw comparison and turns it into a Schemorph pl
 
 ### 2. Idempotent re-definition — programmable objects
 
-Procedures, functions, views, and triggers are stored one object per file and applied via `CREATE OR ALTER` (SQL Server 2016+) / `CREATE OR REPLACE` (PostgreSQL). Schemorph tracks a checksum per object file; on `apply`, changed objects are re-applied in dependency order.
+Procedures, functions, views, and triggers are stored one object per file and applied via `CREATE OR ALTER` (SQL Server 2016+) / `CREATE OR REPLACE` (PostgreSQL). Schemorph tracks a checksum per object file; on `apply`, changed objects are re-applied in dependency order — and so is an object whose file is unchanged but which no longer exists in the database (the checksum compares file and ledger; existence is asked of the live catalog separately).
 
 Rationale: procedure bodies are semantically opaque text. Comparing them structurally is unreliable in every tool that attempts it. Re-definition is idempotent, deterministic, and uses a mechanism the database itself guarantees. The "diff" for these objects is simply *changed / unchanged / new / removed* at file granularity — which is also exactly what a reviewer wants to see, alongside the git diff of the body itself.
 

@@ -7,7 +7,8 @@ namespace Schemorph.Core.Redefine;
 /// <summary>
 /// Idempotent re-definition semantics (ADR-0002 strategy 2): a programmable
 /// object is (re)applied via its provider-supplied apply script when its file's
-/// checksum differs from the last ledger record, in dependency order. The runner
+/// checksum differs from the last ledger record — or when the object has gone
+/// missing from the database despite a matching checksum — in dependency order. The runner
 /// owns ordering, checksum policy and ledger bookkeeping; the provider supplies
 /// analysis (objects, dependencies, dialect rewrite) and script execution.
 /// </summary>
@@ -41,9 +42,24 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
                         || !string.Equals(recorded, ChecksumOf(o), StringComparison.OrdinalIgnoreCase))
             .ToList();
 
+        // A matching checksum says the file is what was last applied — it says
+        // nothing about whether the object is still there. The checksum is an
+        // optimization over re-running an unchanged definition, valid only while
+        // the object exists; existence itself is the catalog's to answer, and an
+        // object the provider cannot find is re-created.
+        var candidateNames = candidates.Select(o => o.ObjectName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var steady = ordered.Where(o => !candidateNames.Contains(o.ObjectName)).ToList();
+        var missing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (steady.Count > 0)
+        {
+            var existing = await provider.FilterExistingLiveAsync(connectionString, steady, cancellationToken);
+            var existingNames = existing.Select(o => o.ObjectName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            missing.UnionWith(steady.Where(o => !existingNames.Contains(o.ObjectName)).Select(o => o.ObjectName));
+        }
+
         // Only history-less objects can reconcile; a recorded-but-different
-        // checksum means the *files* moved on and must be re-applied. The live
-        // lookup is skipped entirely when everything has history (steady state).
+        // checksum means the *files* moved on and must be re-applied. The
+        // definition lookup is skipped entirely when everything has history.
         var unknown = candidates.Where(o => !lastChecksum.ContainsKey(o.ObjectName)).ToList();
         var reconcilable = unknown.Count == 0
             ? Array.Empty<ProgrammableObjectInfo>()
@@ -51,9 +67,12 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
         var reconcilableNames = reconcilable.Select(o => o.ObjectName).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         return new RedefinePlan(
-            candidates.Where(o => !reconcilableNames.Contains(o.ObjectName))
-                .Select(o => new PendingRedefine(o, lastChecksum.ContainsKey(o.ObjectName)
-                    ? RedefineReason.ChecksumChanged
+            ordered
+                .Where(o => missing.Contains(o.ObjectName)
+                            || (candidateNames.Contains(o.ObjectName) && !reconcilableNames.Contains(o.ObjectName)))
+                .Select(o => new PendingRedefine(o,
+                    missing.Contains(o.ObjectName) ? RedefineReason.MissingLive
+                    : lastChecksum.ContainsKey(o.ObjectName) ? RedefineReason.ChecksumChanged
                     : RedefineReason.NoHistory))
                 .ToList(),
             candidates.Where(o => reconcilableNames.Contains(o.ObjectName)).ToList());
@@ -248,6 +267,12 @@ public enum RedefineReason
     /// cached metadata would otherwise describe the old shape.
     /// </summary>
     DependencyChanged,
+    /// <summary>
+    /// Its file is what was last applied, but the object no longer exists in
+    /// the database — dropped by hand, by a CASCADE, by a partial restore. The
+    /// checksum cannot see this; the live catalog can.
+    /// </summary>
+    MissingLive,
 }
 
 /// <summary>
@@ -270,6 +295,8 @@ public sealed record PendingRedefine(ProgrammableObjectInfo Object, RedefineReas
             "The file's checksum differs from the last applied definition; re-defined idempotently — see sql for the exact statement.",
         RedefineReason.DependencyChanged =>
             "Its file is unchanged, but a column it depends on is being altered — the object's cached metadata would keep describing the old shape, so it is re-defined idempotently — see sql for the exact statement.",
+        RedefineReason.MissingLive =>
+            "Its file is unchanged since the last applied definition, but the object no longer exists in the database; re-created idempotently and recorded — see sql for the exact statement.",
         _ =>
             "No history in the ledger and the live definition does not match the file; defined idempotently and recorded — see sql for the exact statement.",
     };

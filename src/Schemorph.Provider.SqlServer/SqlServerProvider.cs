@@ -86,6 +86,34 @@ public sealed class SqlServerProvider : IDatabaseProvider
             .ToList();
     }
 
+    public async Task<IReadOnlyList<ProgrammableObjectInfo>> FilterExistingLiveAsync(
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default)
+    {
+        if (objects.Count == 0) return Array.Empty<ProgrammableObjectInfo>();
+
+        // Every programmable kind this provider manages carries a module row
+        // (views, procedures, functions, triggers) — the same join the
+        // definition matcher reads, minus the definition text.
+        var live = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using (var connection = new SqlConnection(connectionString))
+        {
+            await connection.OpenAsync(cancellationToken);
+            await using var command = new SqlCommand("""
+                SELECT s.name + '.' + o.name
+                FROM sys.sql_modules m
+                JOIN sys.objects o ON o.object_id = m.object_id
+                JOIN sys.schemas s ON s.schema_id = o.schema_id
+                """, connection);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                live.Add(reader.GetString(0));
+            }
+        }
+
+        return objects.Where(o => live.Contains(o.ObjectName)).ToList();
+    }
+
     public Task<IReadOnlyList<MigrationLintSignal>> LintMigrationScriptAsync(
         string scriptText, CancellationToken cancellationToken = default)
         => Task.FromResult(MigrationScriptLinter.Lint(scriptText));

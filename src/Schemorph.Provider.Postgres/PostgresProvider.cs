@@ -268,6 +268,12 @@ public sealed class PostgresProvider : IDatabaseProvider
         => Task.FromResult<IReadOnlyList<ProgrammableObjectInfo>>(Array.Empty<ProgrammableObjectInfo>());
 
     /// <inheritdoc/>
+    public Task<IReadOnlyList<ProgrammableObjectInfo>> FilterExistingLiveAsync(
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default)
+        => PgLiveProgrammables.FilterExistingAsync(
+            connectionString, TargetSchemaOf(connectionString), objects, cancellationToken);
+
+    /// <inheritdoc/>
     public Task<ProgrammableAnalysis> RefineProgrammablesAsync(
         ProgrammableAnalysis analysis, IDesiredState desiredState, string connectionString,
         CancellationToken cancellationToken = default)

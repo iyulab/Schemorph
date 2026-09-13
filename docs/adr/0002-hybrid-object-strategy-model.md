@@ -62,6 +62,19 @@ definition: a recorded-but-different checksum means the files moved on, and edit
 always win. The anchor is unchanged — this makes strategy 2's answer to "what needs
 applying?" state-honest, the same standard strategy 1 already met.
 
+**Second refinement — a matching checksum is not evidence of existence.** The checksum
+compares the file with the ledger; the database is not one of its inputs. An object
+dropped after it was recorded — by hand, by a `CASCADE`, by a partial restore — kept a
+matching checksum, so `diff` and `status` reported no drift and `apply` did nothing,
+indefinitely. Strategy 1 never had this gap (tables are compared against the live
+catalog), so it was an asymmetry, not a policy. Objects the checksum would skip are now
+also asked of the live catalog (`FilterExistingLiveAsync` — by name and kind, never by
+definition); one that is absent is pending with reason `MissingLive` and is re-created
+by the same idempotent script. The checksum keeps its role as the optimization that
+avoids re-running an unchanged definition — valid only while the object is there.
+Doubt resolves the same way as above: a provider reports an object only when it
+positively found it.
+
 ## Addendum — layout is a convention, not a contract (2026-07-20)
 
 One accepted risk above is obsolete and would now mislead a reader. It said:

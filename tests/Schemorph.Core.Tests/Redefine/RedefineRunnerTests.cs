@@ -215,8 +215,9 @@ public sealed class RedefineRunnerTests
     public async Task Objects_with_history_never_trigger_a_live_lookup()
     {
         // A recorded-but-different checksum means the *files* moved on — live
-        // matching must not undercut an explicit edit. And in steady state
-        // (everything recorded) the extra database roundtrip must not happen.
+        // matching must not undercut an explicit edit. And when nothing is
+        // history-less the definition-match roundtrip must not happen (the
+        // existence check is a separate, cheaper question — see below).
         var edited = Obj("dbo.Edited", "Procedure", "BODY v2");
         _ledger.Entries.Add(new LedgerEntry(RedefineRunner.LedgerKind, "dbo.Edited", "Redefine",
             ContentChecksum.Compute("BODY v1"), true, null));
@@ -292,5 +293,82 @@ public sealed class RedefineRunnerTests
         Assert.Equal("dbo.Gone", entry.ObjectName);
         Assert.Equal("Drop", entry.Operation);
         Assert.Null(entry.Checksum);
+    }
+
+    // The checksum judges the file against what was last applied. It cannot see
+    // that the object has since disappeared from the database — dropped by hand,
+    // by a CASCADE, by a partial restore — so a matching checksum alone is not
+    // "nothing to do". Existence is asked of the live catalog separately.
+
+    [Fact]
+    public async Task An_object_recorded_as_applied_but_absent_from_live_is_pending_again()
+    {
+        var obj = Obj("dbo.Vanished", "View", "SELECT 1 AS One");
+        _ledger.Entries.Add(new LedgerEntry(RedefineRunner.LedgerKind, "dbo.Vanished", "Redefine",
+            ContentChecksum.Compute("SELECT 1 AS One"), true, null));
+        _provider.MissingLiveObjects.Add("dbo.Vanished");
+
+        var plan = await Runner.PlanAsync(Analysis(obj), "conn");
+
+        var pending = Assert.Single(plan.Pending);
+        Assert.Equal("dbo.Vanished", pending.Object.ObjectName);
+        Assert.Equal(RedefineReason.MissingLive, pending.Reason);
+        Assert.Contains("no longer exists", pending.ToPlanAction().Explanation);
+        Assert.Empty(plan.Reconcilable);
+    }
+
+    [Fact]
+    public async Task Live_existence_is_asked_only_for_objects_the_checksum_would_otherwise_skip()
+    {
+        // Changed and history-less objects are pending regardless; only the
+        // steady-state ones need the catalog's word that they are still there.
+        var steady = Obj("dbo.Same", "Procedure", "BODY");
+        var edited = Obj("dbo.Edited", "Procedure", "BODY v2");
+        var fresh = Obj("dbo.Fresh", "Procedure", "BODY");
+        _ledger.Entries.Add(new LedgerEntry(RedefineRunner.LedgerKind, "dbo.Same", "Redefine",
+            ContentChecksum.Compute("BODY"), true, null));
+        _ledger.Entries.Add(new LedgerEntry(RedefineRunner.LedgerKind, "dbo.Edited", "Redefine",
+            ContentChecksum.Compute("BODY v1"), true, null));
+
+        await Runner.PlanAsync(Analysis(steady, edited, fresh), "conn");
+
+        var query = Assert.Single(_provider.LiveExistenceQueries);
+        Assert.Equal(new[] { "dbo.Same" }, query);
+    }
+
+    [Fact]
+    public async Task A_missing_object_is_re_planned_in_dependency_order_with_the_rest()
+    {
+        // dbo.Outer (edited) depends on dbo.Inner (unchanged file, gone from live):
+        // Inner must be re-created before Outer is re-defined.
+        var inner = Obj("dbo.Inner", "View", "SELECT 1 AS One");
+        var outer = Obj("dbo.Outer", "View", "SELECT * FROM dbo.Inner v2", "dbo.Inner");
+        _ledger.Entries.Add(new LedgerEntry(RedefineRunner.LedgerKind, "dbo.Inner", "Redefine",
+            ContentChecksum.Compute("SELECT 1 AS One"), true, null));
+        _ledger.Entries.Add(new LedgerEntry(RedefineRunner.LedgerKind, "dbo.Outer", "Redefine",
+            ContentChecksum.Compute("SELECT * FROM dbo.Inner v1"), true, null));
+        _provider.MissingLiveObjects.Add("dbo.Inner");
+
+        var plan = await Runner.PlanAsync(Analysis(outer, inner), "conn");
+
+        Assert.Equal(new[] { "dbo.Inner", "dbo.Outer" }, plan.Pending.Select(p => p.Object.ObjectName));
+    }
+
+    [Fact]
+    public async Task Run_re_creates_a_missing_object_and_records_it_as_applied_again()
+    {
+        var obj = Obj("dbo.Vanished", "View", "SELECT 1 AS One");
+        _ledger.Entries.Add(new LedgerEntry(RedefineRunner.LedgerKind, "dbo.Vanished", "Redefine",
+            ContentChecksum.Compute("SELECT 1 AS One"), true, null));
+        _provider.MissingLiveObjects.Add("dbo.Vanished");
+
+        var result = await Runner.RunAsync(Analysis(obj), "conn");
+
+        Assert.Equal(new[] { "dbo.Vanished" }, result.Redefined);
+        Assert.Equal(0, result.Skipped);
+        Assert.Single(_provider.ExecutedScripts);
+        var recorded = _ledger.Entries.Last();
+        Assert.Equal("Redefine", recorded.Operation);
+        Assert.Equal(ContentChecksum.Compute("SELECT 1 AS One"), recorded.Checksum);
     }
 }

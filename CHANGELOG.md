@@ -21,6 +21,18 @@ change **additively**: consumers must ignore properties they do not know.
   connection's schema are now retargeted into the shadow with the same parse-tree rewrite
   the tables themselves go through; references to some other schema pass through untouched,
   as they do for tables. Bare references (`FROM t`) were unaffected and still are.
+- **A programmable object that has disappeared from the database is re-created even when
+  its file did not change — `status` no longer reports "No drift" for an object that is
+  not there.** The re-definition plan compared the file's checksum with the ledger and
+  nothing else, so a view, function, procedure, or trigger dropped after it was recorded
+  (by hand, by a `CASCADE`, by a partial restore) kept a matching checksum: `diff` and
+  `status` saw no change and `apply` did nothing, indefinitely, while tables in the same
+  situation were correctly re-planned. Objects the checksum would skip are now also
+  checked for existence in the live catalog (by name and kind, both providers); one that
+  is absent is planned as a redefine with the explanation "the object no longer exists in
+  the database" and re-created by the same idempotent script. This adds one catalog query
+  per `diff`/`apply`/`status` when the desired state has programmable objects. Rationale
+  and the exact rule: [docs/adr/0002](docs/adr/0002-hybrid-object-strategy-model.md).
 - **A view that does not exist live yet no longer carries the `CREATE OR REPLACE VIEW`
   column-list warning on its plan action.** Creating it is a plain `CREATE` with nothing to
   compare against, so the plan reports it as safe instead of asking the reviewer to check a

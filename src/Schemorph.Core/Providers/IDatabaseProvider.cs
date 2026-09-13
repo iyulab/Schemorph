@@ -113,6 +113,21 @@ public interface IDatabaseProvider
         string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Of the given desired-state programmable objects, the subset that exists
+    /// in the live database at all — by name and kind, whatever its definition.
+    /// The core asks this for objects whose file checksum matches the last
+    /// applied one: the checksum sees the file and the ledger, never the
+    /// database, so an object dropped since (by hand, by a CASCADE, by a
+    /// partial restore) would otherwise stay "applied" forever while
+    /// <c>status</c> reports no drift. A provider reports an object only when
+    /// it positively found it; an object it cannot see counts as absent — the
+    /// safe fallback is one idempotent redefinition, never a silent "still
+    /// there".
+    /// </summary>
+    Task<IReadOnlyList<ProgrammableObjectInfo>> FilterExistingLiveAsync(
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Refines a programmable-object analysis against the live database — dialect
     /// knowledge that only a connection can supply, distinct from
     /// <see cref="AnalyzeProgrammablesAsync"/>'s offline classification. PostgreSQL

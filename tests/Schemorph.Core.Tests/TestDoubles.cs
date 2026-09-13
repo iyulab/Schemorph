@@ -103,6 +103,20 @@ internal sealed class FakeProvider : IDatabaseProvider
         return Task.FromResult<IReadOnlyList<ProgrammableObjectInfo>>(
             objects.Where(o => MatchingLiveObjects.Contains(o.ObjectName)).ToList());
     }
+
+    /// <summary>Object names absent from the live database; everything else is taken to exist.</summary>
+    public HashSet<string> MissingLiveObjects { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Every object set the runner asked about existence, for asserting when that lookup happens.</summary>
+    public List<IReadOnlyList<string>> LiveExistenceQueries { get; } = new();
+
+    public Task<IReadOnlyList<ProgrammableObjectInfo>> FilterExistingLiveAsync(
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken ct = default)
+    {
+        LiveExistenceQueries.Add(objects.Select(o => o.ObjectName).ToList());
+        return Task.FromResult<IReadOnlyList<ProgrammableObjectInfo>>(
+            objects.Where(o => !MissingLiveObjects.Contains(o.ObjectName)).ToList());
+    }
 }
 
 /// <summary>A loaded desired state with nothing to complain about (or the warnings/errors given).</summary>

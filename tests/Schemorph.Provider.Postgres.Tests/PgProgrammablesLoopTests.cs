@@ -104,4 +104,48 @@ public class PgProgrammablesLoopTests : IAsyncLifetime
         Assert.Contains(diff.Plan!.Actions,
             a => a.Operation == PlanOperation.Redefine && a.ObjectName == "ActiveWorkspaces");
     }
+
+    [SkippableFact]
+    public async Task A_view_dropped_behind_the_ledgers_back_is_re_created_though_its_file_did_not_change()
+    {
+        // First apply establishes the view and records its checksum.
+        var baseline = await DiffOperation.RunAsync(_provider, _ledger, _schemaDir, _url, allowDestructive: false);
+        await ApplyOperation.RunAsync(_provider, _ledger,
+            new ApplyOperation.Request(_schemaDir, _url, ExpectedPlanHash: PlanFingerprint.Compute(baseline.Plan!)));
+
+        // Something outside this tool removes the view; the file and the ledger
+        // still agree with each other.
+        await using (var connection = new NpgsqlConnection(_url))
+        {
+            await connection.OpenAsync();
+            await using var drop = new NpgsqlCommand("DROP VIEW \"ActiveWorkspaces\"", connection);
+            await drop.ExecuteNonQueryAsync();
+        }
+
+        var diff = await DiffOperation.RunAsync(_provider, _ledger, _schemaDir, _url, allowDestructive: false);
+        Assert.True(diff.Success, string.Join("; ", diff.Errors.Select(e => e.Text)));
+        var recreate = Assert.Single(diff.Plan!.Actions, a => a.Operation == PlanOperation.Redefine);
+        Assert.Equal("ActiveWorkspaces", recreate.ObjectName);
+        Assert.Contains("no longer exists", recreate.Explanation);
+        Assert.Equal(RiskLevel.Safe, recreate.Risk);   // a plain CREATE — nothing live to compare against
+
+        var status = await StatusOperation.RunAsync(_provider, _ledger, new StatusOperation.Request(_schemaDir, _url));
+        Assert.True(status.Success, string.Join("; ", status.Errors.Select(e => e.Text)));
+        Assert.True(status.Status!.HasPendingWork);   // never "No drift" for an object that is not there
+
+        var apply = await ApplyOperation.RunAsync(_provider, _ledger,
+            new ApplyOperation.Request(_schemaDir, _url, ExpectedPlanHash: PlanFingerprint.Compute(diff.Plan!)));
+        Assert.True(apply.Success, string.Join("; ", apply.Errors.Select(e => e.Text)));
+        Assert.Contains("ActiveWorkspaces", apply.Redefines!.Redefined);
+
+        await using (var connection = new NpgsqlConnection(_url))
+        {
+            await connection.OpenAsync();
+            await using var command = new NpgsqlCommand("SELECT count(*) FROM \"ActiveWorkspaces\"", connection);
+            Assert.Equal(0L, await command.ExecuteScalarAsync());
+        }
+
+        var rediff = await DiffOperation.RunAsync(_provider, _ledger, _schemaDir, _url, allowDestructive: false);
+        Assert.False(rediff.Plan!.HasChanges);
+    }
 }
