@@ -1,3 +1,4 @@
+using Schemorph.Core.Errors;
 using Schemorph.Core.Operations;
 using Schemorph.Core.Providers;
 
@@ -206,6 +207,106 @@ public sealed class ApplyOperationFailureTests
         Assert.True(session.RolledBack);
         Assert.False(session.Committed);
         Assert.True(session.Disposed);
+    }
+
+    // Under Partial atomicity a later-stage failure leaves earlier stages
+    // committed, and the envelope says so. Under Transactional the same failure
+    // rolls the one session back, so "committed before the failure" would be
+    // the one thing that is not true — a consumer read exactly that, checked the
+    // database, and found nothing had landed. The counts of what RAN are still
+    // useful to name, as long as they are not called committed.
+
+    [Fact]
+    public async Task A_partial_providers_redefine_failure_reports_the_earlier_stages_as_committed()
+    {
+        var ledger = new FakeLedger();
+        var provider = new FakeProvider
+        {
+            Ledger = ledger,
+            DesiredState = new FakeDesiredState(),
+            Programmables = new ProgrammableAnalysis(
+                new[] { Obj("dbo.Aaa"), Obj("dbo.Boom") }, Array.Empty<RawMessage>()),
+            ApplyOutcome = Published(Change("dbo.Orders")),
+            FailOnScriptContaining = "dbo.Boom",
+        };
+
+        var outcome = await ApplyOperation.RunAsync(
+            provider, ledger, new ApplyOperation.Request("schema", Conn));
+
+        Assert.Equal(ApplyOperation.Durability.Committed, outcome.Durability);
+        Assert.Equal(new CommittedWork(1, 1, 0), outcome.Committed);
+        Assert.Equal(new CommittedWork(1, 1, 0), outcome.Attempted);
+    }
+
+    [Fact]
+    public async Task A_transactional_providers_redefine_failure_reports_nothing_committed_once_rolled_back()
+    {
+        var ledger = new FakeLedger();
+        var session = new FakeApplySession();
+        var provider = new FakeProvider
+        {
+            Ledger = ledger,
+            Session = session,
+            Capabilities = new(new[] { "fake" }, ApplyAtomicity.Transactional),
+            DesiredState = new FakeDesiredState(),
+            Programmables = new ProgrammableAnalysis(
+                new[] { Obj("dbo.Aaa"), Obj("dbo.Boom") }, Array.Empty<RawMessage>()),
+            ApplyOutcome = Published(Change("dbo.Orders")),
+            FailOnScriptContaining = "dbo.Boom",
+        };
+
+        var outcome = await ApplyOperation.RunAsync(
+            provider, ledger, new ApplyOperation.Request("schema", Conn));
+
+        Assert.True(session.RolledBack);
+        Assert.Equal(ApplyOperation.Durability.RolledBack, outcome.Durability);
+        Assert.Equal(new CommittedWork(0, 0, 0), outcome.Committed);
+        Assert.Equal(new CommittedWork(1, 1, 0), outcome.Attempted);   // what ran, then was undone
+    }
+
+    [Fact]
+    public async Task A_transactional_providers_redefine_failure_whose_rollback_also_fails_is_unknown_not_committed()
+    {
+        var ledger = new FakeLedger();
+        var session = new FakeApplySession { RollbackThrows = true };
+        var provider = new FakeProvider
+        {
+            Ledger = ledger,
+            Session = session,
+            Capabilities = new(new[] { "fake" }, ApplyAtomicity.Transactional),
+            DesiredState = new FakeDesiredState(),
+            Programmables = new ProgrammableAnalysis(new[] { Obj("dbo.Boom") }, Array.Empty<RawMessage>()),
+            ApplyOutcome = Published(Change("dbo.Orders")),
+            FailOnScriptContaining = "dbo.Boom",
+        };
+
+        var outcome = await ApplyOperation.RunAsync(
+            provider, ledger, new ApplyOperation.Request("schema", Conn));
+
+        Assert.Equal(ApplyOperation.Durability.Unknown, outcome.Durability);
+        Assert.Contains("rollback also failed", outcome.Errors[0].Text);
+        Assert.Equal(new CommittedWork(1, 0, 0), outcome.Attempted);
+    }
+
+    [Fact]
+    public async Task A_transactional_providers_commit_failure_is_unknown_durability()
+    {
+        var ledger = new FakeLedger();
+        var provider = new FakeProvider
+        {
+            Ledger = ledger,
+            Session = new FakeApplySession { CommitThrows = true },
+            Capabilities = new(new[] { "fake" }, ApplyAtomicity.Transactional),
+            DesiredState = new FakeDesiredState(),
+            Programmables = new ProgrammableAnalysis(Array.Empty<ProgrammableObjectInfo>(), Array.Empty<RawMessage>()),
+            ApplyOutcome = Published(Change("dbo.Orders")),
+        };
+
+        var outcome = await ApplyOperation.RunAsync(
+            provider, ledger, new ApplyOperation.Request("schema", Conn));
+
+        Assert.Equal(ApplyOperation.Durability.Unknown, outcome.Durability);
+        Assert.Equal(new CommittedWork(1, 0, 0), outcome.Attempted);
     }
 
     [Fact]

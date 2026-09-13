@@ -29,7 +29,12 @@ resolves to:
 (This walkthrough is `partial`-specific — SQL Server, from here on. A PostgreSQL apply,
 which declares `transactional`, does not have a "part-way, on purpose" outcome at all:
 whichever stage fails rolls back everything the apply had done, including stages that
-had already succeeded on their own terms, and only the ADR-0004 failure row survives.)
+had already succeeded on their own terms, and only the ADR-0004 failure row survives.
+The error envelope says so: its `committed` counts are all zero and the hint reads
+"The session was rolled back — nothing was committed", naming what ran and was undone.
+Only if that rollback itself fails to confirm does the envelope fall back to "it is not
+known whether the database kept it" — the same wording as a commit-acknowledgement
+failure below, for the same reason.)
 
 **There is no rollback across stages.** Stage 2 failing does not undo stage 1. That
 is deliberate: undoing a committed structural change is itself a destructive

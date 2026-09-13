@@ -577,27 +577,36 @@ static int FailApplyStage(string format, ApplyOperation.Outcome outcome)
         // can only happen under Transactional atomicity.
         _ => ("commit_failed", "commit"),
     };
-    var committed = new CommittedWork(
-        outcome.Applied.Count,
-        outcome.Redefines?.Redefined.Count ?? 0,
-        outcome.Migrations?.Applied.Count ?? 0);
-
     // Re-running is the resume path (ADR-0004): apply converges, so the fix is to
     // correct the source and run it again — never to finish the job by hand.
-    // A Commit failure is convergent for a different reason than the other two:
-    // whether the session actually persisted is unknown, but re-running either
-    // sees the work already done (an empty plan) or redoes it — never doubles it.
-    var hint = outcome.Stage == ApplyOperation.FailureStage.Commit
-        ? $"{DescribeAttempted(committed)} but the session's own commit did not confirm, so it is not " +
-          "known whether the database kept it. Run `status` (or `diff`) to find out, then `apply` " +
-          "again if needed — apply is convergent either way; see docs/failure-semantics.md."
-        : $"{Describe(committed)} Fix the failing object and re-run — apply is convergent; " +
-          "see docs/failure-semantics.md.";
+    // What the hint may call "committed" depends on the outcome's durability:
+    // under Partial the earlier stages stayed; under Transactional the session
+    // rolled them back (nothing committed, and saying otherwise sent a reader
+    // to the database for work that was not there); and when the rollback or
+    // the commit itself did not confirm, the client cannot tell — re-running
+    // either sees the work already done (an empty plan) or redoes it, never
+    // doubles it.
+    var hint = outcome.Durability switch
+    {
+        ApplyOperation.Durability.RolledBack =>
+            $"The session was rolled back — nothing was committed ({DescribeRan(outcome.Attempted)} " +
+            "and undone). Fix the failing object and re-run — apply is convergent; " +
+            "see docs/failure-semantics.md.",
+        ApplyOperation.Durability.Unknown =>
+            $"{DescribeAttempted(outcome.Attempted)} but the " +
+            (outcome.Stage == ApplyOperation.FailureStage.Commit ? "session's own commit" : "rollback after the failure") +
+            " did not confirm, so it is not known whether the database kept it. Run `status` (or " +
+            "`diff`) to find out, then `apply` again if needed — apply is convergent either way; " +
+            "see docs/failure-semantics.md.",
+        _ =>
+            $"{Describe(outcome.Committed)} Fix the failing object and re-run — apply is convergent; " +
+            "see docs/failure-semantics.md.",
+    };
 
     return Emit(format, SchemorphError.Create(code, Redaction.Redact(message), hint) with
     {
         Stage = stageLabel,
-        Committed = committed,
+        Committed = outcome.Committed,
     });
 }
 
@@ -608,14 +617,18 @@ static string Describe(CommittedWork c) =>
           $"{c.Redefines} re-definition(s), {c.Migrations} migration(s).";
 
 /// <summary>
-/// Same shape as <see cref="Describe"/>, worded for the one stage where "committed"
-/// cannot be asserted as fact — the session's own commit is what failed.
+/// Same shape as <see cref="Describe"/>, worded for the stages where "committed"
+/// cannot be asserted as fact — the session's own commit or rollback is what failed.
 /// </summary>
 static string DescribeAttempted(CommittedWork c) =>
     c is { Declarative: 0, Redefines: 0, Migrations: 0 }
         ? "Nothing was attempted,"
         : $"Ran {c.Declarative} declarative change(s), " +
           $"{c.Redefines} re-definition(s), {c.Migrations} migration(s),";
+
+static string DescribeRan(CommittedWork c) =>
+    $"{c.Declarative} declarative change(s), {c.Redefines} re-definition(s), " +
+    $"{c.Migrations} migration(s) ran";
 
 static int Emit(string format, SchemorphError error)
 {

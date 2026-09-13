@@ -1,4 +1,5 @@
-﻿using Schemorph.Core.Ledger;
+using Schemorph.Core.Errors;
+using Schemorph.Core.Ledger;
 using Schemorph.Core.Migrations;
 using Schemorph.Core.Planning;
 using Schemorph.Core.Providers;
@@ -41,6 +42,19 @@ public static class ApplyOperation
     /// </summary>
     public enum FailureStage { None, DesiredState, PlanMismatch, Publish, Redefine, Migration, Commit }
 
+    /// <summary>
+    /// What the database holds of the work a failed apply reports in
+    /// <see cref="Outcome.Applied"/>, <see cref="Outcome.Redefines"/> and
+    /// <see cref="Outcome.Migrations"/> — which always count what <em>ran</em>.
+    /// Under Partial atomicity earlier stages stay committed
+    /// (<see cref="Committed"/>). Under Transactional, a stage failure rolls
+    /// the one session back, so the same counts describe work that was undone
+    /// (<see cref="RolledBack"/>) — calling that "committed" is the one thing
+    /// that is not true. When the rollback itself throws, or the session's own
+    /// commit does, the client cannot tell either way (<see cref="Unknown"/>).
+    /// </summary>
+    public enum Durability { Committed, RolledBack, Unknown }
+
     public sealed record Outcome(
         bool Success,
         FailureStage Stage,
@@ -50,7 +64,22 @@ public static class ApplyOperation
         IReadOnlyList<RawChange> ExcludedVisible,
         IReadOnlyList<RawMessage> VisibleMessages,
         RedefineRunResult? Redefines,
-        MigrationRunResult? Migrations);
+        MigrationRunResult? Migrations,
+        Durability Durability = Durability.Committed)
+    {
+        /// <summary>Counts of what ran, whatever became of it.</summary>
+        public CommittedWork Attempted => new(
+            Applied.Count, Redefines?.Redefined.Count ?? 0, Migrations?.Applied.Count ?? 0);
+
+        /// <summary>
+        /// Counts of what is known to be durable — the envelope's
+        /// <c>committed</c>. Zero across the board once the session rolled
+        /// back; the attempted counts otherwise (for <see cref="Durability.Unknown"/>
+        /// they are the caller's best information, worded as such by the renderer).
+        /// </summary>
+        public CommittedWork Committed =>
+            Durability == Durability.RolledBack ? new CommittedWork(0, 0, 0) : Attempted;
+    }
 
     /// <param name="onPlan">
     /// Fires with the plan after the gate passes, before anything executes —
@@ -221,6 +250,7 @@ public static class ApplyOperation
                 Plan = plan,
                 Applied = result.AppliedChanges,
                 Redefines = new RedefineRunResult(ex.Redefined, 0, Array.Empty<string>()),
+                Durability = DurabilityAfterRollback(session, rollbackError),
             };
         }
 
@@ -243,6 +273,7 @@ public static class ApplyOperation
                     Redefines = redefineRun,
                     Migrations = new MigrationRunResult(
                         ex.Applied, 0, Array.Empty<string>(), Array.Empty<RawMessage>()),
+                    Durability = DurabilityAfterRollback(session, rollbackError),
                 };
             }
         }
@@ -271,6 +302,7 @@ public static class ApplyOperation
                     Applied = result.AppliedChanges,
                     Redefines = redefineRun,
                     Migrations = migrationRun,
+                    Durability = Durability.Unknown,
                 };
             }
         }
@@ -321,4 +353,12 @@ public static class ApplyOperation
 
     private static string WithRollbackNote(string text, string? rollbackError) =>
         rollbackError is null ? text : $"{text} (rollback also failed: {rollbackError})";
+
+    // No session (Partial): earlier stages committed and stay so. A session that
+    // rolled back cleanly undid them; one whose rollback threw leaves the client
+    // unable to say either way.
+    private static Durability DurabilityAfterRollback(IApplySession? session, string? rollbackError) =>
+        session is null ? Durability.Committed
+        : rollbackError is null ? Durability.RolledBack
+        : Durability.Unknown;
 }

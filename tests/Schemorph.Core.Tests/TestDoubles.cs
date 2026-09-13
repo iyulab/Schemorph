@@ -167,6 +167,9 @@ internal sealed class FakeApplySession : IApplySession
     /// <summary>Simulates a commit that throws (e.g. the connection drops between the last statement and the acknowledgement).</summary>
     public bool CommitThrows { get; set; }
 
+    /// <summary>Simulates a rollback that throws (the same broken connection that failed the stage).</summary>
+    public bool RollbackThrows { get; set; }
+
     public Task CommitAsync(CancellationToken cancellationToken = default)
     {
         if (CommitThrows) throw new InvalidOperationException("commit failed: connection lost");
@@ -176,6 +179,7 @@ internal sealed class FakeApplySession : IApplySession
 
     public Task RollbackAsync(CancellationToken cancellationToken = default)
     {
+        if (RollbackThrows) throw new InvalidOperationException("rollback failed: connection lost");
         RolledBack = true;
         return Task.CompletedTask;
     }

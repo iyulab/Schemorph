@@ -71,9 +71,14 @@ depends on where it stopped. A failed apply says so:
   commit failed to confirm, so `committed` counts what *ran*, not what is known to
   have persisted — see
   [failure-semantics.md](failure-semantics.md#commit-acknowledgement-failures).
-- **`committed`** — counts, not names. The ledger is the per-object record
-  ([failure-semantics.md](failure-semantics.md) explains how to read it); this
-  exists so a caller can learn *whether anything changed* without querying.
+- **`committed`** — counts, not names, of what the database is **known to hold**. The
+  ledger is the per-object record ([failure-semantics.md](failure-semantics.md)
+  explains how to read it); this exists so a caller can learn *whether anything
+  changed* without querying. Under `atomicity: "transactional"` a `redefine` or
+  `migration` stage failure rolls the whole session back, so `committed` is all zero
+  there and the hint says "The session was rolled back — nothing was committed",
+  naming what ran and was undone; the counts above are the `partial` shape. Only when
+  the rollback itself does not confirm do the counts mean "ran", as on `commit`.
 
 Re-running is the resume path — apply converges. Never finish a failed apply by
 hand: the ledger is what makes the run-once and redefine contracts hold.
@@ -99,7 +104,7 @@ hand: the ledger is what makes the run-once and redefine contracts hold.
 | `invalid_desired_state` | `invalid_state` | Desired-state files fail to load or validate (e.g. `SCHEMORPH003/004/007`) — same code on every verb, `diff`/`status`/`apply` alike |
 | `migration_failed` | `invalid_state` | Duplicate versions, or an applied migration was edited (tamper detection) — found before any migration runs |
 | `redefine_failed` | `invalid_state` | Dependency cycle among programmable objects — found before any re-definition runs |
-| `redefine_execution_failed` | `execution` | A re-definition script failed against the database. Carries `stage` and `committed`; the declarative publish had already committed |
+| `redefine_execution_failed` | `execution` | A re-definition script failed against the database. Carries `stage` and `committed`; under `partial` atomicity the declarative publish had already committed, under `transactional` the session was rolled back and `committed` is zero |
 | `migration_execution_failed` | `execution` | A migration script failed against the database. Carries `stage` and `committed` |
 | `commit_failed` | `execution` | `atomicity: "transactional"` only: every strategy ran, but the session's own commit did not confirm (e.g. the connection dropped between the last statement and the acknowledgement). Carries `stage: "commit"` and `committed`; whether the database actually kept the work is unknown — see [failure-semantics.md](failure-semantics.md#commit-acknowledgement-failures) |
 | `plan_mismatch` | `invalid_state` | `apply --expect-plan` (or MCP `expectedPlanHash`): the plan computed at apply time differs from the reviewed fingerprint — nothing was applied; re-run `diff`, review, retry with the new hash |

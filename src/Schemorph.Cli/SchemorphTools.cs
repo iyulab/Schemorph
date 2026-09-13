@@ -239,16 +239,21 @@ internal sealed class SchemorphTools
                         // confirm — can only happen under Transactional atomicity.
                         _ => ("commit_failed", "commit"),
                     };
-                    var committed = new CommittedWork(
-                        outcome.Applied.Count,
-                        outcome.Redefines?.Redefined.Count ?? 0,
-                        outcome.Migrations?.Applied.Count ?? 0);
-                    var hint = stageLabel == "commit"
-                        ? "The session's own commit did not confirm, so it is not known whether the " +
-                          "database kept it. Call schemorph_status (or schemorph_diff) to find out, then " +
-                          "apply again if needed — apply is convergent either way; see docs/failure-semantics.md."
-                        : "Re-running is the resume path (apply is convergent); see docs/failure-semantics.md.";
-                    return Error(stageCode, text, hint, stageLabel, committed);
+                    // `committed` is what the database is known to hold — zero once
+                    // the session rolled back — never merely what ran.
+                    var hint = outcome.Durability switch
+                    {
+                        ApplyOperation.Durability.RolledBack =>
+                            "The session was rolled back — nothing was committed. Re-running is the " +
+                            "resume path (apply is convergent); see docs/failure-semantics.md.",
+                        ApplyOperation.Durability.Unknown =>
+                            (stageLabel == "commit" ? "The session's own commit" : "The rollback after the failure") +
+                            " did not confirm, so it is not known whether the database kept the work. " +
+                            "Call schemorph_status (or schemorph_diff) to find out, then apply again if " +
+                            "needed — apply is convergent either way; see docs/failure-semantics.md.",
+                        _ => "Re-running is the resume path (apply is convergent); see docs/failure-semantics.md.",
+                    };
+                    return Error(stageCode, text, hint, stageLabel, outcome.Committed);
                 }
 
                 var code = outcome.Stage switch

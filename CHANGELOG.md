@@ -33,6 +33,16 @@ change **additively**: consumers must ignore properties they do not know.
   the database" and re-created by the same idempotent script. This adds one catalog query
   per `diff`/`apply`/`status` when the desired state has programmable objects. Rationale
   and the exact rule: [docs/adr/0002](docs/adr/0002-hybrid-object-strategy-model.md).
+- **A failed PostgreSQL `apply` no longer reports rolled-back work as committed.** Under
+  `atomicity: "transactional"` a `redefine` or `migration` stage failure rolls the whole
+  session back, but the error envelope still said "Committed before the failure: 1
+  declarative change(s), …" with matching `committed` counts — the one claim that was not
+  true, and one a reader acted on. The envelope's `committed` is now what the database is
+  known to hold: all zero after a rollback, with the hint reading "The session was rolled
+  back — nothing was committed" and naming what ran and was undone. If the rollback
+  itself fails to confirm, the hint says the outcome is unknown and points at `status`,
+  exactly as a commit-acknowledgement failure already did. `partial` atomicity (SQL
+  Server) is unchanged. Details: [docs/errors.md](docs/errors.md#a-failed-apply-stage-and-committed).
 - **A view that does not exist live yet no longer carries the `CREATE OR REPLACE VIEW`
   column-list warning on its plan action.** Creating it is a plain `CREATE` with nothing to
   compare against, so the plan reports it as safe instead of asking the reviewer to check a
