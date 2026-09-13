@@ -37,6 +37,17 @@ internal static class SchemaRewriter
         => RetargetSet([sql], sourceSchema, shadowSchema);
 
     /// <summary>
+    /// Retarget an already-parsed tree in place — for a caller that has its
+    /// own reason to hold the tree (it mutates other fields before rendering)
+    /// and must not pay a second parse/deparse round trip. No target-schema
+    /// validation here: that check exists because a mis-qualified CREATE TABLE
+    /// would be executed for real, and this overload's callers execute inside
+    /// a rolled-back transaction or not at all.
+    /// </summary>
+    public static void Retarget(ParseResult parsed, string sourceSchema, string shadowSchema)
+        => Walk(parsed, sourceSchema, shadowSchema);
+
+    /// <summary>
     /// Retarget a whole desired-state set and put its statements into a
     /// dependency-safe order: tables first, then non-FK constraints, then
     /// foreign keys, then indexes. Desired-state files carry no reliable

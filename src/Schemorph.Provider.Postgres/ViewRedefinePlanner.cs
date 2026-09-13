@@ -51,10 +51,14 @@ internal static class ViewRedefinePlanner
         await liveConnection.OpenAsync(cancellationToken);
         await SetSearchPathAsync(liveConnection, schema, cancellationToken);
 
+        var refined = analysis.Objects.ToList();
+        var messages = analysis.Messages.ToList();
+
         // Only a view that already exists live needs comparing at all — a
         // brand-new one's "redefinition" is a plain CREATE, unconditionally
-        // safe, and paying for a shadow schema to confirm that would be pure
-        // overhead on the common case (adding a first view).
+        // safe (so the blanket warning comes off without a shadow probe), and
+        // paying for a shadow schema to confirm that would be pure overhead
+        // on the common case (adding a first view).
         var existingLive = new Dictionary<string, List<(string Name, string Type)>>(StringComparer.Ordinal);
         foreach (var view in views)
         {
@@ -62,8 +66,13 @@ internal static class ViewRedefinePlanner
             {
                 existingLive[view.ObjectName] = live;
             }
+            else
+            {
+                refined[refined.FindIndex(o => o.ObjectName == view.ObjectName)] =
+                    view with { RiskOverride = null, RiskNote = null };
+            }
         }
-        if (existingLive.Count == 0) return analysis;
+        if (existingLive.Count == 0) return new ProgrammableAnalysis(refined, messages);
 
         await using var shadow = await ShadowSchema.CreateAsync(connectionString, cancellationToken);
         await shadow.ApplyAsync(desiredModelTexts, sourceSchema: schema, cancellationToken);
@@ -71,14 +80,11 @@ internal static class ViewRedefinePlanner
         await shadowConnection.OpenAsync(cancellationToken);
         await SetSearchPathAsync(shadowConnection, shadow.Name, cancellationToken);
 
-        var refined = analysis.Objects.ToList();
-        var messages = analysis.Messages.ToList();
-
         foreach (var view in views)
         {
             if (!existingLive.TryGetValue(view.ObjectName, out var live)) continue;
 
-            var desired = await ProbeColumnsAsync(shadowConnection, shadow.Name, view, cancellationToken);
+            var desired = await ProbeColumnsAsync(shadowConnection, schema, shadow.Name, view, cancellationToken);
             var index = refined.FindIndex(o => o.ObjectName == view.ObjectName);
 
             if (IsCompatiblePrefix(desired, live))
@@ -154,11 +160,11 @@ internal static class ViewRedefinePlanner
     /// shadow schema afterward would have erased it anyway.
     /// </summary>
     private static async Task<List<(string Name, string Type)>> ProbeColumnsAsync(
-        NpgsqlConnection shadowConnection, string shadowSchema, ProgrammableObjectInfo view,
-        CancellationToken cancellationToken)
+        NpgsqlConnection shadowConnection, string sourceSchema, string shadowSchema,
+        ProgrammableObjectInfo view, CancellationToken cancellationToken)
     {
         var probeName = $"__schemorph_probe_{Guid.NewGuid():N}"[..40];
-        var probeSql = RenameViewTarget(view.ApplyScript, probeName);
+        var probeSql = RetargetForProbe(view.ApplyScript, probeName, sourceSchema, shadowSchema);
 
         await using var transaction = await shadowConnection.BeginTransactionAsync(cancellationToken);
         try
@@ -225,16 +231,23 @@ internal static class ViewRedefinePlanner
     }
 
     /// <summary>
-    /// Renames only the CREATE VIEW's own target (an AST field write, never
-    /// text — the parse-tree-not-text discipline <see cref="Shadow.SchemaRewriter"/>
-    /// already uses) so the probe can execute the file's exact query body
-    /// under a throwaway name. Every other identifier — including the
-    /// unqualified table references the query selects from — is untouched:
-    /// this provider's programmable objects are bare-name, single-schema by
-    /// convention (<see cref="PgProgrammables"/>), so they already resolve
-    /// through whichever schema the probe connection's search_path names.
+    /// Rewrites the file's CREATE VIEW into the probe that runs inside the
+    /// shadow schema: its own target becomes a throwaway name in the shadow,
+    /// and every reference to the source schema in its query body is
+    /// retargeted there too, through <see cref="Shadow.SchemaRewriter"/> — the
+    /// same tree rewrite (never text) the desired tables themselves went
+    /// through to land in the shadow. The probe connection's search_path
+    /// covers bare references, but a body written as
+    /// <c>FROM public.t</c> names its schema explicitly and would otherwise
+    /// resolve past the shadow to the live table — which at <c>diff</c> time
+    /// does not yet carry the column the desired view depends on. Both
+    /// forms are ordinary desired-state SQL; a schema-qualified body is the
+    /// usual shape of generated files. References to some other schema pass
+    /// through untouched, as they do for tables (cross-schema scope is a
+    /// later slice, per ADR-0007).
     /// </summary>
-    private static string RenameViewTarget(string createViewSql, string probeName)
+    internal static string RetargetForProbe(
+        string createViewSql, string probeName, string sourceSchema, string shadowSchema)
     {
         var parsed = Parser.Parse(createViewSql);
         if (parsed.Error is not null || parsed.Value is null
@@ -246,7 +259,9 @@ internal static class ViewRedefinePlanner
         }
 
         view.View.Relname = probeName;
-        view.Replace = false;   // the probe name never pre-exists
+        view.View.Schemaname = shadowSchema;   // the probe lands in the shadow, however the file qualified it
+        view.Replace = false;                  // the probe name never pre-exists
+        SchemaRewriter.Retarget(parsed.Value, sourceSchema, shadowSchema);
 
         var deparsed = Parser.Deparse(parsed.Value);
         if (deparsed.Error is not null || deparsed.Value is null)

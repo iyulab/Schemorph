@@ -5,6 +5,27 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## [Unreleased]
+
+### Fixed
+
+- **A PostgreSQL view whose body names its schema explicitly (`FROM public.t`) is now
+  compared inside the shadow schema too, so a table and a view that change in the same
+  plan converge in one `apply`.** `0.14.2`'s column comparison creates the file's query
+  under a throwaway name inside the shadow schema, where the desired tables already have
+  their new shape — but it only renamed the view's own target, so a schema-qualified
+  table reference in the body resolved past the shadow to the live table, which at `diff`
+  time does not yet have the column the desired view selects. `diff` and `apply` then
+  failed up front with `SQLSTATE 42703` (`column b.c does not exist`), and the only way
+  through was applying the table change in a separate earlier run. Body references to the
+  connection's schema are now retargeted into the shadow with the same parse-tree rewrite
+  the tables themselves go through; references to some other schema pass through untouched,
+  as they do for tables. Bare references (`FROM t`) were unaffected and still are.
+- **A view that does not exist live yet no longer carries the `CREATE OR REPLACE VIEW`
+  column-list warning on its plan action.** Creating it is a plain `CREATE` with nothing to
+  compare against, so the plan reports it as safe instead of asking the reviewer to check a
+  column list that has no live counterpart.
+
 ## 0.14.2 — 2026-09-10
 
 ### Fixed

@@ -26,11 +26,13 @@ namespace Schemorph.Provider.Postgres;
 internal static class PgProgrammables
 {
     /// <summary>
-    /// <c>CREATE OR REPLACE VIEW</c> only ever
-    /// appends — PostgreSQL raises <c>42P16</c> the moment an existing output
-    /// column is renamed, reordered, or retyped, and the shadow-schema
-    /// DROP+CREATE alternative that would cover that case does not exist yet.
-    /// Until it does, "safe" would be a claim this redefinition cannot back up.
+    /// <c>CREATE OR REPLACE VIEW</c> only ever appends — PostgreSQL raises
+    /// <c>42P16</c> the moment an existing output column is renamed,
+    /// reordered, or retyped. This blanket warning is the classification a
+    /// view starts with; <see cref="ViewRedefinePlanner"/> then replaces it
+    /// with what it actually found against the live database — provably safe
+    /// (an append-only change, or a view that does not exist live yet and is
+    /// therefore a plain CREATE), a DROP+CREATE plan, or a refusal.
     /// </summary>
     internal const string ViewRedefineRiskNote =
         "PostgreSQL's CREATE OR REPLACE VIEW can only append output columns — " +
