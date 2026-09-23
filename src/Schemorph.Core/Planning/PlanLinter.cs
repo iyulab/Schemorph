@@ -3,7 +3,7 @@ using Schemorph.Core.Providers;
 namespace Schemorph.Core.Planning;
 
 /// <summary>
-/// Safety lint over the plan (ROADMAP Phase 2): machine-checkable warnings in
+/// Safety lint over the plan: machine-checkable warnings in
 /// the SCHEMORPH1xx band, attached to the plan's messages so every surface
 /// (diff, status, apply preview, MCP, resources) carries them for free.
 /// Deliberately conservative: a rule fires only on what is proven (from the

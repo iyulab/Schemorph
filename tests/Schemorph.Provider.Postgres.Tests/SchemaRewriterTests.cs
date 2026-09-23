@@ -112,18 +112,18 @@ public class SchemaRewriterTests
     {
         // The connection resolves the target schema as "public" (the default
         // when search_path carries something else, or is absent) while the
-        // desired-state SQL is qualified to "vibebase_control" — exactly the
+        // desired-state SQL is qualified to "app_control" — exactly the
         // mismatch that let a bare `diff` create real tables outside the
-        // shadow sandbox (docket 6c36eb54). Passing this through untouched,
+        // shadow sandbox. Passing this through untouched,
         // the way a REFERENCES target legitimately does, would execute the
-        // CREATE TABLE for real against "vibebase_control" the moment
+        // CREATE TABLE for real against "app_control" the moment
         // ShadowSchema.ApplyAsync runs it on the live connection.
-        var sql = """CREATE TABLE "vibebase_control"."Apps" ("Id" uuid NOT NULL);""";
+        var sql = """CREATE TABLE "app_control"."Apps" ("Id" uuid NOT NULL);""";
 
         var ex = Assert.Throws<SchemaRewriteException>(
             () => SchemaRewriter.Retarget(sql, "public", "shadow_x"));
 
-        Assert.Contains("vibebase_control", ex.Message);
+        Assert.Contains("app_control", ex.Message);
         Assert.Contains("public", ex.Message);
         Assert.Contains("Apps", ex.Message);
     }
@@ -131,7 +131,7 @@ public class SchemaRewriterTests
     [Fact]
     public void An_alter_table_qualified_to_a_different_schema_than_the_connection_is_refused()
     {
-        var sql = """ALTER TABLE "vibebase_control"."Apps" ADD COLUMN "Name" text;""";
+        var sql = """ALTER TABLE "app_control"."Apps" ADD COLUMN "Name" text;""";
 
         Assert.Throws<SchemaRewriteException>(
             () => SchemaRewriter.Retarget(sql, "public", "shadow_x"));
@@ -140,7 +140,7 @@ public class SchemaRewriterTests
     [Fact]
     public void An_index_qualified_to_a_different_schema_than_the_connection_is_refused()
     {
-        var sql = """CREATE INDEX "IX_Apps" ON "vibebase_control"."Apps" ("Name");""";
+        var sql = """CREATE INDEX "IX_Apps" ON "app_control"."Apps" ("Name");""";
 
         Assert.Throws<SchemaRewriteException>(
             () => SchemaRewriter.Retarget(sql, "public", "shadow_x"));

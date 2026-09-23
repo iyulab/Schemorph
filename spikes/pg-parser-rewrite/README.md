@@ -9,7 +9,7 @@ ADR-0007 deferred a parser binding ("not adopted now") while requiring the
 scratch-schema shadow variant's rewrite step to "become parser-based" — string
 substitution was already refuted by measurement (`pg_get_indexdef` emits
 fold-safe schema qualifiers *unquoted*, so quoted-form substitution misses them
-and retargets nothing; cycle-76). P1 needs the answer: which parser, and which
+and retargets nothing). The rewrite step needs the answer: which parser, and which
 rewrite mechanism?
 
 ## Candidates

@@ -12,7 +12,7 @@ using Schemorph.Core.Providers;
 namespace Schemorph.Cli;
 
 /// <summary>
-/// Schema-as-context (ROADMAP Phase 2): the current schema state and the
+/// Schema-as-context: the current schema state and the
 /// current plan as MCP *resources*, so hosts can attach them as context
 /// instead of round-tripping tool calls. Same core operations as the tools —
 /// resources are a third rendering of the same API, never a wrapper.

@@ -4,7 +4,7 @@ using ModelContextProtocol.Client;
 namespace Schemorph.IntegrationTests;
 
 /// <summary>
-/// The agent-usability harness (ROADMAP Phase 2): the exit-criterion scenario —
+/// The agent-usability harness: the exit-criterion scenario —
 /// edit SQL → diff → review the plan → gated apply — driven the way an agent
 /// drives it, over the REAL MCP stdio surface (the CLI binary as a child
 /// process, spoken to with the official MCP client), parsing only machine

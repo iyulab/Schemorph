@@ -12,8 +12,8 @@ namespace Schemorph.Cli;
 /// <summary>
 /// The MCP tool surface (`schemorph mcp`, stdio). Same core operations as the
 /// CLI verbs — two renderings of one API (architecture.md), never a wrapper
-/// around CLI text. Safety model (ROADMAP Phase 2): read-only/plan-only tools
-/// only; apply stays behind a future explicit gate.
+/// around CLI text. Safety model: read-only/plan-only tools, and apply only
+/// behind the plan-fingerprint gate (the caller must supply the plan hash it reviewed).
 ///
 /// The connection string is deliberately NOT a tool parameter: it comes from
 /// SCHEMORPH_URL in the server's environment, so credentials never flow through

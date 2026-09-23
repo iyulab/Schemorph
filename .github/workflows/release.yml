@@ -18,7 +18,7 @@ jobs:
     # Same live-DB service containers as ci.yml's `integration` job — release
     # gating must be at least as strong as CI, or a contract regression that
     # only a live-DB test catches can slip through a green release (see the
-    # v0.11.0 post-release PostgresCliTests incident, cycle-113).
+    # v0.11.0 post-release PostgresCliTests incident).
     services:
       mssql:
         image: mcr.microsoft.com/mssql/server:2022-latest

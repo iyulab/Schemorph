@@ -1,7 +1,7 @@
 // Spike: can a libpg_query binding be the parser behind the shadow harness's
-// schema rewriting? (P1, ADR-0007 "not adopted now" re-examined with evidence.)
+// schema rewriting? (ADR-0007 "not adopted now" re-examined with evidence.)
 //
-// Measures, on the killer shapes from cycle-76 and the engine spike:
+// Measures, on the killer shapes found earlier and the engine spike:
 //   1. Parse fidelity on quoted PascalCase DDL (multi-statement).
 //   2. Whether identifier AST nodes carry usable byte offsets (offset-guided
 //      surgical rewrite — keeps user text verbatim except the retargeted names).

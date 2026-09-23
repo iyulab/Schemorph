@@ -4,7 +4,7 @@ using Schemorph.Core.Operations;
 namespace Schemorph.Provider.Postgres.Tests;
 
 /// <summary>
-/// End-to-end regression for ROADMAP §3 (cycle-122): a real <c>PostgresException</c> from a
+/// End-to-end regression for SQLSTATE hints on apply: a real <c>PostgresException</c> from a
 /// live apply, not just <see cref="PgSqlStateHints"/>'s lookup table in isolation — proving the
 /// hint actually reaches <see cref="Schemorph.Core.Providers.ApplyResult"/> through
 /// <see cref="PostgresProvider.ApplyAsync"/>'s catch block, the same path the CLI and MCP

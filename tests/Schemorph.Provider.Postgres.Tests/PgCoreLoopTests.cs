@@ -116,7 +116,7 @@ public class PgCoreLoopTests : IAsyncLifetime
     /// apply — the table from the declarative stage is GONE after the
     /// failure, because both stages ran inside the one session this provider
     /// opens and it rolled back as a unit. Replaces the `partial`-era proof
-    /// this same scenario used to demonstrate (cycle-112), now that the
+    /// this same scenario used to demonstrate, now that the
     /// opposite is true.
     /// </summary>
     [SkippableFact]

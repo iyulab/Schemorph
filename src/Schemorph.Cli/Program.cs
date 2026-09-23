@@ -124,7 +124,7 @@ switch (verb)
         return requested ? ExitNoChanges : ExitError;
 }
 
-// MCP server over stdio (ROADMAP Phase 2): read-only/plan-only tools, apply
+// MCP server over stdio: read-only/plan-only tools, apply
 // behind the plan-fingerprint gate, and schema/plan state as resources.
 // stdout is the protocol channel, so all logging is forced to stderr.
 async Task<int> RunMcp()

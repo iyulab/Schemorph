@@ -69,7 +69,7 @@ public interface IDatabaseProvider
     /// account for everything the apply will do, including the re-definitions a
     /// column change invalidates. (It does not carry the update script: DacFx
     /// treats generating the script and publishing as alternative actions on one
-    /// comparison — see the apply-path attribution item in ROADMAP.)
+    /// comparison.)
     /// </summary>
     Task<ApplyResult> ApplyAsync(
         ApplyRequest request,
