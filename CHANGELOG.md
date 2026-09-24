@@ -5,6 +5,21 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Added
+
+- **`SCHEMORPH011` — a plan that creates a table while dropping one that holds data now
+  says that this is what a rename looks like.** Desired state carries names, not
+  identities, so a renamed table reaches the plan as a `CREATE TABLE` beside a gated
+  `DROP TABLE`; the create applies on its own and leaves an empty table beside the full
+  one. The warning names the dropped table and every table being created, and says what
+  to do if one of them is the rename: rename it in the database first (and any constraint
+  named after it), then diff again. It changes nothing in the plan and asserts nothing —
+  an unrelated create and drop in the same change set get the same message, which is why
+  it is a warning and not a rename. See `docs/limitations.md` (*A rename is planned as a
+  drop and a create*).
+
 ## 0.14.3 — 2026-09-13
 
 ### Fixed

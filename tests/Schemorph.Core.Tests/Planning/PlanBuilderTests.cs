@@ -438,4 +438,52 @@ public class PlanBuilderTests
         Assert.Throws<ArgumentException>(() =>
             PlanBuilder.Build(Result(new RawChange("Explode", "Table", "dbo.T")), allowDestructive: false));
     }
+
+    // ---- SCHEMORPH011: a created table beside a dropped data-holding one ----
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_table_created_while_a_data_holding_table_is_dropped_is_flagged_as_a_possible_rename(bool allowDestructive)
+    {
+        var plan = PlanBuilder.Build(Result(
+                new RawChange("Add", "Table", "dbo.AssetInspectionProfile"),
+                new RawChange("Delete", "Table", "dbo.InspectionProfile")),
+            allowDestructive);
+
+        var rename = Assert.Single(plan.Messages, m => m.Code == "SCHEMORPH011");
+        Assert.Equal("Warning", rename.Severity);
+        Assert.Equal("dbo.InspectionProfile", rename.ObjectName);
+        Assert.Contains("dbo.AssetInspectionProfile", rename.Text);
+        Assert.Contains("rename the table in the database first", rename.Text);
+    }
+
+    [Fact]
+    public void Each_dropped_table_gets_its_own_message_naming_every_created_table()
+    {
+        var plan = PlanBuilder.Build(Result(
+                new RawChange("Add", "Table", "dbo.A2"),
+                new RawChange("Add", "Table", "dbo.B2"),
+                new RawChange("Delete", "Table", "dbo.A"),
+                new RawChange("Delete", "Table", "dbo.B")),
+            allowDestructive: false);
+
+        var renames = plan.Messages.Where(m => m.Code == "SCHEMORPH011").ToList();
+        Assert.Equal(["dbo.A", "dbo.B"], renames.Select(m => m.ObjectName));
+        Assert.All(renames, m => Assert.Contains("dbo.A2, dbo.B2 are created", m.Text));
+    }
+
+    [Theory]
+    [InlineData("Add", "Table", "Delete", "View")]      // the dropped object holds no data
+    [InlineData("Add", "View", "Delete", "Table")]      // nothing table-shaped is created
+    [InlineData("Change", "Table", "Delete", "Table")]  // an altered table is not a new name
+    public void No_rename_is_suggested_without_both_halves(string op1, string type1, string op2, string type2)
+    {
+        var plan = PlanBuilder.Build(Result(
+                new RawChange(op1, type1, "dbo.New"),
+                new RawChange(op2, type2, "dbo.Old")),
+            allowDestructive: false);
+
+        Assert.DoesNotContain(plan.Messages, m => m.Code == "SCHEMORPH011");
+    }
 }

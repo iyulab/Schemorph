@@ -140,6 +140,8 @@ public sealed class RenameTests : IDisposable
 
         Assert.Contains(diff.Plan!.Excluded, e => e.ObjectName == "dbo.Workspaces");
         Assert.Contains(diff.Plan.Actions, a => a.ObjectName == "dbo.Workareas");
+        // The plan cannot tie them together, but it can say the shape is the one a rename takes.
+        Assert.Contains(diff.Plan.Messages, m => m.Code == "SCHEMORPH011" && m.ObjectName == "dbo.Workspaces");
 
         var outcome = await ApplyOperation.RunAsync(_provider, _ledger,
             new ApplyOperation.Request(SchemaDir, _db.Url,

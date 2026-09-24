@@ -132,6 +132,7 @@ Warnings never change the exit code.
 | `SCHEMORPH008` | Warning | The comparison could not read the target completely. The engine's own reason is echoed in the message. It accompanies an engine error, so the verb fails — see below |
 | `SCHEMORPH009` | Error | The comparison reported a change the provider produced no statement for, and names it. Nothing is applied and no plan is emitted — the verb fails. A disagreement inside the provider, not a fault in the desired state; please report it |
 | `SCHEMORPH010` | Error | PostgreSQL only: a view's column list changed in a way `CREATE OR REPLACE VIEW` cannot express (rename, reorder, retype, or removal — SQLSTATE 42P16), so the provider planned a DROP+CREATE instead, but another object depends on the view. Automatic `CASCADE` is not implemented — drop the dependents yourself (or restructure to avoid the incompatible change) and re-run |
+| `SCHEMORPH011` | Warning | The plan creates a table while dropping another that holds data — how a **renamed** table looks in a desired-state diff. The drop is gated as usual (or executed, with `--allow-destructive`), which does not move rows into the new table. If it is a rename, rename the table (and any constraint named after it) in the database first, then diff again. Every table being created is named as a candidate; nothing distinguishes a rename from an unrelated create and drop in the same change set |
 
 #### An incomplete comparison is a failure, not a partial answer
 

@@ -110,6 +110,12 @@ One consequence is easy to miss: the gate is per object, so at table granularity
 the create is safe on its own and applies while the drop is withheld. What is left
 is an empty table beside the full one, and the next diff still reports the drop.
 
+That combination — a table created while a table is dropped — is the one shape a
+rename can take that the plan can point at without guessing, so it does:
+`SCHEMORPH011` names the dropped table and every table being created, and says what
+to do *if* one of them is the rename. It asserts nothing and changes nothing in the
+plan; a create and a drop that are unrelated get the same message.
+
 **Why it is not just fixed:** the two snapshots carry nothing that separates a
 rename from a removal plus an unrelated addition — the identity a rename asserts
 exists only in the author's head, and never reached the files. A tool could guess

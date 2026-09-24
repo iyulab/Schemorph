@@ -81,6 +81,8 @@ public static class PlanBuilder
                 StatementCount: script?.StatementCount));
         }
 
+        messages.AddRange(PossibleRenames(compareResult.Changes, scripts));
+
         // Redefines execute after the declarative publish; the plan mirrors that
         // order. The redefine strategy renders its own actions (it owns the "why").
         actions.AddRange(redefineActions ?? Array.Empty<PlanAction>());
@@ -91,6 +93,51 @@ public static class PlanBuilder
         // exactly what runs, not just the object-level action shape (PlanFingerprint).
         return new Plan(Plan.CurrentFormatVersion, actions, messages, atomicity, compareResult.UpdateScript,
             excluded);
+    }
+
+    /// <summary>
+    /// <c>SCHEMORPH011</c>: the plan creates a table while dropping one that holds data — the shape
+    /// a table rename takes in a desired-state diff.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Desired state names what should exist, not what it used to be called, so a renamed table
+    /// arrives as a new table plus a missing one. The drop is gated (or, with destructive changes
+    /// allowed, carried out), which protects the rows but does not move them: applying the plan as
+    /// it stands leaves the data in the old table and an empty new one — or, allowed, loses it.
+    /// Nothing here can tell a rename from an unrelated create and drop in the same change set, so
+    /// the message says what to do <em>if</em> it is one, once per dropped table, and names every
+    /// table being created as a candidate.
+    /// </para>
+    /// <para>
+    /// Pairing by column shape would narrow the candidates, but the comparison reaches this layer as
+    /// object names only; that needs the provider to report shapes, and is not attempted here.
+    /// </para>
+    /// </remarks>
+    private static IEnumerable<PlanMessage> PossibleRenames(
+        IReadOnlyList<RawChange> changes, IReadOnlyDictionary<string, ChangeScript> scripts)
+    {
+        var relevant = changes.Where(c => !LedgerObjects.IsLedgerObject(c.ObjectName)
+            && string.Equals(c.ObjectType, "Table", StringComparison.OrdinalIgnoreCase)).ToList();
+        var created = relevant
+            .Where(c => Classify(c).Operation == PlanOperation.Create)
+            .Select(c => c.ObjectName)
+            .ToList();
+        if (created.Count == 0) yield break;
+
+        foreach (var dropped in relevant.Where(c =>
+            Classify(c, scripts.GetValueOrDefault(c.ObjectName)).Risk == RiskLevel.Destructive
+            && Classify(c).Operation == PlanOperation.Drop))
+        {
+            yield return new PlanMessage(
+                "Warning",
+                "SCHEMORPH011",
+                $"Table {dropped.ObjectName} holds data and is dropped by the desired state while "
+                + $"{string.Join(", ", created)} {(created.Count == 1 ? "is" : "are")} created. If one of them is "
+                + $"{dropped.ObjectName} renamed, this plan does not move its rows: rename the table in the "
+                + "database first (and any constraint named after it), then diff again.",
+                dropped.ObjectName);
+        }
     }
 
     /// <summary>
