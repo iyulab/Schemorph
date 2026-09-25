@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.SqlServer.DacFx" Version="170.4.83" />
+    <PackageReference Include="Microsoft.SqlServer.DacFx" Version="170.5.96" />
   </ItemGroup>
 
   <!-- AOT experiment: DacFx loads DatabaseSchemaProvider types reflectively by

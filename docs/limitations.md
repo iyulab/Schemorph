@@ -226,7 +226,7 @@ the shape `CREATE OR REPLACE VIEW` cannot express, SQLSTATE 42P16), the plan
 becomes a `DROP VIEW` + `CREATE VIEW` instead — automatically, with no file
 change needed — *provided* nothing else references the view. When something
 does, `diff`/`apply` refuse up front (`SCHEMORPH010`,
-[docs/errors.md](docs/errors.md)) rather than attempt an automatic `CASCADE`,
+[docs/errors.md](errors.md)) rather than attempt an automatic `CASCADE`,
 which is not implemented: drop the dependent objects yourself first, or
 restructure to avoid the incompatible change, then re-run.
 

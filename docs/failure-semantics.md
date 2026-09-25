@@ -158,5 +158,5 @@ excluded from comparison, so creating it never shows up in a plan.
 ## See also
 
 - [ADR-0004](adr/0004-failure-semantics-and-resume.md) — the decisions behind this, and why resume is convergent re-run rather than a repair command
-- [ADR-0002](adr/0002-three-strategies.md) — why the three stages exist and what routes to each
+- [ADR-0002](adr/0002-hybrid-object-strategy-model.md) — why the three stages exist and what routes to each
 - [errors.md](errors.md) — error codes and the message vocabulary

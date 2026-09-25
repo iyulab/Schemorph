@@ -759,7 +759,7 @@ change **additively**: consumers must ignore properties they do not know.
 ## 0.1.0 — 2026-07-12
 
 First public release. `inspect` / `diff` / `apply` / `status` against SQL Server, with
-the three-strategy model ([ADR-0002](docs/adr/0002-three-strategies.md)): structural
+the three-strategy model ([ADR-0002](docs/adr/0002-hybrid-object-strategy-model.md)): structural
 changes are diffed, programmable objects are re-applied idempotently via
 `CREATE OR ALTER`, and data changes are versioned run-once migrations tracked in a
 history ledger. Destructive-change gating, semantic exit codes, a typed error envelope,
