@@ -13,7 +13,7 @@ Terraform's `-detailed-exitcode` convention:
 |---|---|
 | `0` | Success; for `diff`, additionally: no changes pending |
 | `1` | Error (an `error` envelope was written to stderr) |
-| `2` | `diff` only: success, and changes are pending |
+| `2` | `diff` and `status` only: success, and work is pending — for `diff`, changes; for `status`, drift or migrations waiting to run |
 
 ## The error envelope
 

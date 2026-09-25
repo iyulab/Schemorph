@@ -62,7 +62,7 @@ internal static class CliManifest
         {
             new { code = 0, meaning = "success; for diff: no changes pending" },
             new { code = 1, meaning = "error (typed envelope on stderr)" },
-            new { code = 2, meaning = "diff only: changes are pending" },
+            new { code = 2, meaning = "diff and status only: work is pending (diff: changes; status: drift or migrations waiting to run)" },
         },
         verbs = new object[]
         {
