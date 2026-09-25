@@ -72,7 +72,7 @@ public static class DiffOperation
         }
         var redefinePlan = RedefineRunner.WithInvalidations(
             await new RedefineRunner(provider, ledger).PlanAsync(programmables, connectionString, cancellationToken),
-            programmables, compared.TablesWithColumnChanges);
+            programmables, compared.TablesWithColumnChanges, compared.ProgrammablesDroppedFirst);
 
         return new DiffResult(
             PlanBuilder.Build(compared with { Messages = messages }, allowDestructive,

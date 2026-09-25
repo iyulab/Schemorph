@@ -79,6 +79,7 @@ internal static class ViewRedefinePlanner
         await using var shadowConnection = new NpgsqlConnection(connectionString);
         await shadowConnection.OpenAsync(cancellationToken);
         await SetSearchPathAsync(shadowConnection, shadow.Name, cancellationToken);
+        await MaterializeViewsAsync(shadowConnection, schema, shadow.Name, views, cancellationToken);
 
         foreach (var view in views)
         {
@@ -109,7 +110,9 @@ internal static class ViewRedefinePlanner
 
             refined[index] = view with
             {
-                ApplyScript = $"DROP VIEW {DesiredStateRenderer.Quote(schema)}.{DesiredStateRenderer.Quote(view.ObjectName)};\n{view.ApplyScript}",
+                // IF EXISTS: the declarative stage may already have dropped it (a view
+                // reading what that stage removes goes first — see ViewsDroppedFirst).
+                ApplyScript = $"DROP VIEW IF EXISTS {DesiredStateRenderer.Quote(schema)}.{DesiredStateRenderer.Quote(view.ObjectName)};\n{view.ApplyScript}",
                 StatementCount = 2,
                 RiskOverride = RiskLevel.Warning,
                 RiskNote = DropRecreateRiskNote,
@@ -117,6 +120,48 @@ internal static class ViewRedefinePlanner
         }
 
         return new ProgrammableAnalysis(refined, messages);
+    }
+
+    /// <summary>
+    /// Creates every declared view in the shadow under its own name, a view before the views
+    /// that read it, so a probe of a view that selects from another view resolves it — and
+    /// resolves it as the desired state defines it, not as it stands live. The shadow holds
+    /// only tables otherwise, and a view over a view could never be probed: once applied, its
+    /// desired state could not be compared again. A view that cannot be created here (it calls
+    /// a function the shadow does not have, say) is left out: its own probe, if it needs one,
+    /// reports why, and a view that reads it fails its probe as it did before.
+    /// </summary>
+    private static async Task MaterializeViewsAsync(
+        NpgsqlConnection shadowConnection, string sourceSchema, string shadowSchema,
+        IReadOnlyList<ProgrammableObjectInfo> views, CancellationToken cancellationToken)
+    {
+        var byName = views.ToDictionary(v => v.ObjectName, StringComparer.Ordinal);
+        var remaining = views.Select(v => v.ObjectName).ToHashSet(StringComparer.Ordinal);
+        while (remaining.Count > 0)
+        {
+            // A view is ready once no view it reads is still waiting; a cycle cannot be
+            // created in PostgreSQL, so taking the rest by name only ends the loop.
+            var ready = remaining
+                .Where(v => !byName[v].DependsOn.Any(remaining.Contains))
+                .OrderBy(v => v, StringComparer.Ordinal)
+                .ToList();
+            if (ready.Count == 0) ready = remaining.OrderBy(v => v, StringComparer.Ordinal).ToList();
+
+            foreach (var name in ready)
+            {
+                remaining.Remove(name);
+                var sql = RetargetForProbe(byName[name].ApplyScript, name, sourceSchema, shadowSchema);
+                try
+                {
+                    await using var create = new NpgsqlCommand(sql, shadowConnection);
+                    await create.ExecuteNonQueryAsync(cancellationToken);
+                }
+                catch (PostgresException)
+                {
+                    // See the summary: left out, and whatever needed it reports its own failure.
+                }
+            }
+        }
     }
 
     private static async Task SetSearchPathAsync(

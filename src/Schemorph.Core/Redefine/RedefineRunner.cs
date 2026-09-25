@@ -174,8 +174,10 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
     /// strategy 2 worth having.
     /// </summary>
     public static RedefinePlan WithInvalidations(
-        RedefinePlan plan, ProgrammableAnalysis analysis, IReadOnlyList<string>? tablesWithColumnChanges)
+        RedefinePlan plan, ProgrammableAnalysis analysis, IReadOnlyList<string>? tablesWithColumnChanges,
+        IReadOnlyList<string>? droppedFirst = null)
     {
+        plan = WithDroppedFirst(plan, analysis, droppedFirst);
         if (tablesWithColumnChanges is not { Count: > 0 })
         {
             return plan;
@@ -221,6 +223,42 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
         {
             Pending = pending,
             Reconcilable = plan.Reconcilable.Where(o => !invalidated.Contains(o.ObjectName)).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// The objects the declarative script drops ahead of its own statements
+    /// (<see cref="CompareResult.ProgrammablesDroppedFirst"/>) are gone by the time this
+    /// strategy runs, so each is re-created — already pending for its own reason, it keeps
+    /// that reason and is marked; otherwise it is added. Never a reconciliation candidate:
+    /// "matches live" stops being true the moment the declarative stage runs.
+    /// </summary>
+    private static RedefinePlan WithDroppedFirst(
+        RedefinePlan plan, ProgrammableAnalysis analysis, IReadOnlyList<string>? droppedFirst)
+    {
+        if (droppedFirst is not { Count: > 0 })
+        {
+            return plan;
+        }
+
+        var dropped = droppedFirst.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var pendingByName = plan.Pending
+            .ToDictionary(p => p.Object.ObjectName, StringComparer.OrdinalIgnoreCase);
+        foreach (var obj in analysis.Objects.Where(o => dropped.Contains(o.ObjectName)))
+        {
+            pendingByName[obj.ObjectName] = pendingByName.TryGetValue(obj.ObjectName, out var existing)
+                ? existing with { DroppedFirst = true }
+                : new PendingRedefine(obj, RedefineReason.MissingLive) { DroppedFirst = true };
+        }
+
+        var pending = TopologicalOrder(analysis.Objects)
+            .Where(o => pendingByName.ContainsKey(o.ObjectName))
+            .Select(o => pendingByName[o.ObjectName])
+            .ToList();
+        return plan with
+        {
+            Pending = pending,
+            Reconcilable = plan.Reconcilable.Where(o => !dropped.Contains(o.ObjectName)).ToList(),
         };
     }
 
@@ -282,12 +320,25 @@ public enum RedefineReason
 /// </summary>
 public sealed record PendingRedefine(ProgrammableObjectInfo Object, RedefineReason Reason)
 {
+    /// <summary>
+    /// The declarative script drops this object ahead of its own statements
+    /// (<see cref="CompareResult.ProgrammablesDroppedFirst"/>); this re-creates it.
+    /// </summary>
+    public bool DroppedFirst { get; init; }
+
     public PlanAction ToPlanAction() => new(
         Object.ObjectName, Object.ObjectType, PlanOperation.Redefine,
-        Object.RiskOverride ?? RiskLevel.Safe,
+        Object.RiskOverride ?? (DroppedFirst ? RiskLevel.Warning : RiskLevel.Safe),
         Sql: Object.ApplyScript,
         StatementCount: Object.StatementCount,
-        Explanation: BaseExplanation(Reason) + (Object.RiskNote is { } note ? " " + note : ""));
+        Explanation: (DroppedFirst ? DroppedFirstExplanation : BaseExplanation(Reason))
+                     + (Object.RiskNote is { } note ? " " + note : ""));
+
+    private const string DroppedFirstExplanation =
+        "It reads something the declarative change removes or retypes, which the database refuses " +
+        "while it exists — so the declarative script drops it first and it is re-created here from " +
+        "its file; see sql for the exact statement. Privileges granted directly on it do not survive " +
+        "the drop and must be re-granted after apply.";
 
     private static string BaseExplanation(RedefineReason reason) => reason switch
     {

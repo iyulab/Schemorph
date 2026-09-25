@@ -153,7 +153,8 @@ public static class ApplyOperation
                 computed =>
                 {
                     redefinePlan = RedefineRunner.WithInvalidations(
-                        basePlan, programmables, computed.TablesWithColumnChanges);
+                        basePlan, programmables, computed.TablesWithColumnChanges,
+                        computed.ProgrammablesDroppedFirst);
                     plan = PlanBuilder.Build(
                         computed, request.AllowDestructive,
                         redefinePlan.Pending.Select(p => p.ToPlanAction()).ToList(),

@@ -238,6 +238,17 @@ does, `diff`/`apply` refuse up front (`SCHEMORPH010`,
 which is not implemented: drop the dependent objects yourself first, or
 restructure to avoid the incompatible change, then re-run.
 
+A declared view that reads a column the declarative stage drops, or whose type
+it changes — or a table it drops, or a view no file declares any more — would
+block that statement (SQLSTATE 2BP01 / 0A000) for as long as it exists, and
+re-definition only runs after the declarative stage. So the declarative script
+drops such a view first (and any declared view reading it), and the redefine
+stage re-creates it from its file, in the same transaction. The plan lists it as
+a re-definition that says so. Privileges granted directly on the view do not
+survive; re-grant them after apply. A view reading only columns that stay as
+they are is not touched. A dependent outside the target schema still blocks the
+statement — it is not the desired state's to drop.
+
 ## A PostgreSQL programmable object the files do not declare is dropped
 
 The target schema is the desired state's to describe, programmable objects included: a

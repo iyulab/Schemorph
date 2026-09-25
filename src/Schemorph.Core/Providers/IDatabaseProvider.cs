@@ -309,12 +309,17 @@ public sealed record CompareRequest(IDesiredState DesiredState, string Connectio
 /// change while its meaning is not, so this is what strategy 2 needs in order to
 /// invalidate what depends on it (see <see cref="ProgrammableObjectInfo.DependsOnTables"/>).
 /// </summary>
+/// <paramref name="ProgrammablesDroppedFirst"/>: declared programmable objects the
+/// declarative script itself drops before its other statements, because the engine refuses
+/// those statements while the object exists (PostgreSQL: a view reading a column being
+/// dropped). Strategy 2 must re-create each of them, whatever its checksum says.
 public sealed record CompareResult(
     IReadOnlyList<RawChange> Changes,
     IReadOnlyList<RawMessage> Messages,
     string? UpdateScript,
     IReadOnlyList<ChangeScript>? ChangeScripts = null,
-    IReadOnlyList<string>? TablesWithColumnChanges = null);
+    IReadOnlyList<string>? TablesWithColumnChanges = null,
+    IReadOnlyList<string>? ProgrammablesDroppedFirst = null);
 
 /// <summary>
 /// The slice of the update script attributable to one change (plan explanations):

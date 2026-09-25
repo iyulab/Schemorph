@@ -102,7 +102,8 @@ public sealed class PostgresProvider : IDatabaseProvider
     {
         var compared = await CompareCoreAsync(request.DesiredState, request.ConnectionString, cancellationToken);
         return new CompareResult(compared.Changes, compared.Messages,
-            compared.UpdateScript, compared.ChangeScripts, compared.TablesWithColumnChanges);
+            compared.UpdateScript, compared.ChangeScripts, compared.TablesWithColumnChanges,
+            compared.ViewsDroppedFirst);
     }
 
     /// <summary>
@@ -165,7 +166,8 @@ public sealed class PostgresProvider : IDatabaseProvider
         // produced identically on this path — the asymmetry that broke the gate once.
         onChangesComputed?.Invoke(new CompareResult(
             compared.Changes, Array.Empty<RawMessage>(),
-            compared.UpdateScript, compared.ChangeScripts, compared.TablesWithColumnChanges));
+            compared.UpdateScript, compared.ChangeScripts, compared.TablesWithColumnChanges,
+            compared.ViewsDroppedFirst));
 
         // The gate reads the same attribution the hook just announced — the plan
         // built there and the filter applied here must classify identically, or
@@ -189,7 +191,8 @@ public sealed class PostgresProvider : IDatabaseProvider
             compared.Snapshots.Desired, compared.Snapshots.Live, excluded, withoutDestructive);
         var includedNames = included.Select(c => c.ObjectName).ToHashSet(StringComparer.Ordinal);
         IReadOnlyList<DdlSynthesizer.Statement> statements =
-            [.. DropStatements(compared.Undeclared.Where(u => includedNames.Contains(u.ObjectName))),
+            [.. DropStatements(compared.Undeclared.Where(u => includedNames.Contains(u.ObjectName)),
+                    compared.ViewsDroppedFirst, compared.ViewReads, TargetSchemaOf(request.ConnectionString)),
              .. DdlSynthesizer.Synthesize(TargetSchemaOf(request.ConnectionString), desired, live)];
 
         // Masking removes work, so it can also remove the statement an included
@@ -315,7 +318,9 @@ public sealed class PostgresProvider : IDatabaseProvider
         IReadOnlyList<ChangeScript> ChangeScripts,
         IReadOnlyList<RawMessage> Messages,
         IReadOnlyList<string> TablesWithColumnChanges,
-        IReadOnlyList<PgLiveProgrammables.Undeclared> Undeclared);
+        IReadOnlyList<PgLiveProgrammables.Undeclared> Undeclared,
+        IReadOnlyList<string> ViewsDroppedFirst,
+        IReadOnlyList<PgLiveProgrammables.ViewRead> ViewReads);
 
     /// <summary>
     /// The shadow pipeline (ADR-0007): desired state applied to a scratch
@@ -342,16 +347,27 @@ public sealed class PostgresProvider : IDatabaseProvider
         // the live catalog against the files can see that. Deleting the file is how the
         // desired state says "drop it" (what the SQL Server provider's engine does for
         // every object not in source), so each one becomes a Delete, dropped first.
-        var declared = PgProgrammables.Analyze(state.ProgrammableFiles).Objects
-            .Select(o => o.ObjectName).ToHashSet(StringComparer.Ordinal);
+        var declaredObjects = PgProgrammables.Analyze(state.ProgrammableFiles).Objects;
+        var declared = declaredObjects.Select(o => o.ObjectName).ToHashSet(StringComparer.Ordinal);
         var undeclared = await PgLiveProgrammables.ReadUndeclaredAsync(
             connectionString, schema, declared, cancellationToken);
+
+        // A declared view that reads what this change removes — a table, a column, a view
+        // no file declares — or a column whose type changes blocks that statement
+        // (2BP01 / 0A000) for as long as it exists, and re-definition only runs after the
+        // declarative stage. So it goes first too, and the redefine stage re-creates it.
+        var viewReads = await PgLiveProgrammables.ReadViewReadsAsync(connectionString, schema, cancellationToken);
+        var viewsDroppedFirst = ViewsDroppedFirst(
+            desired, live,
+            declaredObjects.Where(o => o.ObjectType == "View").Select(o => o.ObjectName).ToHashSet(StringComparer.Ordinal),
+            undeclared, viewReads);
 
         IReadOnlyList<RawChange> changes =
             [.. undeclared.Select(u => new RawChange("Delete", u.ObjectType, u.ObjectName)),
              .. SnapshotComparer.Compare(desired, live)];
         IReadOnlyList<DdlSynthesizer.Statement> statements =
-            [.. DropStatements(undeclared), .. DdlSynthesizer.Synthesize(schema, desired, live)];
+            [.. DropStatements(undeclared, viewsDroppedFirst, viewReads, schema),
+             .. DdlSynthesizer.Synthesize(schema, desired, live)];
         var updateScript = statements.Count == 0 ? null : ComposeScript(schema, statements);
 
         // Synthesis is what executes here, so an unsynthesized change is not a
@@ -364,18 +380,91 @@ public sealed class PostgresProvider : IDatabaseProvider
 
         return new Compared(changes, new Snapshots(desired, live), updateScript,
             AttributeStatements(statements, desired, live), messages,
-            SnapshotComparer.TablesWithColumnChanges(desired, live), undeclared);
+            SnapshotComparer.TablesWithColumnChanges(desired, live), undeclared,
+            viewsDroppedFirst, viewReads);
     }
 
     /// <summary>
-    /// The DROP statements for undeclared programmable objects, in the order
-    /// <see cref="PgLiveProgrammables.ReadUndeclaredAsync"/> returned them — ahead of every
-    /// table statement, because a view that reads a table or a column blocks that table's
-    /// drop or that column's drop (SQLSTATE 2BP01) for as long as it exists.
+    /// The declared views the declarative statements cannot run past: each reads a table
+    /// this change drops, a column it drops or whose type or generation it changes, or a
+    /// view no file declares (dropped by this change) — plus every declared view reading
+    /// one of those, since dropping a view another reads is refused the same way. A view
+    /// reading only columns that stay as they are is not touched.
+    /// </summary>
+    internal static IReadOnlyList<string> ViewsDroppedFirst(
+        IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live,
+        IReadOnlySet<string> declaredViews,
+        IReadOnlyList<PgLiveProgrammables.Undeclared> undeclared,
+        IReadOnlyList<PgLiveProgrammables.ViewRead> reads)
+    {
+        var desiredByName = desired.ToDictionary(t => t.Name, StringComparer.Ordinal);
+        var liveByName = live.ToDictionary(t => t.Name, StringComparer.Ordinal);
+        var undeclaredViews = undeclared.Where(u => u.ObjectType == "View")
+            .Select(u => u.ObjectName).ToHashSet(StringComparer.Ordinal);
+
+        bool Removed(PgLiveProgrammables.ViewRead read)
+        {
+            if (undeclaredViews.Contains(read.Source)) return true;
+            if (!liveByName.TryGetValue(read.Source, out var have)) return false;
+            if (!desiredByName.TryGetValue(read.Source, out var want)) return true;
+            if (read.Column is null) return false;
+            var wantColumn = want.Columns.FirstOrDefault(c => c.Name == read.Column);
+            var haveColumn = have.Columns.FirstOrDefault(c => c.Name == read.Column);
+            return wantColumn is null
+                || haveColumn is not null
+                   && (wantColumn.DataType != haveColumn.DataType || wantColumn.GeneratedAs != haveColumn.GeneratedAs);
+        }
+
+        var dropped = reads.Where(r => declaredViews.Contains(r.View) && Removed(r))
+            .Select(r => r.View).ToHashSet(StringComparer.Ordinal);
+        bool grew;
+        do
+        {
+            grew = false;
+            foreach (var read in reads)
+            {
+                if (declaredViews.Contains(read.View) && dropped.Contains(read.Source) && dropped.Add(read.View))
+                {
+                    grew = true;
+                }
+            }
+        } while (grew);
+
+        return dropped.OrderBy(v => v, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>
+    /// The DROP statements that run ahead of every table statement, because a view that
+    /// reads a table or a column blocks that table's drop or that column's drop or retype
+    /// (SQLSTATE 2BP01 / 0A000) for as long as it exists: undeclared triggers, then the
+    /// undeclared views and the declared views dropped first together — a view that reads
+    /// another ahead of the one it reads — then undeclared routines (a view may call one).
+    /// A declared view is dropped <c>IF EXISTS</c>: the redefine stage re-creates it, and a
+    /// declared view reading an undeclared one that the same change drops is gone already
+    /// if anything else removed it.
     /// </summary>
     private static IEnumerable<DdlSynthesizer.Statement> DropStatements(
-        IEnumerable<PgLiveProgrammables.Undeclared> undeclared)
-        => undeclared.SelectMany(u => u.DropStatements.Select(sql => new DdlSynthesizer.Statement(u.ObjectName, sql)));
+        IEnumerable<PgLiveProgrammables.Undeclared> undeclared,
+        IReadOnlyList<string> viewsDroppedFirst,
+        IReadOnlyList<PgLiveProgrammables.ViewRead> reads,
+        string schema)
+    {
+        var all = undeclared.ToList();
+        var views = all.Where(u => u.ObjectType == "View")
+            .ToDictionary(u => u.ObjectName, u => u.DropStatements, StringComparer.Ordinal);
+        foreach (var name in viewsDroppedFirst)
+        {
+            views[name] = [$"DROP VIEW IF EXISTS {DesiredStateRenderer.Quote(schema)}.{DesiredStateRenderer.Quote(name)};"];
+        }
+        var edges = reads.Where(r => views.ContainsKey(r.View) && views.ContainsKey(r.Source))
+            .Select(r => (r.View, r.Source)).Distinct().ToList();
+
+        IEnumerable<(string Name, IReadOnlyList<string> Sql)> ordered =
+            [.. all.Where(u => u.ObjectType == "DmlTrigger").Select(u => (u.ObjectName, u.DropStatements)),
+             .. PgLiveProgrammables.ReadersFirst(views.Keys, edges).Select(v => (v, views[v])),
+             .. all.Where(u => u.ObjectType is not ("DmlTrigger" or "View")).Select(u => (u.ObjectName, u.DropStatements))];
+        return ordered.SelectMany(o => o.Sql.Select(sql => new DdlSynthesizer.Statement(o.Name, sql)));
+    }
 
     /// <summary>
     /// The per-change slices the plan carries to explain itself — descriptive only:

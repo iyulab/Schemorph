@@ -59,6 +59,48 @@ internal static class PgLiveProgrammables
             .ToList();
     }
 
+    /// <summary>
+    /// A live view reading a relation in the target schema: the whole relation
+    /// (<paramref name="Column"/> null) or one of its columns — the granularity PostgreSQL
+    /// itself records, and so exactly what it refuses to drop or retype while the view exists.
+    /// </summary>
+    public sealed record ViewRead(string View, string Source, string? Column);
+
+    // A view's rewrite rule depends on each relation it selects from and on each column it
+    // reads (refobjsubid = the column's attnum); both ends in the target schema.
+    private const string ViewReadsSql = """
+        SELECT DISTINCT dependent.relname, source.relname, a.attname
+        FROM pg_depend d
+        JOIN pg_rewrite r ON r.oid = d.objid
+        JOIN pg_class dependent ON dependent.oid = r.ev_class
+        JOIN pg_class source ON source.oid = d.refobjid
+        JOIN pg_namespace dn ON dn.oid = dependent.relnamespace
+        JOIN pg_namespace sn ON sn.oid = source.relnamespace
+        LEFT JOIN pg_attribute a ON a.attrelid = source.oid AND a.attnum = d.refobjsubid AND d.refobjsubid > 0
+        WHERE d.classid = 'pg_rewrite'::regclass AND d.refclassid = 'pg_class'::regclass
+          AND dependent.relkind = 'v' AND dependent.oid <> source.oid
+          AND dn.nspname = @schema AND sn.nspname = @schema
+        ORDER BY 1, 2, 3
+        """;
+
+    /// <summary>Every relation and column each live view in the target schema reads.</summary>
+    public static async Task<IReadOnlyList<ViewRead>> ReadViewReadsAsync(
+        string connectionString, string schema, CancellationToken cancellationToken)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(ViewReadsSql, connection);
+        command.Parameters.AddWithValue("schema", schema);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var reads = new List<ViewRead>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            reads.Add(new ViewRead(reader.GetString(0), reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2)));
+        }
+        return reads;
+    }
+
     /// <summary>A live programmable object the desired state does not declare, and how to drop it.</summary>
     /// <param name="DropStatements">One per overload for a routine; one otherwise.</param>
     public sealed record Undeclared(string ObjectName, string ObjectType, IReadOnlyList<string> DropStatements);
@@ -172,7 +214,7 @@ internal static class PgLiveProgrammables
     /// Orders views so a view that reads another comes before it (Kahn's algorithm over
     /// the reader → source edges), ties broken by name for a stable script.
     /// </summary>
-    private static IEnumerable<string> ReadersFirst(
+    internal static IEnumerable<string> ReadersFirst(
         IEnumerable<string> views, IReadOnlyList<(string First, string Second)> readerToSource)
     {
         var remaining = views.ToHashSet(StringComparer.Ordinal);

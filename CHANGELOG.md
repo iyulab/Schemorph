@@ -21,6 +21,20 @@ change **additively**: consumers must ignore properties they do not know.
   records each drop.
 - **PostgreSQL: a desired state with no table files compares instead of failing.** The
   shadow schema sent an empty command.
+- **PostgreSQL: changing a view and dropping or retyping the column it read applies in one
+  run.** The declarative stage runs before re-definition, so the view still read the old
+  column when its `DROP COLUMN` or type change ran, and an approved plan failed at apply
+  time (SQLSTATE `2BP01`, or `0A000` for a type change under an unchanged view). A declared
+  view reading a column, table or undeclared view that the change removes or retypes is now
+  dropped at the start of the declarative script — with any declared view reading it — and
+  re-created by the redefine stage from its file; the plan's re-definition says so and is
+  `warning` (direct grants do not survive a drop). Views reading only unaffected columns
+  are left alone.
+- **PostgreSQL: a view that reads another view no longer breaks every later `diff`.** The
+  comparison checks each live view's file against the desired tables in a scratch schema,
+  which held tables only, so the outer view could not be created there: once such a pair
+  was applied, `diff` and `apply` failed with SQLSTATE `42P01` even with nothing changed.
+  The declared views are now created in the scratch schema first, inner before outer.
 - **An engine error reads the same whichever stage raised it.** A PostgreSQL error hit
   during a re-definition, a migration or a comparison used to reach the output as the raw
   exception text — the SQLSTATE hints applied to the declarative publish only, and a
