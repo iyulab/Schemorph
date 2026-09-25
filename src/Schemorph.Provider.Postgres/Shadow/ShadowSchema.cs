@@ -64,8 +64,12 @@ internal sealed class ShadowSchema : IAsyncDisposable
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await using (var command = new NpgsqlCommand(rewritten, connection, transaction))
+        // A desired state with no table files is a state too — "nothing of these kinds
+        // should exist" — and the shadow for it is simply empty. Npgsql refuses an
+        // empty command, so there is nothing to send rather than something to fail.
+        if (!string.IsNullOrWhiteSpace(rewritten))
         {
+            await using var command = new NpgsqlCommand(rewritten, connection, transaction);
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
         await NormalizeCheckConstraintsAsync(connection, transaction, cancellationToken);

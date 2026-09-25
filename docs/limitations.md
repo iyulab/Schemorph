@@ -238,6 +238,16 @@ does, `diff`/`apply` refuse up front (`SCHEMORPH010`,
 which is not implemented: drop the dependent objects yourself first, or
 restructure to avoid the incompatible change, then re-run.
 
+## A PostgreSQL programmable object the files do not declare is dropped
+
+The target schema is the desired state's to describe, programmable objects included: a
+view, function, procedure or trigger no file declares is planned as a `Drop` — as the
+SQL Server provider's engine does for every object not in source. Adopting an existing
+database therefore starts with `inspect`, which writes every such object out as a file.
+Two kinds are left alone rather than guessed at: objects that belong to an extension
+(they are the extension's, not the files'), and materialized views, which hold rows.
+Routines are matched by name, so a file that declares one overload keeps every overload.
+
 ## A PostgreSQL programmable object is always redefined once on adoption
 
 Bringing Schemorph to a database that already has a matching view or function

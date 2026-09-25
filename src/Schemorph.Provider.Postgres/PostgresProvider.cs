@@ -187,7 +187,10 @@ public sealed class PostgresProvider : IDatabaseProvider
         // desired side, so synthesis never writes their DROP.
         var (desired, live) = MaskExclusions(
             compared.Snapshots.Desired, compared.Snapshots.Live, excluded, withoutDestructive);
-        var statements = DdlSynthesizer.Synthesize(TargetSchemaOf(request.ConnectionString), desired, live);
+        var includedNames = included.Select(c => c.ObjectName).ToHashSet(StringComparer.Ordinal);
+        IReadOnlyList<DdlSynthesizer.Statement> statements =
+            [.. DropStatements(compared.Undeclared.Where(u => includedNames.Contains(u.ObjectName))),
+             .. DdlSynthesizer.Synthesize(TargetSchemaOf(request.ConnectionString), desired, live)];
 
         // Masking removes work, so it can also remove the statement an included
         // change needed — the pairing has to be re-checked against what will
@@ -301,7 +304,8 @@ public sealed class PostgresProvider : IDatabaseProvider
         string? UpdateScript,
         IReadOnlyList<ChangeScript> ChangeScripts,
         IReadOnlyList<RawMessage> Messages,
-        IReadOnlyList<string> TablesWithColumnChanges);
+        IReadOnlyList<string> TablesWithColumnChanges,
+        IReadOnlyList<PgLiveProgrammables.Undeclared> Undeclared);
 
     /// <summary>
     /// The shadow pipeline (ADR-0007): desired state applied to a scratch
@@ -323,8 +327,21 @@ public sealed class PostgresProvider : IDatabaseProvider
         var live = await CatalogReader.ReadTablesAsync(
             connectionString, schema, normalizeSameSchemaReferences: true, cancellationToken);
 
-        var changes = SnapshotComparer.Compare(desired, live);
-        var statements = DdlSynthesizer.Synthesize(schema, desired, live);
+        // Programmable objects are created and changed by re-definition, never here —
+        // but a file that is deleted leaves its object behind, and only a comparison of
+        // the live catalog against the files can see that. Deleting the file is how the
+        // desired state says "drop it" (what the SQL Server provider's engine does for
+        // every object not in source), so each one becomes a Delete, dropped first.
+        var declared = PgProgrammables.Analyze(state.ProgrammableFiles).Objects
+            .Select(o => o.ObjectName).ToHashSet(StringComparer.Ordinal);
+        var undeclared = await PgLiveProgrammables.ReadUndeclaredAsync(
+            connectionString, schema, declared, cancellationToken);
+
+        IReadOnlyList<RawChange> changes =
+            [.. undeclared.Select(u => new RawChange("Delete", u.ObjectType, u.ObjectName)),
+             .. SnapshotComparer.Compare(desired, live)];
+        IReadOnlyList<DdlSynthesizer.Statement> statements =
+            [.. DropStatements(undeclared), .. DdlSynthesizer.Synthesize(schema, desired, live)];
         var updateScript = statements.Count == 0 ? null : ComposeScript(schema, statements);
 
         // Synthesis is what executes here, so an unsynthesized change is not a
@@ -337,8 +354,18 @@ public sealed class PostgresProvider : IDatabaseProvider
 
         return new Compared(changes, new Snapshots(desired, live), updateScript,
             AttributeStatements(statements, desired, live), messages,
-            SnapshotComparer.TablesWithColumnChanges(desired, live));
+            SnapshotComparer.TablesWithColumnChanges(desired, live), undeclared);
     }
+
+    /// <summary>
+    /// The DROP statements for undeclared programmable objects, in the order
+    /// <see cref="PgLiveProgrammables.ReadUndeclaredAsync"/> returned them — ahead of every
+    /// table statement, because a view that reads a table or a column blocks that table's
+    /// drop or that column's drop (SQLSTATE 2BP01) for as long as it exists.
+    /// </summary>
+    private static IEnumerable<DdlSynthesizer.Statement> DropStatements(
+        IEnumerable<PgLiveProgrammables.Undeclared> undeclared)
+        => undeclared.SelectMany(u => u.DropStatements.Select(sql => new DdlSynthesizer.Statement(u.ObjectName, sql)));
 
     /// <summary>
     /// The per-change slices the plan carries to explain itself — descriptive only:

@@ -7,6 +7,21 @@ change **additively**: consumers must ignore properties they do not know.
 
 ## Unreleased
 
+### Fixed
+
+- **PostgreSQL: a view, function, procedure or trigger whose file is deleted is dropped.**
+  Deleting a programmable object's file is how the desired state says to remove it — what
+  the SQL Server provider already did through its engine. The PostgreSQL comparison read
+  tables only, so the object stayed: `diff` and `status` never mentioned it, and a table it
+  read could not be dropped — an approved plan failed at apply time with SQLSTATE `2BP01`.
+  Undeclared objects in the target schema are now `Drop` actions (`warning` — no data lives
+  in them), dropped before any table statement, a view that reads another ahead of the one
+  it reads, and each routine overload by its own signature. Objects that belong to an
+  extension, and materialized views, are never dropped this way. The redefine history
+  records each drop.
+- **PostgreSQL: a desired state with no table files compares instead of failing.** The
+  shadow schema sent an empty command.
+
 ### Changed
 
 - **PostgreSQL: a gated column drop withholds only itself.** A column the desired state
