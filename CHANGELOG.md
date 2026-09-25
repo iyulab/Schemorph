@@ -30,6 +30,14 @@ change **additively**: consumers must ignore properties they do not know.
   re-created by the redefine stage from its file; the plan's re-definition says so and is
   `warning` (direct grants do not survive a drop). Views reading only unaffected columns
   are left alone.
+- **PostgreSQL: a view that has to be dropped and created again takes its declared readers
+  with it instead of refusing.** When a view's new column list is one `CREATE OR REPLACE VIEW`
+  cannot express — including a column type changing underneath an unchanged view — any
+  other view reading it made `diff` and `apply` refuse (`SCHEMORPH010`) and ask for the
+  readers to be dropped by hand, even when every one of them was declared and nothing about
+  them had changed. The declared readers are now dropped first and re-created from their
+  files after it, in the same transaction. `SCHEMORPH010` remains for an object outside the
+  desired state (another schema's view, a rule, a routine body) and now names it.
 - **PostgreSQL: a view that reads another view, or calls a declared function, no longer
   breaks every later `diff`.** The comparison checks each live view's file against the
   desired tables in a scratch schema, which held tables only, so such a view could not be

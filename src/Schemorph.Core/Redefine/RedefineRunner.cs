@@ -177,7 +177,8 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
         RedefinePlan plan, ProgrammableAnalysis analysis, IReadOnlyList<string>? tablesWithColumnChanges,
         IReadOnlyList<string>? droppedFirst = null)
     {
-        plan = WithDroppedFirst(plan, analysis, droppedFirst);
+        plan = WithDroppedFirst(plan, analysis,
+            [.. droppedFirst ?? Array.Empty<string>(), .. analysis.DroppedByRedefine ?? Array.Empty<string>()]);
         if (tablesWithColumnChanges is not { Count: > 0 })
         {
             return plan;
@@ -227,9 +228,10 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
     }
 
     /// <summary>
-    /// The objects the declarative script drops ahead of its own statements
-    /// (<see cref="CompareResult.ProgrammablesDroppedFirst"/>) are gone by the time this
-    /// strategy runs, so each is re-created — already pending for its own reason, it keeps
+    /// The objects dropped earlier in the apply — by the declarative script ahead of its own
+    /// statements (<see cref="CompareResult.ProgrammablesDroppedFirst"/>), or by another
+    /// object's re-definition (<see cref="ProgrammableAnalysis.DroppedByRedefine"/>) — are
+    /// gone by the time they would be reached, so each is re-created — already pending for its own reason, it keeps
     /// that reason and is marked; otherwise it is added. Never a reconciliation candidate:
     /// "matches live" stops being true the moment the declarative stage runs.
     /// </summary>
@@ -321,8 +323,9 @@ public enum RedefineReason
 public sealed record PendingRedefine(ProgrammableObjectInfo Object, RedefineReason Reason)
 {
     /// <summary>
-    /// The declarative script drops this object ahead of its own statements
-    /// (<see cref="CompareResult.ProgrammablesDroppedFirst"/>); this re-creates it.
+    /// Something earlier in the apply drops this object — the declarative script
+    /// (<see cref="CompareResult.ProgrammablesDroppedFirst"/>) or another object's
+    /// re-definition (<see cref="ProgrammableAnalysis.DroppedByRedefine"/>); this re-creates it.
     /// </summary>
     public bool DroppedFirst { get; init; }
 
@@ -335,10 +338,10 @@ public sealed record PendingRedefine(ProgrammableObjectInfo Object, RedefineReas
                      + (Object.RiskNote is { } note ? " " + note : ""));
 
     private const string DroppedFirstExplanation =
-        "It reads something the declarative change removes or retypes, which the database refuses " +
-        "while it exists — so the declarative script drops it first and it is re-created here from " +
-        "its file; see sql for the exact statement. Privileges granted directly on it do not survive " +
-        "the drop and must be re-granted after apply.";
+        "It is dropped earlier in this apply — it reads something the change removes or retypes, " +
+        "or a view that has to be dropped and created again, which the database refuses while it " +
+        "exists — and is re-created here from its file; see sql for the exact statement. Privileges " +
+        "granted directly on it do not survive the drop and must be re-granted after apply.";
 
     private static string BaseExplanation(RedefineReason reason) => reason switch
     {

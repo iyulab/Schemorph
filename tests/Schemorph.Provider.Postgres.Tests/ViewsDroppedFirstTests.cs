@@ -87,7 +87,7 @@ public sealed class ViewsDroppedFirstTests : IAsyncLifetime
         Assert.Contains($"DROP VIEW IF EXISTS \"{_live.Name}\".\"order_b\";", plan.UpdateScript);
         var view = Assert.Single(plan.Actions, a => a.ObjectName == "order_b");
         Assert.Equal(PlanOperation.Redefine, view.Operation);
-        Assert.Contains("declarative script drops it first", view.Explanation);
+        Assert.Contains("dropped earlier in this apply", view.Explanation);
 
         await ApplyAsync(allowDestructive: true);
 
@@ -167,6 +167,58 @@ public sealed class ViewsDroppedFirstTests : IAsyncLifetime
         await ApplyAsync();
 
         Assert.False((await DiffAsync()).HasChanges);
+    }
+
+    private async Task SeedPairAsync()
+    {
+        await WriteAsync("CREATE TABLE orders (id int PRIMARY KEY, a int NOT NULL, b int NOT NULL);",
+            ("v1", "CREATE VIEW v1 AS SELECT id, b FROM orders;"),
+            ("v2", "CREATE VIEW v2 AS SELECT id FROM v1;"));
+        await ApplyAsync();
+        await PgTestSchema.ExecuteAsync($"""INSERT INTO "{_live.Name}".orders VALUES (1, 2, 3);""");
+    }
+
+    [SkippableFact]
+    public async Task A_view_that_must_be_re_created_takes_its_declared_readers_with_it()
+    {
+        await SeedPairAsync();
+        // v1's column is renamed — a shape CREATE OR REPLACE VIEW cannot express — while
+        // v2, untouched, reads v1. This used to be refused (SCHEMORPH010) with "drop the
+        // dependents yourself".
+        await WriteAsync("CREATE TABLE orders (id int PRIMARY KEY, a int NOT NULL, b int NOT NULL);",
+            ("v1", "CREATE VIEW v1 AS SELECT id, b AS bb FROM orders;"),
+            ("v2", "CREATE VIEW v2 AS SELECT id FROM v1;"));
+
+        var plan = await DiffAsync();
+        var v1 = Assert.Single(plan.Actions, a => a.ObjectName == "v1");
+        Assert.StartsWith($"DROP VIEW IF EXISTS \"{_live.Name}\".\"v2\";", v1.Sql);
+        var v2 = Assert.Single(plan.Actions, a => a.ObjectName == "v2");
+        Assert.Contains("dropped earlier in this apply", v2.Explanation);
+
+        await ApplyAsync();
+
+        Assert.False((await DiffAsync()).HasChanges);
+        Assert.Equal(1, await ScalarAsync<int>("SELECT id FROM v2"));
+    }
+
+    [SkippableFact]
+    public async Task Retyping_a_column_under_a_view_that_another_view_reads_applies()
+    {
+        await SeedPairAsync();
+        // Nothing but a column type changes. The view over it must be re-created, and so must
+        // the view reading that one — this was refused outright, a defect: the user had
+        // changed nothing about either view.
+        await WriteAsync("CREATE TABLE orders (id int PRIMARY KEY, a int NOT NULL, b bigint NOT NULL);",
+            ("v1", "CREATE VIEW v1 AS SELECT id, b FROM orders;"),
+            ("v2", "CREATE VIEW v2 AS SELECT id FROM v1;"));
+
+        await ApplyAsync(allowDestructive: true);
+
+        Assert.False((await DiffAsync()).HasChanges);
+        Assert.Equal("bigint", await ScalarAsync<string>(
+            $"SELECT data_type FROM information_schema.columns WHERE table_schema = '{_live.Name}' " +
+            "AND table_name = 'v1' AND column_name = 'b'"));
+        Assert.Equal(1, await ScalarAsync<int>("SELECT id FROM v2"));
     }
 
     [SkippableFact]

@@ -29,7 +29,7 @@ public sealed class DroppedFirstTests
         Assert.All(result.Pending, p => Assert.True(p.DroppedFirst));
         var action = result.Pending[0].ToPlanAction();
         Assert.Equal(RiskLevel.Warning, action.Risk);
-        Assert.Contains("declarative script drops it first", action.Explanation);
+        Assert.Contains("dropped earlier in this apply", action.Explanation);
         // Untouched: not dropped, still just recorded as matching.
         Assert.Equal("other", Assert.Single(result.Reconcilable).ObjectName);
     }

@@ -87,13 +87,16 @@ public class ViewRedefineDropAndCreateTests
     }
 
     [SkippableFact]
-    public async Task A_dependent_view_is_refused_rather_than_dropped_blindly()
+    public async Task A_dependent_outside_the_desired_state_is_refused_rather_than_dropped_blindly()
     {
         await using var live = await PgTestSchema.CreateAsync("""
             CREATE TABLE t (a int, b int, created_at timestamptz);
             CREATE VIEW v AS SELECT a, b, created_at FROM t;
-            CREATE VIEW v2 AS SELECT * FROM v;
             """);
+        // Another schema's view reads it: not the desired state's to drop, and the plan
+        // would have no way to put it back.
+        await using var other = await PgTestSchema.CreateAsync(
+            $"""CREATE VIEW v2 AS SELECT * FROM "{live.Name}".v;""");
         var url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = live.Name }
             .ConnectionString;
 
@@ -110,12 +113,42 @@ public class ViewRedefineDropAndCreateTests
         Assert.Equal("Error", error.Severity);
         Assert.Equal("SCHEMORPH010", error.Code);
         Assert.Contains("v:", error.Text);
+        Assert.Contains("outside the desired state", error.Text);
         Assert.Contains("CASCADE", error.Text, StringComparison.OrdinalIgnoreCase);
 
         // Refused, not silently guessed — the object's own plan action is
         // untouched (still the ordinary CREATE OR REPLACE it started as).
         var view = Assert.Single(refined.Objects);
         Assert.DoesNotContain("DROP VIEW", view.ApplyScript, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [SkippableFact]
+    public async Task An_undeclared_reader_in_the_schema_is_left_to_the_declarative_drop()
+    {
+        await using var live = await PgTestSchema.CreateAsync("""
+            CREATE TABLE t (a int, b int, created_at timestamptz);
+            CREATE VIEW v AS SELECT a, b, created_at FROM t;
+            CREATE VIEW v2 AS SELECT * FROM v;
+            """);
+        var url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = live.Name }
+            .ConnectionString;
+
+        // v2 has no file: the comparison plans it as a Delete, dropped before any of this
+        // runs. The re-definition neither refuses over it nor takes it on.
+        var analysis = PgProgrammables.Analyze(new[]
+        {
+            new ProgrammableFile("v.sql", "CREATE VIEW v AS SELECT a, b, c, created_at FROM t;"),
+        });
+        var modelTexts = new[] { "CREATE TABLE t (a int, b int, c int, created_at timestamptz);" };
+
+        var refined = await ViewRedefinePlanner.RefineAsync(
+            analysis, modelTexts, url, live.Name, CancellationToken.None);
+
+        Assert.Empty(refined.Messages);
+        var view = Assert.Single(refined.Objects);
+        Assert.StartsWith("DROP VIEW IF EXISTS", view.ApplyScript);
+        Assert.DoesNotContain("v2", view.ApplyScript);
+        Assert.Empty(refined.DroppedByRedefine ?? Array.Empty<string>());
     }
 
     /// <summary>

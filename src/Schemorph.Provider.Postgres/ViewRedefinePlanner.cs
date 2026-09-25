@@ -53,6 +53,8 @@ internal static class ViewRedefinePlanner
 
         var refined = analysis.Objects.ToList();
         var messages = analysis.Messages.ToList();
+        var droppedByRedefine = new List<string>();
+        IReadOnlyList<PgLiveProgrammables.ViewRead>? reads = null;
 
         // Only a view that already exists live needs comparing at all — a
         // brand-new one's "redefinition" is a plain CREATE, unconditionally
@@ -72,7 +74,7 @@ internal static class ViewRedefinePlanner
                     view with { RiskOverride = null, RiskNote = null };
             }
         }
-        if (existingLive.Count == 0) return new ProgrammableAnalysis(refined, messages);
+        if (existingLive.Count == 0) return analysis with { Objects = refined, Messages = messages };
 
         await using var shadow = await ShadowSchema.CreateAsync(connectionString, cancellationToken);
         await shadow.ApplyAsync(desiredModelTexts, sourceSchema: schema, cancellationToken);
@@ -97,29 +99,54 @@ internal static class ViewRedefinePlanner
                 continue;
             }
 
-            if (await HasDependentsAsync(liveConnection, schema, view.ObjectName, cancellationToken))
+            // The views reading this one go with it — dropped ahead of it, re-created after it —
+            // when every one of them is the desired state's to re-create.
+            reads ??= await PgLiveProgrammables.ReadViewReadsAsync(connectionString, schema, cancellationToken);
+            var dependents = ReadersOf(view.ObjectName, reads);
+            var declaredNames = views.Select(v => v.ObjectName).ToHashSet(StringComparer.Ordinal);
+            var blocked = await FirstUndroppableAsync(
+                liveConnection, schema, [.. dependents, view.ObjectName], cancellationToken);
+            if (blocked is not null)
             {
                 messages.Add(new RawMessage("Error", "SCHEMORPH010",
                     $"{view.ObjectName}: CREATE OR REPLACE VIEW cannot express this column " +
-                    "change (rename, reorder, retype, or removal), and another object depends " +
-                    "on this view — automatic DROP+CREATE with CASCADE is not implemented. " +
-                    "Drop the dependents yourself (or restructure to avoid the incompatible " +
+                    "change (rename, reorder, retype, or removal), so the view has to be dropped " +
+                    "and created again — " +
+                    (blocked == view.ObjectName
+                        ? "but an object outside the desired state depends on it"
+                        : $"and with it {blocked}, which reads it, but an object outside the desired state depends on {blocked}") +
+                    " (another schema's view, a rule, a routine body). Automatic CASCADE is not " +
+                    "implemented: drop that object yourself (or restructure to avoid the incompatible " +
                     "change), then re-run."));
                 continue;
             }
 
+            // A reader no file declares is the declarative stage's to drop (a Delete in the
+            // same plan); only the declared ones are this script's to drop and re-create.
+            var declaredDependents = dependents.Where(declaredNames.Contains).ToList();
+            var quotedSchema = DesiredStateRenderer.Quote(schema);
+            // IF EXISTS throughout: the declarative stage may already have dropped any of
+            // them (a view reading what that stage removes goes first — ViewsDroppedFirst).
+            var drops = declaredDependents.Append(view.ObjectName)
+                .Select(v => $"DROP VIEW IF EXISTS {quotedSchema}.{DesiredStateRenderer.Quote(v)};");
             refined[index] = view with
             {
-                // IF EXISTS: the declarative stage may already have dropped it (a view
-                // reading what that stage removes goes first — see ViewsDroppedFirst).
-                ApplyScript = $"DROP VIEW IF EXISTS {DesiredStateRenderer.Quote(schema)}.{DesiredStateRenderer.Quote(view.ObjectName)};\n{view.ApplyScript}",
-                StatementCount = 2,
+                ApplyScript = string.Join("\n", drops) + "\n" + view.ApplyScript,
+                StatementCount = declaredDependents.Count + 2,
                 RiskOverride = RiskLevel.Warning,
-                RiskNote = DropRecreateRiskNote,
+                RiskNote = declaredDependents.Count == 0
+                    ? DropRecreateRiskNote
+                    : DropRecreateWithDependentsRiskNote(declaredDependents),
             };
+            droppedByRedefine.AddRange(declaredDependents);
         }
 
-        return new ProgrammableAnalysis(refined, messages);
+        return analysis with
+        {
+            Objects = refined,
+            Messages = messages,
+            DroppedByRedefine = [.. analysis.DroppedByRedefine ?? Array.Empty<string>(), .. droppedByRedefine.Distinct()],
+        };
     }
 
     /// <summary>
@@ -240,21 +267,63 @@ internal static class ViewRedefinePlanner
         }
     }
 
-    private static async Task<bool> HasDependentsAsync(
-        NpgsqlConnection liveConnection, string schema, string viewName, CancellationToken cancellationToken)
+    private static string DropRecreateWithDependentsRiskNote(IReadOnlyList<string> dependents) =>
+        "The file's column list changed in a way CREATE OR REPLACE VIEW cannot express " +
+        "(rename, reorder, retype, or removal); this plan drops and re-creates the view instead, " +
+        $"and drops the views that read it first ({string.Join(", ", dependents)}) — each is " +
+        "re-created from its own file after this one. Privileges granted directly on any of them " +
+        "do not survive a drop and must be re-granted after apply.";
+
+    /// <summary>
+    /// Every live view reading <paramref name="viewName"/>, directly or through another, in the
+    /// order they can be dropped — a view that reads another ahead of the one it reads.
+    /// </summary>
+    private static IReadOnlyList<string> ReadersOf(string viewName, IReadOnlyList<PgLiveProgrammables.ViewRead> reads)
+    {
+        var readers = new HashSet<string>(StringComparer.Ordinal);
+        var frontier = new Queue<string>([viewName]);
+        while (frontier.Count > 0)
+        {
+            var source = frontier.Dequeue();
+            foreach (var read in reads.Where(r => r.Source == source && r.View != viewName))
+            {
+                if (readers.Add(read.View)) frontier.Enqueue(read.View);
+            }
+        }
+        var edges = reads.Where(r => readers.Contains(r.View) && readers.Contains(r.Source))
+            .Select(r => (r.View, r.Source)).Distinct().ToList();
+        return PgLiveProgrammables.ReadersFirst(readers, edges).ToList();
+    }
+
+    /// <summary>
+    /// Asks the engine whether the given views can be dropped, in order, with nothing else
+    /// going with them — a real <c>DROP ... RESTRICT</c> of each against the live schema,
+    /// rolled back either way, so PostgreSQL's own dependency graph answers (another schema's
+    /// view, a rule, a function body: whatever it knows about). Null when all of them can go;
+    /// otherwise the first one something else still depends on.
+    /// </summary>
+    private static async Task<string?> FirstUndroppableAsync(
+        NpgsqlConnection liveConnection, string schema, IReadOnlyList<string> viewsInDropOrder,
+        CancellationToken cancellationToken)
     {
         await using var transaction = await liveConnection.BeginTransactionAsync(cancellationToken);
         try
         {
-            await using var drop = new NpgsqlCommand(
-                $"DROP VIEW {DesiredStateRenderer.Quote(schema)}.{DesiredStateRenderer.Quote(viewName)} RESTRICT",
-                liveConnection, transaction);
-            await drop.ExecuteNonQueryAsync(cancellationToken);
-            return false;
-        }
-        catch (PostgresException ex) when (ex.SqlState == DependentObjectsStillExist)
-        {
-            return true;
+            foreach (var name in viewsInDropOrder)
+            {
+                await using var drop = new NpgsqlCommand(
+                    $"DROP VIEW {DesiredStateRenderer.Quote(schema)}.{DesiredStateRenderer.Quote(name)} RESTRICT",
+                    liveConnection, transaction);
+                try
+                {
+                    await drop.ExecuteNonQueryAsync(cancellationToken);
+                }
+                catch (PostgresException ex) when (ex.SqlState == DependentObjectsStillExist)
+                {
+                    return name;
+                }
+            }
+            return null;
         }
         finally
         {

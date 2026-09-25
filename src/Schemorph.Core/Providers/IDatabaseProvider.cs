@@ -438,7 +438,16 @@ public sealed record ProgrammableObjectInfo(
 
 public sealed record ProgrammableAnalysis(
     IReadOnlyList<ProgrammableObjectInfo> Objects,
-    IReadOnlyList<RawMessage> Messages);
+    IReadOnlyList<RawMessage> Messages)
+{
+    /// <summary>
+    /// Declared objects another object's re-definition drops on its way (PostgreSQL: the
+    /// views reading a view that must be dropped and created again). Strategy 2 re-creates
+    /// each of them after the object that dropped them, whatever its checksum says — the
+    /// same as <see cref="CompareResult.ProgrammablesDroppedFirst"/>, from the other stage.
+    /// </summary>
+    public IReadOnlyList<string>? DroppedByRedefine { get; init; }
+}
 
 public sealed record ApplyRequest(IDesiredState DesiredState, string ConnectionString);
 
