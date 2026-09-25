@@ -40,6 +40,8 @@ internal static class PgSqlStateHints
                     "schema, or ownership of the object) — grant it, or use a more privileged role.",
         ["42703"] = "References a column that does not exist — check the desired state for a typo, " +
                     "or a statement-ordering issue against a column an earlier statement should have added.",
+        ["42883"] = "Calls a function that does not exist with these argument types — check the desired state " +
+                    "for a typo, a missing function file, or an argument that needs a cast.",
         ["42P01"] = "References a table that does not exist — check the desired state for a typo, " +
                     "or a statement-ordering issue (a referenced table must already exist earlier in the script).",
         ["42710"] = "The object already exists — this can happen when the live database changed after " +

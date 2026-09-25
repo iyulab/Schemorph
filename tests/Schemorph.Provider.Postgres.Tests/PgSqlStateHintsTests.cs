@@ -22,6 +22,7 @@ public class PgSqlStateHintsTests
     [InlineData("40P01")] // deadlock_detected
     [InlineData("42501")] // insufficient_privilege
     [InlineData("42703")] // undefined_column
+    [InlineData("42883")] // undefined_function
     [InlineData("42P01")] // undefined_table
     [InlineData("42710")] // duplicate_object
     [InlineData("42P07")] // duplicate_table

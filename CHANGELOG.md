@@ -30,11 +30,12 @@ change **additively**: consumers must ignore properties they do not know.
   re-created by the redefine stage from its file; the plan's re-definition says so and is
   `warning` (direct grants do not survive a drop). Views reading only unaffected columns
   are left alone.
-- **PostgreSQL: a view that reads another view no longer breaks every later `diff`.** The
-  comparison checks each live view's file against the desired tables in a scratch schema,
-  which held tables only, so the outer view could not be created there: once such a pair
-  was applied, `diff` and `apply` failed with SQLSTATE `42P01` even with nothing changed.
-  The declared views are now created in the scratch schema first, inner before outer.
+- **PostgreSQL: a view that reads another view, or calls a declared function, no longer
+  breaks every later `diff`.** The comparison checks each live view's file against the
+  desired tables in a scratch schema, which held tables only, so such a view could not be
+  created there: once applied, `diff` and `apply` failed with SQLSTATE `42P01` or `42883`
+  even with nothing changed. The declared views, functions and procedures are now created
+  in the scratch schema first, in dependency order. `42883` gains a hint.
 - **An engine error reads the same whichever stage raised it.** A PostgreSQL error hit
   during a re-definition, a migration or a comparison used to reach the output as the raw
   exception text — the SQLSTATE hints applied to the declarative publish only, and a

@@ -147,6 +147,19 @@ public class ViewRedefineDropAndCreateTests
         Assert.DoesNotContain("OR REPLACE", probe, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData("CREATE OR REPLACE FUNCTION f(v int) RETURNS int LANGUAGE sql AS $$ SELECT v $$;")]
+    [InlineData("CREATE OR REPLACE FUNCTION public.f(v int) RETURNS int LANGUAGE sql AS $$ SELECT v $$;")]
+    public void A_routine_created_for_probing_lands_in_the_shadow_however_the_file_named_it(string script)
+    {
+        // Never in the live schema: an unqualified name would follow whatever search_path
+        // the connection has, and a qualified one would name the live schema outright.
+        var shadow = ViewRedefinePlanner.RetargetRoutineForShadow(script, "public", "shadow_x");
+
+        Assert.Contains("FUNCTION shadow_x.f(", shadow);
+        Assert.DoesNotContain("public.", shadow);
+    }
+
     [Fact]
     public void The_probe_lands_in_the_shadow_even_when_the_file_left_its_target_unqualified()
     {

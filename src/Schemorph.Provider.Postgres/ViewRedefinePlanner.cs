@@ -79,7 +79,7 @@ internal static class ViewRedefinePlanner
         await using var shadowConnection = new NpgsqlConnection(connectionString);
         await shadowConnection.OpenAsync(cancellationToken);
         await SetSearchPathAsync(shadowConnection, shadow.Name, cancellationToken);
-        await MaterializeViewsAsync(shadowConnection, schema, shadow.Name, views, cancellationToken);
+        await MaterializeAsync(shadowConnection, schema, shadow.Name, analysis.Objects, cancellationToken);
 
         foreach (var view in views)
         {
@@ -123,20 +123,30 @@ internal static class ViewRedefinePlanner
     }
 
     /// <summary>
-    /// Creates every declared view in the shadow under its own name, a view before the views
-    /// that read it, so a probe of a view that selects from another view resolves it — and
-    /// resolves it as the desired state defines it, not as it stands live. The shadow holds
-    /// only tables otherwise, and a view over a view could never be probed: once applied, its
-    /// desired state could not be compared again. A view that cannot be created here (it calls
-    /// a function the shadow does not have, say) is left out: its own probe, if it needs one,
-    /// reports why, and a view that reads it fails its probe as it did before.
+    /// Creates every declared view, function and procedure in the shadow under its own name, in
+    /// dependency order, so a probe of a view that selects from another view or calls a declared
+    /// function resolves it — and resolves it as the desired state defines it, not as it stands
+    /// live. The shadow holds only tables otherwise, and such a view could never be probed: once
+    /// applied, its desired state could not be compared again. Routine bodies are not checked
+    /// here (<c>check_function_bodies</c> off): a probe needs a routine's signature and result
+    /// type, not what its body reads. Triggers are left out — nothing a view reads. An object
+    /// that cannot be created here is left out too: its own probe, if it needs one, reports why,
+    /// and a view that reads it fails its probe as it did before.
     /// </summary>
-    private static async Task MaterializeViewsAsync(
+    private static async Task MaterializeAsync(
         NpgsqlConnection shadowConnection, string sourceSchema, string shadowSchema,
-        IReadOnlyList<ProgrammableObjectInfo> views, CancellationToken cancellationToken)
+        IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken)
     {
-        var byName = views.ToDictionary(v => v.ObjectName, StringComparer.Ordinal);
-        var remaining = views.Select(v => v.ObjectName).ToHashSet(StringComparer.Ordinal);
+        var candidates = objects.Where(o => o.ObjectType != "DmlTrigger").ToList();
+        if (candidates.Count == 0) return;
+
+        await using (var setting = new NpgsqlCommand("SET check_function_bodies = off", shadowConnection))
+        {
+            await setting.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var byName = candidates.ToDictionary(v => v.ObjectName, StringComparer.Ordinal);
+        var remaining = candidates.Select(v => v.ObjectName).ToHashSet(StringComparer.Ordinal);
         while (remaining.Count > 0)
         {
             // A view is ready once no view it reads is still waiting; a cycle cannot be
@@ -150,7 +160,10 @@ internal static class ViewRedefinePlanner
             foreach (var name in ready)
             {
                 remaining.Remove(name);
-                var sql = RetargetForProbe(byName[name].ApplyScript, name, sourceSchema, shadowSchema);
+                var obj = byName[name];
+                var sql = obj.ObjectType == "View"
+                    ? RetargetForProbe(obj.ApplyScript, name, sourceSchema, shadowSchema)
+                    : RetargetRoutineForShadow(obj.ApplyScript, sourceSchema, shadowSchema);
                 try
                 {
                     await using var create = new NpgsqlCommand(sql, shadowConnection);
@@ -293,6 +306,43 @@ internal static class ViewRedefinePlanner
     /// untouched: routines and types are not in the shadow, and cross-schema
     /// scope is a later slice (ADR-0007).
     /// </summary>
+    /// <summary>
+    /// A function or procedure's idempotent script, re-aimed at the shadow: its own name lands
+    /// in the shadow however the file qualified it, and references to the source schema inside
+    /// it (defaults, a SQL-standard body) follow.
+    /// </summary>
+    internal static string RetargetRoutineForShadow(string createRoutineSql, string sourceSchema, string shadowSchema)
+    {
+        var parsed = Parser.Parse(createRoutineSql);
+        if (parsed.Error is not null || parsed.Value is null
+            || parsed.Value.Stmts.Count != 1 || parsed.Value.Stmts[0].Stmt.CreateFunctionStmt is not { } routine)
+        {
+            throw new InvalidOperationException(
+                "Failed to re-parse a routine's own idempotent redefinition script for probing — " +
+                "this is an internal inconsistency, please report it.");
+        }
+
+        var name = routine.Funcname;
+        if (name.Count == 1)
+        {
+            name.Insert(0, new Node { String = new PgSqlParser.String { Sval = shadowSchema } });
+        }
+        else if (name.Count == 2 && name[0].String is { } qualifier)
+        {
+            qualifier.Sval = shadowSchema;
+        }
+        SchemaRewriter.RetargetQueryReferences(parsed.Value, sourceSchema, shadowSchema);
+
+        var deparsed = Parser.Deparse(parsed.Value);
+        if (deparsed.Error is not null || deparsed.Value is null)
+        {
+            throw new InvalidOperationException(
+                $"Failed to render a probe redefinition of a routine ({deparsed.Error?.Message}) — " +
+                "this is an internal inconsistency, please report it.");
+        }
+        return deparsed.Value;
+    }
+
     internal static string RetargetForProbe(
         string createViewSql, string probeName, string sourceSchema, string shadowSchema)
     {

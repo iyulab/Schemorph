@@ -155,6 +155,21 @@ public sealed class ViewsDroppedFirstTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task A_view_calling_a_declared_function_can_be_compared_again_once_applied()
+    {
+        // Same probe, same gap: the shadow had no functions either, so a view calling one the
+        // desired state declares failed every later diff with 42883.
+        Directory.CreateDirectory(Path.Combine(_dir, "functions"));
+        await File.WriteAllTextAsync(Path.Combine(_dir, "functions", "double_it.sql"),
+            "CREATE FUNCTION double_it(v int) RETURNS int LANGUAGE sql IMMUTABLE AS $$ SELECT v * 2 $$;");
+        await WriteAsync("CREATE TABLE orders (id int PRIMARY KEY, a int NOT NULL);",
+            ("order_doubled", "CREATE VIEW order_doubled AS SELECT id, double_it(a) AS a2 FROM orders;"));
+        await ApplyAsync();
+
+        Assert.False((await DiffAsync()).HasChanges);
+    }
+
+    [SkippableFact]
     public async Task A_view_reading_only_columns_that_stay_is_left_alone()
     {
         await WriteAsync("CREATE TABLE orders (id int PRIMARY KEY, a int NOT NULL, b int NOT NULL);",
