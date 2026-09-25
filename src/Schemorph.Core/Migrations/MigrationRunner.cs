@@ -137,7 +137,7 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
                 // Same reasoning as the redefine stage: the run-once contract
                 // makes "which ones already ran" the operator's first question,
                 // and only this frame knows the answer.
-                throw new MigrationExecutionException(script.FileName, applied.ToList(), ex);
+                throw new MigrationExecutionException(script.FileName, applied.ToList(), ex, EngineErrors.Find(provider, ex));
             }
             applied.Add(script.FileName);
         }
@@ -180,9 +180,15 @@ public sealed class MigrationException(string message, string? hint = null) : Ex
 /// that had already run.
 /// </summary>
 public sealed class MigrationExecutionException(
-    string fileName, IReadOnlyList<string> applied, Exception inner)
-    : Exception($"Migration {fileName} failed: {inner.Message}", inner)
+    string fileName, IReadOnlyList<string> applied, Exception inner, EngineError? engine = null)
+    : Exception($"Migration {fileName} failed: {engine?.Describe() ?? inner.Message}", inner)
 {
+    /// <summary>
+    /// The engine error behind the failure, as the provider described it — null when
+    /// the failure was not the database's (the message then carries the exception's own).
+    /// </summary>
+    public EngineError? Engine { get; } = engine;
+
     /// <summary>The script that failed.</summary>
     public string FileName { get; } = fileName;
 

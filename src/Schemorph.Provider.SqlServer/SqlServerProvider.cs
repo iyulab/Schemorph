@@ -121,6 +121,31 @@ public sealed class SqlServerProvider : IDatabaseProvider
     public Task ExecuteScriptAsync(string connectionString, string script, IApplySession? session = null, CancellationToken cancellationToken = default)
         => ExecuteScriptAsync(connectionString, script, Array.Empty<Schemorph.Core.Ledger.LedgerEntry>(), session, cancellationToken);
 
+    /// <summary>
+    /// A <see cref="SqlException"/> carrying a server error number is the engine rejecting a
+    /// statement. No translations are curated for SQL Server, so the description is the
+    /// engine's number and message, marked untranslated wherever it is shown. A client-side
+    /// failure (no server answered) carries number 0 and is not described here.
+    /// </summary>
+    public EngineError? DescribeEngineError(Exception exception)
+        => exception is SqlException { Number: not 0 } sql
+            ? new EngineError($"Msg {sql.Number}", sql.Message, Hint: null)
+            : null;
+
+    /// <summary>DacFx's relay of a server error: <c>SQL72014</c> whose text names the server's <c>Msg N</c>.</summary>
+    private static readonly System.Text.RegularExpressions.Regex RelayedMsgNumber =
+        new(@"\bMsg (\d+),", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The server error a DacFx publish message relays, coded by the server's own number (the
+    /// same code <see cref="DescribeEngineError"/> gives a <see cref="SqlException"/>), or null for
+    /// DacFx's own messages.
+    /// </summary>
+    private static EngineError? RelayedServerError(string code, string message)
+        => code == "SQL72014" && RelayedMsgNumber.Match(message) is { Success: true } match
+            ? new EngineError($"Msg {match.Groups[1].Value}", message, Hint: null)
+            : null;
+
     public async Task ExecuteScriptAsync(
         string connectionString, string script,
         IReadOnlyList<Schemorph.Core.Ledger.LedgerEntry> ledgerEntries, IApplySession? session = null, CancellationToken cancellationToken = default)
@@ -290,11 +315,28 @@ public sealed class SqlServerProvider : IDatabaseProvider
         var publish = result.PublishChangesToDatabase(cancellationToken);
         if (!publish.Success)
         {
-            messages.AddRange(publish.Errors.Select(e =>
-                new RawMessage(e.MessageType.ToString(), $"{e.Prefix}{e.Number}", e.Message)));
+            // The publish failed against the engine. DacFx reports it among its own
+            // messages — progress lines, "script execution error" framing — and relays the
+            // server's error inside SQL72014 ("... Msg 1505, Level 16 ..."). Only that relay
+            // is the engine talking, so only it is marked; this provider has no curated
+            // translations (unlike PostgreSQL's SQLSTATE hints), so it is marked untranslated
+            // rather than given a guess.
+            EngineError? engine = null;
+            foreach (var e in publish.Errors)
+            {
+                var code = $"{e.Prefix}{e.Number}";
+                if (e.MessageType == DacMessageType.Error && RelayedServerError(code, e.Message) is { } relayed)
+                {
+                    engine ??= relayed;
+                    messages.Add(new RawMessage(e.MessageType.ToString(), code, relayed.Text));
+                    continue;
+                }
+                messages.Add(new RawMessage(e.MessageType.ToString(), code, e.Message));
+            }
+            return new ApplyResult(false, applied, excluded, messages) { Engine = engine };
         }
 
-        return new ApplyResult(publish.Success, applied, excluded, messages);
+        return new ApplyResult(true, applied, excluded, messages);
     }
 
     // ------------------------------------------------------------------ programmables

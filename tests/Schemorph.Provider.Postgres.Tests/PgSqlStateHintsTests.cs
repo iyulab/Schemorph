@@ -8,6 +8,7 @@ namespace Schemorph.Provider.Postgres.Tests;
 public class PgSqlStateHintsTests
 {
     [Theory]
+    [InlineData("2BP01")] // dependent_objects_still_exist
     [InlineData("23502")] // not_null_violation
     [InlineData("23503")] // foreign_key_violation
     [InlineData("23505")] // unique_violation

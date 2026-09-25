@@ -16,6 +16,11 @@ internal sealed class FakeProvider : IDatabaseProvider
     /// <summary>Scripts containing this marker throw, simulating a failing statement.</summary>
     public string? FailOnScriptContaining { get; init; }
 
+    /// <summary>What <see cref="DescribeEngineError"/> answers (default: nothing is an engine error).</summary>
+    public Func<Exception, EngineError?>? EngineErrorDescriber { get; init; }
+
+    public EngineError? DescribeEngineError(Exception exception) => EngineErrorDescriber?.Invoke(exception);
+
     public string Name => "fake";
 
     /// <summary>Overridable so operation tests can exercise the declared atomicity flowing into plans.</summary>

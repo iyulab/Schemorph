@@ -73,7 +73,7 @@ internal sealed class SchemorphTools
             // Without this the exception escapes into the MCP framework's own error
             // shape, and the promise these tools make — one envelope everywhere —
             // is false exactly when it matters.
-            return Error("compare_failed", ex.Message, hint: null);
+            return Unclassified("compare_failed", ex);
         }
     }
 
@@ -102,7 +102,7 @@ internal sealed class SchemorphTools
         }
         catch (Exception ex)
         {
-            return Error("inspect_failed", ex.Message, hint: null);
+            return Unclassified("inspect_failed", ex);
         }
     }
 
@@ -176,7 +176,7 @@ internal sealed class SchemorphTools
         }
         catch (Exception ex)
         {
-            return Error("compare_failed", ex.Message, hint: null);
+            return Unclassified("compare_failed", ex);
         }
     }
 
@@ -253,7 +253,7 @@ internal sealed class SchemorphTools
                             "needed — apply is convergent either way; see docs/failure-semantics.md.",
                         _ => "Re-running is the resume path (apply is convergent); see docs/failure-semantics.md.",
                     };
-                    return Error(stageCode, text, hint, stageLabel, outcome.Committed);
+                    return Error(stageCode, text, hint, stageLabel, outcome.Committed, outcome.Engine);
                 }
 
                 var code = outcome.Stage switch
@@ -268,9 +268,11 @@ internal sealed class SchemorphTools
                         "plan_mismatch" => "Re-run schemorph_diff, review the new plan, and retry with its planHash.",
                         "invalid_desired_state" => "Fix the desired-state files named in the message.",
                         // Publish is transactional — nothing committed — but the
-                        // cause is the engine's, so it is not guessed at here.
+                        // cause is the engine's, so it is not guessed at here: the
+                        // message carries the provider's translation when it has one.
                         _ => null,
-                    });
+                    },
+                    engine: outcome.Engine);
             }
 
             return JsonSerializer.Serialize(new
@@ -310,7 +312,7 @@ internal sealed class SchemorphTools
         }
         catch (Exception ex)
         {
-            return Error("apply_failed", ex.Message, hint: null);
+            return Unclassified("apply_failed", ex);
         }
     }
 
@@ -338,9 +340,20 @@ internal sealed class SchemorphTools
 
     /// <summary>The CLI's error envelope, verbatim — agents see one error shape everywhere.</summary>
     private static string Error(
-        string code, string message, string? hint, string? stage = null, CommittedWork? committed = null) =>
+        string code, string message, string? hint, string? stage = null, CommittedWork? committed = null,
+        EngineErrorInfo? engine = null) =>
         JsonSerializer.Serialize(
             new { error = SchemorphError.Create(code, Redaction.Redact(message), hint) with
-                { Stage = stage, Committed = committed } },
+                { Stage = stage, Committed = committed, Engine = engine } },
             ErrorJson);
+
+    /// <summary>A failure no stage classified: the CLI's <c>FailUnclassified</c>, verbatim.</summary>
+    private static string Unclassified(string code, Exception ex)
+    {
+        var error = SchemorphError.ForUnclassified(code, ex, ProviderSelection.CurrentProviderOrNull);
+        return JsonSerializer.Serialize(
+            new { error = error with
+                { Message = Redaction.Redact(error.Message), Hint = Redaction.RedactOrNull(error.Hint) } },
+            ErrorJson);
+    }
 }

@@ -198,8 +198,11 @@ async Task<int> RunApply(string[] args, string format)
                 ApplyOperation.FailureStage.Redefine or ApplyOperation.FailureStage.Migration
                     or ApplyOperation.FailureStage.Commit =>
                     FailApplyStage(format, outcome),
-                _ => Fail(format, "apply_failed",
-                    Detail(format, outcome.Errors, "Apply reported errors."), SeeMessages(format)),
+                _ => Emit(format, SchemorphError.Create("apply_failed",
+                    Redaction.Redact(Detail(format, outcome.Errors, "Apply reported errors.")), SeeMessages(format)) with
+                    {
+                        Engine = outcome.Engine,
+                    }),
             };
         }
 
@@ -273,10 +276,11 @@ async Task<int> RunApply(string[] args, string format)
     }
     catch (Exception ex)
     {
-        // No hint: the tool has not established a cause here, and a guess that
-        // names the connection string or the schema directory sends the operator
-        // to check something it never checked.
-        return Fail(format, "apply_failed", ex.Message, hint: null);
+        // No guessed hint: unless the provider recognizes an engine error it has a
+        // translation for, the tool has not established a cause here, and a guess
+        // that names the connection string or the schema directory sends the
+        // operator to check something it never checked.
+        return FailUnclassified(format, "apply_failed", ex);
     }
 }
 
@@ -383,7 +387,7 @@ async Task<int> RunStatus(string[] args, string format)
     }
     catch (Exception ex)
     {
-        return Fail(format, "compare_failed", ex.Message, hint: null);   // cause not established — see apply's note
+        return FailUnclassified(format, "compare_failed", ex);   // see apply's note
     }
 }
 
@@ -422,7 +426,7 @@ async Task<int> RunInspect(string[] args, string format)
         // The hint used to name "the connection string and output directory"; a
         // consumer chased both and neither was the cause (the throw came from a
         // temp-workspace write). Silence beats a confident wrong direction.
-        return Fail(format, "inspect_failed", ex.Message, hint: null);
+        return FailUnclassified(format, "inspect_failed", ex);
     }
 }
 
@@ -492,7 +496,7 @@ async Task<int> RunDiff(string[] args, string format)
     }
     catch (Exception ex)
     {
-        return Fail(format, "compare_failed", ex.Message, hint: null);   // cause not established — see apply's note
+        return FailUnclassified(format, "compare_failed", ex);   // see apply's note
     }
 }
 
@@ -560,6 +564,20 @@ static int Fail(string format, string code, string message, string? hint)
     => Emit(format, SchemorphError.Create(code, Redaction.Redact(message), Redaction.RedactOrNull(hint)));
 
 /// <summary>
+/// A failure no stage classified: described by the selected provider when it is an
+/// engine error (docs/errors.md, "Engine errors"), the exception's own message otherwise.
+/// </summary>
+static int FailUnclassified(string format, string code, Exception ex)
+{
+    var error = SchemorphError.ForUnclassified(code, ex, ProviderSelection.CurrentProviderOrNull);
+    return Emit(format, error with
+    {
+        Message = Redaction.Redact(error.Message),
+        Hint = Redaction.RedactOrNull(error.Hint),
+    });
+}
+
+/// <summary>
 /// An apply that failed after the declarative publish committed. The code follows
 /// the stage rather than the verb, and the envelope carries what the stage left
 /// behind — a generic apply_failed here would say the one thing that is not true,
@@ -607,6 +625,7 @@ static int FailApplyStage(string format, ApplyOperation.Outcome outcome)
     {
         Stage = stageLabel,
         Committed = outcome.Committed,
+        Engine = outcome.Engine,
     });
 }
 

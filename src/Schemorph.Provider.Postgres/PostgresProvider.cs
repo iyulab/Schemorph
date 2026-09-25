@@ -214,13 +214,14 @@ public sealed class PostgresProvider : IDatabaseProvider
             catch (PostgresException ex)
             {
                 // The engine's own message, plus a curated hint for the SQLSTATE codes an
-                // apply actually hits in practice — an unrecognized
-                // code passes through with no addition rather than a guessed one.
-                var text = PgSqlStateHints.TryGet(ex.SqlState) is { } hint
-                    ? $"{ex.MessageText} ({hint})"
-                    : ex.MessageText;
+                // apply actually hits in practice — an unrecognized code is marked as
+                // untranslated rather than given a guessed hint.
+                var engine = PgSqlStateHints.Describe(ex);
                 return new ApplyResult(false, Array.Empty<RawChange>(), excluded,
-                    new[] { new RawMessage("Error", ex.SqlState, text) });
+                    new[] { new RawMessage("Error", engine.Code, engine.Text) })
+                {
+                    Engine = engine,
+                };
             }
         }
 
@@ -229,6 +230,15 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     public Task ExecuteScriptAsync(string connectionString, string script, IApplySession? session = null, CancellationToken cancellationToken = default)
         => ExecuteScriptAsync(connectionString, script, Array.Empty<LedgerEntry>(), session, cancellationToken);
+
+    /// <summary>
+    /// A <see cref="PostgresException"/> is the server rejecting a statement — its SQLSTATE,
+    /// primary message, and the curated hint where <see cref="PgSqlStateHints"/> has one.
+    /// Client-side failures (a refused connection, a timeout before the server answered) carry
+    /// no SQLSTATE and are not described here.
+    /// </summary>
+    public EngineError? DescribeEngineError(Exception exception)
+        => exception is PostgresException pg ? PgSqlStateHints.Describe(pg) : null;
 
     /// <summary>
     /// Redefine scripts (P3) carry bare, unqualified object names — the same

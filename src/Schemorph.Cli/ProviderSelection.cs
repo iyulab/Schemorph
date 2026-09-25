@@ -35,4 +35,18 @@ internal readonly record struct ProviderSelection(IDatabaseProvider Provider, IL
                 $"Unknown {EnvironmentVariable} value '{other}'. " +
                 $"Valid values: {SqlServerProvider.ProviderName} (default), {PostgresProvider.ProviderName}."),
         };
+
+    /// <summary>
+    /// The selected provider, or null when the selection itself is invalid, for the
+    /// error paths: they must still produce an envelope when the failure being
+    /// reported is exactly that invalid selection.
+    /// </summary>
+    public static IDatabaseProvider? CurrentProviderOrNull
+    {
+        get
+        {
+            try { return Current.Provider; }
+            catch (InvalidOperationException) { return null; }
+        }
+    }
 }

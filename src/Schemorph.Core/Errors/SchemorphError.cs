@@ -1,3 +1,5 @@
+using Schemorph.Core.Providers;
+
 namespace Schemorph.Core.Errors;
 
 /// <summary>
@@ -35,8 +37,34 @@ public sealed record SchemorphError(string Kind, string Code, string Message, st
     /// </summary>
     public CommittedWork? Committed { get; init; }
 
+    /// <summary>
+    /// When the failure is an error the database engine raised: the engine's own code
+    /// and whether Schemorph translated it into a next step (the message then carries
+    /// the translation; an untranslated one is marked there as such). Absent when the
+    /// failure was not the engine's. Present on any failure code — a comparison, an
+    /// apply stage, an inspect — because the same engine error can surface on each.
+    /// </summary>
+    public EngineErrorInfo? Engine { get; init; }
+
     public static SchemorphError Create(string code, string message, string? hint = null)
         => new(KindOf(code), code, message, hint);
+
+    /// <summary>
+    /// A failure no stage classified, which a surface reports under
+    /// <paramref name="code"/>. When <paramref name="provider"/> recognizes an engine
+    /// error in it, the envelope says so: the engine's code and message, the provider's
+    /// translation as the hint (a cause the tool has established), and
+    /// <see cref="Engine"/>. An engine error with no translation keeps no hint and is
+    /// marked untranslated in the message. Anything else is the exception's own message
+    /// with no hint, as before: a guessed cause is worse than none.
+    /// </summary>
+    public static SchemorphError ForUnclassified(string code, Exception exception, IDatabaseProvider? provider)
+    {
+        var engine = provider is null ? null : EngineErrors.Find(provider, exception);
+        if (engine is null) return Create(code, exception.Message);
+        var message = engine.Translated ? $"{engine.Code}: {engine.Message}" : engine.Describe();
+        return Create(code, message, engine.Hint) with { Engine = engine.Info };
+    }
 
     /// <summary>Single source of truth for the code → kind mapping.</summary>
     public static string KindOf(string code) => code switch

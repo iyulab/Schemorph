@@ -79,6 +79,13 @@ public static class ApplyOperation
         /// </summary>
         public CommittedWork Committed =>
             Durability == Durability.RolledBack ? new CommittedWork(0, 0, 0) : Attempted;
+
+        /// <summary>
+        /// The engine error the failure came from, when it came from the database —
+        /// the envelope's <c>engine</c>. Null on success and for failures that were
+        /// not the engine's (a gate, an invalid desired state).
+        /// </summary>
+        public EngineErrorInfo? Engine { get; init; }
     }
 
     /// <param name="onPlan">
@@ -205,7 +212,14 @@ public static class ApplyOperation
             await ledger.AppendFailureBestEffortAsync(request.ConnectionString, new LedgerEntry(
                 "declarative", "(publish)", "Publish", Checksum: null,
                 Succeeded: false, Detail: WithRollbackNote(errorText, rollbackError)), cancellationToken);
-            return Failure(FailureStage.Publish, messages) with { Plan = plan };
+            // The ledger row above keeps everything; what the caller sees is filtered
+            // exactly as a successful apply's messages are — Schemorph's own bookkeeping
+            // (e.g. the engine announcing the history table as a would-be drop, which the
+            // gate excluded) is not something the user did or can act on.
+            var visibleErrors = messages
+                .Where(m => !LedgerObjects.IsLedgerObject(m.Text))
+                .ToList();
+            return Failure(FailureStage.Publish, visibleErrors) with { Plan = plan, Engine = result.Engine?.Info };
         }
 
         // Every applied change is recorded in the history ledger — the audit
@@ -251,6 +265,7 @@ public static class ApplyOperation
                 Applied = result.AppliedChanges,
                 Redefines = new RedefineRunResult(ex.Redefined, 0, Array.Empty<string>()),
                 Durability = DurabilityAfterRollback(session, rollbackError),
+                Engine = ex.Engine?.Info,
             };
         }
 
@@ -274,6 +289,7 @@ public static class ApplyOperation
                     Migrations = new MigrationRunResult(
                         ex.Applied, 0, Array.Empty<string>(), Array.Empty<RawMessage>()),
                     Durability = DurabilityAfterRollback(session, rollbackError),
+                    Engine = ex.Engine?.Info,
                 };
             }
         }

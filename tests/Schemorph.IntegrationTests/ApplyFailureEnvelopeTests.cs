@@ -112,6 +112,51 @@ public sealed class ApplyFailureEnvelopeTests : IDisposable
         Assert.Equal("invalid_arguments", error.GetProperty("code").GetString());
         Assert.False(error.TryGetProperty("stage", out _));
         Assert.False(error.TryGetProperty("committed", out _));
+        Assert.False(error.TryGetProperty("engine", out _));
+    }
+
+    [SkippableFact]
+    public void A_migration_failure_names_the_server_error_and_marks_it_untranslated()
+    {
+        SeedFailingMigration();
+
+        var result = Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\" " +
+                         $"--migrations \"{MigrationsDir}\" --format json");
+
+        var error = JsonDocument.Parse(result.StdErr).RootElement.GetProperty("error");
+        // 208: invalid object name. SQL Server has no curated translations, so the
+        // envelope says whose words these are instead of passing them off as the tool's.
+        var engine = error.GetProperty("engine");
+        Assert.Equal("Msg 208", engine.GetProperty("code").GetString());
+        Assert.False(engine.GetProperty("translated").GetBoolean());
+        var message = error.GetProperty("message").GetString()!;
+        Assert.Contains("Msg 208: Invalid object name 'dbo.NoSuchTable'.", message);
+        Assert.Contains("untranslated engine error", message);
+    }
+
+    [SkippableFact]
+    public void A_publish_failure_names_the_server_error_inside_the_publish_framing()
+    {
+        Directory.CreateDirectory(Path.Combine(SchemaDir, "tables"));
+        var table = Path.Combine(SchemaDir, "tables", "dbo.Orders.sql");
+        File.WriteAllText(table, "CREATE TABLE dbo.Orders (Id INT NOT NULL PRIMARY KEY, Code INT NOT NULL);");
+        Assert.Equal(0, Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\" --format json").ExitCode);
+        _db.Execute("INSERT INTO dbo.Orders (Id, Code) VALUES (1, 7), (2, 7);");
+
+        // A unique constraint the existing rows violate: the server refuses it mid-publish.
+        File.WriteAllText(table,
+            "CREATE TABLE dbo.Orders (Id INT NOT NULL PRIMARY KEY, Code INT NOT NULL CONSTRAINT UQ_Orders_Code UNIQUE);");
+        var result = Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\" --format json");
+
+        Assert.Equal(1, result.ExitCode);
+        var error = JsonDocument.Parse(result.StdErr).RootElement.GetProperty("error");
+        Assert.Equal("apply_failed", error.GetProperty("code").GetString());
+        // The server's own error number, not the publish's framing around it.
+        Assert.Equal("Msg 1505", error.GetProperty("engine").GetProperty("code").GetString());
+        var message = error.GetProperty("message").GetString()!;
+        Assert.Contains("untranslated engine error", message);
+        // The tool's own history table is bookkeeping, never part of what failed.
+        Assert.DoesNotContain("__SchemorphHistory", message);
     }
 
     public void Dispose()

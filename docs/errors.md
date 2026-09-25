@@ -44,6 +44,38 @@ the four-field object above.
   deliberate: a hint that names something never checked sends the reader after the
   wrong thing, which is worse than saying nothing.
 
+### Engine errors: `engine`
+
+When the failure is an error the database engine raised — a statement it refused, on any
+verb and in any apply stage — the envelope says so:
+
+```json
+{
+  "error": {
+    "kind": "execution",
+    "code": "compare_failed",
+    "message": "42703: column \"Body\" does not exist",
+    "hint": "References a column that does not exist — check the desired state for a typo, or a statement-ordering issue against a column an earlier statement should have added.",
+    "engine": { "code": "42703", "translated": true }
+  }
+}
+```
+
+- **`engine.code`** — the engine's own code: a PostgreSQL SQLSTATE, or `Msg <number>`
+  for SQL Server.
+- **`engine.translated`** — whether Schemorph knows what the code means for a schema
+  operation. When it does, the translation is the `hint` (on an apply stage, whose hint
+  reports what committed, it follows the engine's message instead). When it does not,
+  the message ends with **`untranslated engine error`**: the text is the database's,
+  passed through unchanged, and no hint is guessed — the rule above applies to engine
+  errors too.
+
+Translations are curated per provider for the codes a schema operation actually hits
+(PostgreSQL: constraint violations against existing rows, missing or duplicate objects,
+dependent objects, permissions, locks and timeouts). SQL Server has none yet, so its
+engine errors are always marked untranslated. `engine` is absent when the failure was
+not the engine's.
+
 ### A failed `apply`: `stage` and `committed`
 
 `apply` runs three strategies in order and does **not** roll back across them

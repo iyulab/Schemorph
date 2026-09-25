@@ -91,4 +91,33 @@ public sealed class PostgresCliTests : IDisposable
         var converged = Run($"diff --schema \"{_dir}\"", Url());
         Assert.Equal(0, converged.ExitCode);
     }
+
+    [SkippableFact]
+    public void An_engine_error_during_diff_carries_its_code_and_translation()
+    {
+        Skip.If(ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres CLI tests need a live server.");
+
+        Directory.CreateDirectory(Path.Combine(_dir, "tables"));
+        Directory.CreateDirectory(Path.Combine(_dir, "views"));
+        var table = Path.Combine(_dir, "tables", "Notes.sql");
+        File.WriteAllText(table,
+            $"""CREATE TABLE "{_schema}"."Notes" ("Id" integer NOT NULL PRIMARY KEY, "Body" text NOT NULL);""");
+        File.WriteAllText(Path.Combine(_dir, "views", "NoteBodies.sql"),
+            """CREATE VIEW "NoteBodies" AS SELECT "Body" FROM "Notes";""");
+        Assert.Equal(0, Run($"apply --schema \"{_dir}\"", Url()).ExitCode);
+
+        // The table stops declaring the column its view still reads: the desired state
+        // contradicts itself, and the engine says so when the comparison probes the view.
+        File.WriteAllText(table, $"""CREATE TABLE "{_schema}"."Notes" ("Id" integer NOT NULL PRIMARY KEY);""");
+        var result = Run($"diff --schema \"{_dir}\" --format json", Url());
+
+        Assert.Equal(1, result.ExitCode);
+        var error = JsonDocument.Parse(result.StdErr).RootElement.GetProperty("error");
+        Assert.Equal("compare_failed", error.GetProperty("code").GetString());
+        var engine = error.GetProperty("engine");
+        Assert.Equal("42703", engine.GetProperty("code").GetString());
+        Assert.True(engine.GetProperty("translated").GetBoolean());
+        Assert.Equal("42703: column \"Body\" does not exist", error.GetProperty("message").GetString());
+        Assert.Contains("References a column that does not exist", error.GetProperty("hint").GetString());
+    }
 }

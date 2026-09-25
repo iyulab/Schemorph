@@ -161,6 +161,19 @@ public interface IDatabaseProvider
     /// </summary>
     Task<IReadOnlyList<MigrationLintSignal>> LintMigrationScriptAsync(
         string scriptText, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Dialect knowledge about failures: when <paramref name="exception"/> is an
+    /// error this provider's database engine raised, the engine's code and message,
+    /// plus a translation into what to do next where the provider has one. Null for
+    /// anything that is not an engine error (a bug, a cancelled token, a missing
+    /// file), which the caller reports as it always has. The core and the CLI call
+    /// this at every boundary where a failure reaches the user, so an engine error
+    /// is described the same way whichever stage raised it — declarative publish,
+    /// re-definition, migration, or comparison. Only the exception itself is judged:
+    /// <see cref="EngineErrors.Find"/> is what walks inner exceptions.
+    /// </summary>
+    EngineError? DescribeEngineError(Exception exception) => null;
 }
 
 /// <summary>
@@ -428,4 +441,13 @@ public sealed record ApplyResult(
     bool Success,
     IReadOnlyList<RawChange> AppliedChanges,
     IReadOnlyList<RawChange> ExcludedChanges,
-    IReadOnlyList<RawMessage> Messages);
+    IReadOnlyList<RawMessage> Messages)
+{
+    /// <summary>
+    /// When the publish failed because the database engine rejected a statement: that
+    /// error, as <see cref="IDatabaseProvider.DescribeEngineError"/> would describe it.
+    /// Its text is already among <see cref="Messages"/>; this is what lets the error
+    /// envelope say which engine code it was and whether it was translated.
+    /// </summary>
+    public EngineError? Engine { get; init; }
+}

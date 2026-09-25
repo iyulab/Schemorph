@@ -21,6 +21,20 @@ change **additively**: consumers must ignore properties they do not know.
   records each drop.
 - **PostgreSQL: a desired state with no table files compares instead of failing.** The
   shadow schema sent an empty command.
+- **An engine error reads the same whichever stage raised it.** A PostgreSQL error hit
+  during a re-definition, a migration or a comparison used to reach the output as the raw
+  exception text — the SQLSTATE hints applied to the declarative publish only, and a
+  comparison's message ended in the statement offset (`POSITION: 94`) of SQL the reader
+  never sees. Every stage now shows the SQLSTATE, the engine's message, and the hint where
+  one is curated. `2BP01` (another object still depends on what a statement drops) gains a
+  hint.
+- **A failed publish no longer lists Schemorph's own history table.** The engine's notice
+  that the history table would be dropped — excluded from every plan — appeared among the
+  failure's messages; a successful apply already hid it.
+- **Exit code `2` is documented for `status` too.** `status` exits `2` when there is drift
+  or a migration waiting to run; `docs/errors.md` and the CLI manifest's top-level table
+  described `2` as `diff` only.
+- Three relative links in the documentation pointed at files that do not exist.
 
 ### Changed
 
@@ -44,19 +58,21 @@ change **additively**: consumers must ignore properties they do not know.
 
 ### Added
 
+- **Error envelope: `engine`.** When a failure is an error the database engine raised, the
+  envelope carries `engine: {code, translated}` — the engine's own code (a PostgreSQL
+  SQLSTATE, or `Msg <number>` for SQL Server) and whether Schemorph translated it into a
+  next step. A translated one has the translation as the envelope's `hint` (or in the
+  message, on an apply stage whose hint reports what committed); an untranslated one is
+  marked `untranslated engine error` in the message, so the database's words are never
+  passed off as the tool's. SQL Server has no curated translations yet; a failed publish
+  now names the server's error number instead of the publish framing around it. Absent
+  when the failure was not the engine's.
 - **`SCHEMORPH012` — a column added beside a withheld column drop may be a rename.** The
   column analogue of `SCHEMORPH011`: with the drop withheld, the addition applies alone,
   leaving a new empty column beside the old one that still holds the values. That is the
   first step of an expand/contract migration if it was meant; if the new column is the old
   one renamed, rename it in the database first, then diff again — or copy the values
   across before enabling the drop.
-
-### Fixed
-
-- **Exit code `2` is documented for `status` too.** `status` exits `2` when there is drift
-  or a migration waiting to run; `docs/errors.md` and the CLI manifest's top-level table
-  described `2` as `diff` only.
-- Three relative links in the documentation pointed at files that do not exist.
 
 ### Dependencies
 

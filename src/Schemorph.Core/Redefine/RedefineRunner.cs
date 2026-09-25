@@ -125,7 +125,7 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
                 // What already committed is known HERE and nowhere else — a bare
                 // rethrow discards it, and the caller then cannot say what the
                 // database holds. Carry it out with the failure.
-                throw new RedefineExecutionException(obj.ObjectName, redefined.ToList(), ex);
+                throw new RedefineExecutionException(obj.ObjectName, redefined.ToList(), ex, EngineErrors.Find(provider, ex));
             }
             redefined.Add(obj.ObjectName);
         }
@@ -320,9 +320,15 @@ public sealed class RedefineException(string message) : Exception(message);
 /// can say so instead of reporting a bare error.
 /// </summary>
 public sealed class RedefineExecutionException(
-    string objectName, IReadOnlyList<string> redefined, Exception inner)
-    : Exception($"Re-defining {objectName} failed: {inner.Message}", inner)
+    string objectName, IReadOnlyList<string> redefined, Exception inner, EngineError? engine = null)
+    : Exception($"Re-defining {objectName} failed: {engine?.Describe() ?? inner.Message}", inner)
 {
+    /// <summary>
+    /// The engine error behind the failure, as the provider described it — null when
+    /// the failure was not the database's (the message then carries the exception's own).
+    /// </summary>
+    public EngineError? Engine { get; } = engine;
+
     /// <summary>The object whose script failed.</summary>
     public string ObjectName { get; } = objectName;
 

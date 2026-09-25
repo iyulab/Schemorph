@@ -1,18 +1,24 @@
+using Npgsql;
+using Schemorph.Core.Providers;
+
 namespace Schemorph.Provider.Postgres;
 
 /// <summary>
-/// Curated hints for the PostgreSQL SQLSTATE codes an apply's declarative publish can actually
-/// surface (Appendix A, https://www.postgresql.org/docs/current/errcodes-appendix.html) — not a
-/// translation of the ~300-code catalog. <see cref="PostgresProvider.ApplyAsync"/> previously
-/// passed <c>ex.SqlState</c>/<c>ex.MessageText</c> straight through with no interpretation; this
-/// gives the codes an operator actually hits during schema apply a short, actionable addition,
-/// and leaves everything else untouched — a guessed hint for an unfamiliar code would send the
-/// reader after the wrong thing, which is worse than the raw message alone.
+/// Curated hints for the PostgreSQL SQLSTATE codes a schema operation can actually surface
+/// (Appendix A, https://www.postgresql.org/docs/current/errcodes-appendix.html) — not a
+/// translation of the ~300-code catalog. They apply wherever an engine error reaches the user —
+/// the declarative publish, a re-definition, a migration, a comparison — through
+/// <see cref="Describe"/>, which <see cref="PostgresProvider.DescribeEngineError"/> exposes to the
+/// core. A code with no entry keeps no hint and is shown as untranslated rather than given a
+/// guessed one: a hint for an unfamiliar code would send the reader after the wrong thing, which
+/// is worse than the raw message alone.
 /// </summary>
 internal static class PgSqlStateHints
 {
     private static readonly IReadOnlyDictionary<string, string> ByCode = new Dictionary<string, string>(StringComparer.Ordinal)
     {
+        ["2BP01"] = "Another object — typically a view — still depends on what this statement drops. " +
+                    "Drop or change the dependent object first, then re-run.",
         ["23502"] = "A NOT NULL constraint was added against a column that already has NULLs — " +
                     "backfill the column first, or add it nullable and tighten it once the data is clean.",
         ["23503"] = "A foreign key was added or is being enforced against rows that violate it — " +
@@ -49,4 +55,13 @@ internal static class PgSqlStateHints
 
     /// <summary>The known hint for <paramref name="sqlState"/>, or <c>null</c> for an unrecognized code.</summary>
     public static string? TryGet(string sqlState) => ByCode.GetValueOrDefault(sqlState);
+
+    /// <summary>
+    /// The engine error an exception carries, with its hint when there is one. Uses the
+    /// primary message alone (<see cref="PostgresException.MessageText"/>): the exception's own
+    /// <see cref="Exception.Message"/> appends the statement position, which names an offset in
+    /// SQL the reader never sees.
+    /// </summary>
+    public static EngineError Describe(PostgresException exception)
+        => new(exception.SqlState, exception.MessageText, TryGet(exception.SqlState));
 }
