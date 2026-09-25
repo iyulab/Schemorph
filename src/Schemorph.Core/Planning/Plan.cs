@@ -64,7 +64,14 @@ public sealed record PlanMessage(string Severity, string Code, string Text, stri
 /// see, so the useful answer is what the tool does with it — not which branch
 /// dropped it.
 /// </param>
-public sealed record PlanExclusion(string ObjectName, string Reason);
+/// <param name="Statements">
+/// The withheld statements themselves, when only part of the object's change is
+/// withheld (a gated column drop whose table's other changes still run). The object
+/// then appears both among the plan's actions and here, so its name alone no longer
+/// tells a reader which of its statements are the ones that do not run. Null when the
+/// whole object is excluded — every statement for it is then withheld.
+/// </param>
+public sealed record PlanExclusion(string ObjectName, string Reason, string? Statements = null);
 
 /// <summary>
 /// The plan: every mutating operation is expressible as one of these before execution.
@@ -118,7 +125,7 @@ public sealed record Plan(
     /// additions (consumers must ignore unknown properties); the major version
     /// increments for breaking changes. Independent of the product version.
     /// </summary>
-    public const string CurrentFormatVersion = "1.8";   // 1.8: changes[].statementCount — how many statements an action's sql executes, since changes.Count folds several into one object-level entry (see docs/plan-format.md)
+    public const string CurrentFormatVersion = "1.9";   // 1.9: excluded[].statements — the withheld statements when a gated column drop withholds only itself (see docs/plan-format.md)
 
     public bool HasChanges => Actions.Count > 0;
 

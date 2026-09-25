@@ -52,7 +52,51 @@ public static class PlanBuilder
 
             var script = scripts.GetValueOrDefault(change.ObjectName);
             var (operation, risk) = Classify(change, script);
-            if (risk == RiskLevel.Destructive && !allowDestructive)
+            var verdict = Gate(change, script, allowDestructive);
+            if (verdict == ChangeInclusion.IncludeWithoutDestructive)
+            {
+                // Only the column drop is gated. The rest of the table's change — a column
+                // added beside it, a default changed — loses nothing, and holding it back
+                // with the drop left the desired state's additive half unapplied while a
+                // re-diff reported nothing applicable. The drop is still refused, and still
+                // said so, in the same words as a whole-object refusal.
+                messages.Add(new PlanMessage(
+                    "Warning",
+                    "SCHEMORPH001",
+                    $"Destructive change excluded from plan (enable explicitly to include): " +
+                    $"{operation} {change.ObjectType} {change.ObjectName} — a column the desired state " +
+                    "no longer declares is dropped, and its rows do not survive. Only the column drop " +
+                    "is withheld; the rest of this table's change is in the plan.",
+                    change.ObjectName));
+                excluded.Add(new PlanExclusion(change.ObjectName,
+                    "Column drop gated out of this plan — its rows would not survive. The rest of this " +
+                    "table's change runs. Enable destructive changes explicitly to include the drop.",
+                    script!.DestructiveSql));
+                if (script.AddsColumn)
+                {
+                    // The column analogue of SCHEMORPH011. A rename arrives as an added
+                    // column beside a dropped one, and with the drop withheld the addition
+                    // runs alone: a new, empty column next to the old one that still holds
+                    // the values. That is the first half of expand/contract, which is fine
+                    // if it is what the reader meant — and a surprise if they meant a rename
+                    // and planned to issue it by hand after the apply.
+                    messages.Add(new PlanMessage(
+                        "Warning",
+                        "SCHEMORPH012",
+                        $"{change.ObjectName}: a column is added while a column the desired state no longer " +
+                        "declares is kept. If the added column is the kept one renamed, applying this plan adds " +
+                        "it empty and leaves the values where they are: rename the column in the database first, " +
+                        "then diff again — or, after this apply, copy the values across before enabling the drop.",
+                        change.ObjectName));
+                }
+                actions.Add(new PlanAction(change.ObjectName, change.ObjectType, operation, RiskLevel.Warning,
+                    Sql: script.RemainderSql,
+                    Explanation: Explain(operation, RiskLevel.Warning, script.Rebuild)
+                        + " A column the desired state no longer declares is kept: dropping it is destructive and was not enabled.",
+                    StatementCount: script.RemainderStatementCount));
+                continue;
+            }
+            if (verdict == ChangeInclusion.Exclude)
             {
                 // What is lost differs by shape, and the reviewer is deciding whether to
                 // enable it — so the message says which loss they would be enabling
@@ -61,11 +105,20 @@ public static class PlanBuilder
                     ? "a column the desired state no longer declares is dropped, and its rows do not survive"
                     : "the object it drops holds data";
 
+                // A provider that cannot separate the drop from the rest of the table's
+                // change gates the whole object — so whatever else that change carried is
+                // held back too. The provider counted the statements; saying so is not a guess.
+                var withheldAlongside = script is { DropsColumn: true, StatementCount: > 1 }
+                    && operation == PlanOperation.Alter
+                    ? $" The rest of this table's change ({script.StatementCount - 1} other statement(s)) is " +
+                      "withheld with it: this provider cannot separate the column drop from it."
+                    : "";
+
                 messages.Add(new PlanMessage(
                     "Warning",
                     "SCHEMORPH001",
                     $"Destructive change excluded from plan (enable explicitly to include): " +
-                    $"{operation} {change.ObjectType} {change.ObjectName} — {loss}.",
+                    $"{operation} {change.ObjectType} {change.ObjectName} — {loss}.{withheldAlongside}",
                     change.ObjectName));
                 // Same shape as the ledger above: the engine's script still carries the
                 // statement. The warning says it was gated; this says where to expect it.
@@ -163,17 +216,27 @@ public static class PlanBuilder
     };
 
     /// <summary>
-    /// Apply-time policy: exactly the declarative changes a plan would contain.
-    /// Takes the same attribution <see cref="Build"/> classifies with, because a
-    /// gate that judged less than the plan did would let through what the plan
-    /// gated out — the two must reach the same verdict from the same input.
+    /// The verdict on one declarative change — the single place it is reached. The plan
+    /// is built from it (<see cref="Build"/>) and the apply is gated by it, with the same
+    /// attribution as input, because a gate that judged less than the plan did would let
+    /// through what the plan gated out: the two must reach the same verdict from the same
+    /// input.
     /// </summary>
-    public static bool ShouldInclude(RawChange change, ChangeScript? script, bool allowDestructive)
+    /// <remarks>
+    /// A destructive change is withheld whole unless the provider separated its
+    /// data-losing statements from the rest (<see cref="ChangeScript.DestructiveSql"/>) and
+    /// something remains to run — then only those statements are withheld.
+    /// </remarks>
+    public static ChangeInclusion Gate(RawChange change, ChangeScript? script, bool allowDestructive)
     {
-        if (LedgerObjects.IsLedgerObject(change.ObjectName)) return false;
-        if (RoutesToRedefine(change)) return false;
-        var (_, risk) = Classify(change, script);
-        return risk != RiskLevel.Destructive || allowDestructive;
+        if (LedgerObjects.IsLedgerObject(change.ObjectName)) return ChangeInclusion.Exclude;
+        if (RoutesToRedefine(change)) return ChangeInclusion.Exclude;
+        var (operation, risk) = Classify(change, script);
+        if (risk != RiskLevel.Destructive || allowDestructive) return ChangeInclusion.Include;
+        return operation == PlanOperation.Alter
+            && script is { DestructiveSql: not null, RemainderSql: not null }
+            ? ChangeInclusion.IncludeWithoutDestructive
+            : ChangeInclusion.Exclude;
     }
 
     /// <summary>

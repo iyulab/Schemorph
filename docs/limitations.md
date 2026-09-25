@@ -100,15 +100,21 @@ value agrees that the rename worked, which is why this is worth stating rather
 than leaving to the plan to imply.
 
 What stands between that and a plain `apply` is the destructive gate, on both
-engines: the drop half is classified destructive, so the plan comes back with no
-actions, `SCHEMORPH001` names what was held back, and the column is untouched.
-Renaming costs you a refusal you have to read — which is the intended price, since
-a rename is the easiest way to reach a column removal by accident. It does not look
-like removing anything.
+engines: the drop half is classified destructive, `SCHEMORPH001` names what was
+held back, and the old column is untouched. Renaming costs you a refusal you have
+to read — which is the intended price, since a rename is the easiest way to reach a
+column removal by accident. It does not look like removing anything.
 
-One consequence is easy to miss: the gate is per object, so at table granularity
-the create is safe on its own and applies while the drop is withheld. What is left
-is an empty table beside the full one, and the next diff still reports the drop.
+What the gate holds back differs by engine. **PostgreSQL** withholds only the
+`DROP COLUMN`: the added column loses nothing, so it applies, and what is left is a
+new empty column beside the old one that still holds the values — the first step of
+an expand/contract migration. `SCHEMORPH012` says so. **SQL Server** withholds the
+whole table's change, the addition with it, because its engine publishes a
+difference whole; the plan comes back with no action for that table.
+
+At table granularity both engines behave like PostgreSQL does for columns: the
+create is safe on its own and applies while the drop is withheld. What is left is
+an empty table beside the full one, and the next diff still reports the drop.
 
 That combination — a table created while a table is dropped — is the one shape a
 rename can take that the plan can point at without guessing, so it does:
@@ -128,7 +134,9 @@ the plan can no longer check it against anything.
 **What this means for you:** rename with the engine's own statement — it carries
 the identity the files cannot — and then update the desired state to match. The
 next diff is empty and the values are where you left them. Do the two in the other
-order and the plan will offer to drop the column instead.
+order and the plan will offer to drop the column instead — and on PostgreSQL an
+apply of that plan adds the new column empty. From there, copy the values across
+and then enable the drop, or drop the empty column and rename.
 
 ## Ordering across strategies is documented, not automatic
 

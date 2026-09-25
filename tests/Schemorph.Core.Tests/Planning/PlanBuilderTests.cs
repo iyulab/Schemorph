@@ -148,12 +148,14 @@ public class PlanBuilderTests
     // row of it. Judging from the tuple alone applied it by default.
     [InlineData("Change", "Table", "dbo.Data", false, true, false)]    // column drop gated
     [InlineData("Change", "Table", "dbo.Data", true, true, true)]      // column drop allowed
-    public void ShouldInclude_matches_plan_policy(
+    public void Gate_matches_plan_policy(
         string op, string type, string name, bool allowDestructive, bool dropsColumn, bool expected)
     {
         var script = dropsColumn ? new ChangeScript(name, "-- ddl", Rebuild: false, DropsColumn: true) : null;
 
-        Assert.Equal(expected, PlanBuilder.ShouldInclude(new RawChange(op, type, name), script, allowDestructive));
+        var verdict = PlanBuilder.Gate(new RawChange(op, type, name), script, allowDestructive);
+
+        Assert.Equal(expected ? ChangeInclusion.Include : ChangeInclusion.Exclude, verdict);
     }
 
     /// <summary>
@@ -166,7 +168,7 @@ public class PlanBuilderTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void ShouldInclude_agrees_with_the_plan_it_gates(bool allowDestructive)
+    public void Gate_agrees_with_the_plan_it_gates(bool allowDestructive)
     {
         var change = new RawChange("Change", "Table", "dbo.Data");
         var script = new ChangeScript("dbo.Data", "ALTER TABLE dbo.Data DROP COLUMN Gone;",
@@ -174,9 +176,95 @@ public class PlanBuilderTests
         var compare = new CompareResult([change], [], "ALTER TABLE dbo.Data DROP COLUMN Gone;", [script]);
 
         var plan = PlanBuilder.Build(compare, allowDestructive);
-        var included = PlanBuilder.ShouldInclude(change, script, allowDestructive);
+        var verdict = PlanBuilder.Gate(change, script, allowDestructive);
 
-        Assert.Equal(plan.Actions.Any(a => a.ObjectName == "dbo.Data"), included);
+        Assert.Equal(plan.Actions.Any(a => a.ObjectName == "dbo.Data"), verdict != ChangeInclusion.Exclude);
+    }
+
+    // ---- a gated column drop withholds only itself, when the provider separated it ----
+
+    private const string AddEmail = "ALTER TABLE public.customer ADD COLUMN email varchar(100);";
+    private const string DropPhone = "ALTER TABLE public.customer DROP COLUMN phone;";
+
+    private static ChangeScript SplitScript(string remainder = AddEmail, bool addsColumn = true) => new(
+        "customer", remainder + "\n" + DropPhone, Rebuild: false, DropsColumn: true, StatementCount: 2,
+        DestructiveSql: DropPhone, RemainderSql: remainder, RemainderStatementCount: 1, AddsColumn: addsColumn);
+
+    private static CompareResult SplitCompare(ChangeScript script) =>
+        new([new RawChange("Change", "Table", "customer")], [], script.Sql, [script]);
+
+    [Theory]
+    [InlineData(false, ChangeInclusion.IncludeWithoutDestructive)]
+    [InlineData(true, ChangeInclusion.Include)]
+    public void A_separated_column_drop_is_all_the_gate_withholds(bool allowDestructive, ChangeInclusion expected)
+    {
+        Assert.Equal(expected,
+            PlanBuilder.Gate(new RawChange("Change", "Table", "customer"), SplitScript(), allowDestructive));
+    }
+
+    [Fact]
+    public void Without_a_separation_the_whole_change_is_withheld_and_the_message_says_what_else_went_with_it()
+    {
+        var script = new ChangeScript("dbo.Customer", "ALTER ...; ALTER ...; ALTER ...;",
+            Rebuild: false, DropsColumn: true, StatementCount: 3);
+
+        var plan = PlanBuilder.Build(
+            new CompareResult([new RawChange("Change", "Table", "dbo.Customer")], [], script.Sql, [script]),
+            allowDestructive: false);
+
+        Assert.Empty(plan.Actions);
+        var message = Assert.Single(plan.Messages, m => m.Code == "SCHEMORPH001");
+        Assert.Contains("2 other statement(s)", message.Text);
+        Assert.Null(Assert.Single(plan.Excluded).Statements);
+    }
+
+    [Fact]
+    public void A_gated_column_drop_keeps_the_rest_of_its_tables_change_in_the_plan()
+    {
+        var plan = PlanBuilder.Build(SplitCompare(SplitScript()), allowDestructive: false);
+
+        var action = Assert.Single(plan.Actions);
+        Assert.Equal(PlanOperation.Alter, action.Operation);
+        Assert.Equal(RiskLevel.Warning, action.Risk);
+        Assert.Equal(AddEmail, action.Sql);
+        Assert.Equal(1, action.StatementCount);
+        Assert.False(plan.HasDestructiveChanges);
+
+        // Still refused, still said — in the words a whole-object refusal uses.
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH001" && m.ObjectName == "customer"
+            && m.Text.Contains("Only the column drop is withheld"));
+        // The object is now both executed and excluded, so the exclusion carries the
+        // withheld statement itself: the name alone no longer says which part does not run.
+        var exclusion = Assert.Single(plan.Excluded);
+        Assert.Equal(DropPhone, exclusion.Statements);
+        // Nothing destructive runs, so the included-destructive warning does not fire.
+        Assert.DoesNotContain(plan.Messages, m => m.Code == "SCHEMORPH103");
+    }
+
+    /// <summary>
+    /// With the drop withheld alone, a column added beside it runs by itself — the shape a
+    /// column rename takes. The plan says so only when a column is actually added.
+    /// </summary>
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void An_addition_beside_a_withheld_drop_is_named_as_a_possible_rename(bool addsColumn, bool expected)
+    {
+        var plan = PlanBuilder.Build(
+            SplitCompare(SplitScript("ALTER TABLE public.customer ALTER COLUMN name SET DEFAULT 'x';", addsColumn)),
+            allowDestructive: false);
+
+        Assert.Equal(expected, plan.Messages.Any(m => m.Code == "SCHEMORPH012" && m.ObjectName == "customer"));
+    }
+
+    [Fact]
+    public void The_remainder_is_part_of_the_plans_identity()
+    {
+        var one = PlanBuilder.Build(SplitCompare(SplitScript()), allowDestructive: false);
+        var other = PlanBuilder.Build(SplitCompare(SplitScript(
+            "ALTER TABLE public.customer ADD COLUMN grade integer;")), allowDestructive: false);
+
+        Assert.NotEqual(PlanFingerprint.Compute(one), PlanFingerprint.Compute(other));
     }
 
     [Fact]

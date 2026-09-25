@@ -54,7 +54,9 @@ public interface IDatabaseProvider
     /// <summary>
     /// Apply desired state to the target database. <paramref name="includeChange"/>
     /// is the core's policy hook: the provider mechanically applies exactly the
-    /// changes the core includes (destructive gating, self-exclusion, ...). It is
+    /// changes the core includes (destructive gating, self-exclusion, ...) — and,
+    /// for a change answered <see cref="ChangeInclusion.IncludeWithoutDestructive"/>,
+    /// exactly its <see cref="ChangeScript.RemainderSql"/>. It is
     /// handed the change's <see cref="ChangeScript"/> alongside the change itself,
     /// because a <see cref="RawChange"/> is three strings — object, type, operation
     /// — and the destructive criterion is about what the change *does to data*,
@@ -73,7 +75,7 @@ public interface IDatabaseProvider
     /// </summary>
     Task<ApplyResult> ApplyAsync(
         ApplyRequest request,
-        Func<RawChange, ChangeScript?, bool> includeChange,
+        Func<RawChange, ChangeScript?, ChangeInclusion> includeChange,
         Action<CompareResult>? onChangesComputed = null,
         IApplySession? session = null,
         CancellationToken cancellationToken = default);
@@ -159,6 +161,25 @@ public interface IDatabaseProvider
     /// </summary>
     Task<IReadOnlyList<MigrationLintSignal>> LintMigrationScriptAsync(
         string scriptText, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// The core's verdict on one change, handed to the provider at apply time
+/// (<see cref="IDatabaseProvider.ApplyAsync"/>) — the same verdict the plan was built with.
+/// </summary>
+public enum ChangeInclusion
+{
+    /// <summary>Carry the change out in full.</summary>
+    Include,
+    /// <summary>Carry out nothing of it.</summary>
+    Exclude,
+    /// <summary>
+    /// Carry out the change without its data-losing statements
+    /// (<see cref="ChangeScript.DestructiveSql"/>): exactly <see cref="ChangeScript.RemainderSql"/>.
+    /// Only ever answered for a change whose provider separated the two — a provider that
+    /// never reports <see cref="ChangeScript.DestructiveSql"/> never receives it.
+    /// </summary>
+    IncludeWithoutDestructive,
 }
 
 /// <summary>Provably-present risky constructs in a migration script (dialect judgment).</summary>
@@ -310,6 +331,20 @@ public sealed record CompareResult(
 /// executes. Computed by the provider that built <see cref="Sql"/> — dialect
 /// knowledge stays there instead of core re-parsing attributed text. Defaults
 /// to 1 (the common case: one object, one statement).
+/// <paramref name="DestructiveSql"/>: the statements of <see cref="Sql"/> that
+/// <see cref="DropsColumn"/> is about — the ones that lose data — when the provider
+/// can separate them from the rest of the change. <paramref name="RemainderSql"/> is
+/// that rest, what runs when the destructive statements are withheld, and
+/// <paramref name="RemainderStatementCount"/> counts it. Separating them is what
+/// lets a gated column drop withhold only itself: without it, one removed column
+/// holds back every other change to its table — an added column included — because
+/// the gate can only answer for the whole object. Both null whenever the provider
+/// cannot prove the split, or nothing would remain; the change is then gated whole,
+/// as before. A dialect judgment like every other signal here.
+/// <paramref name="AddsColumn"/>: the change adds a column the live table does not
+/// have. Beside a column drop that is the shape a column rename takes, and once the
+/// drop can be withheld alone the addition runs by itself — so the plan has to be
+/// able to say so.
 /// </summary>
 public sealed record ChangeScript(
     string ObjectName,
@@ -319,7 +354,11 @@ public sealed record ChangeScript(
     bool RecreatesColumn = false,
     bool DropsColumn = false,
     bool DropsIndex = false,
-    int StatementCount = 1);
+    int StatementCount = 1,
+    string? DestructiveSql = null,
+    string? RemainderSql = null,
+    int RemainderStatementCount = 0,
+    bool AddsColumn = false);
 
 public sealed record RawChange(string Operation, string ObjectType, string ObjectName);
 

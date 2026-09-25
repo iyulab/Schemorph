@@ -142,7 +142,7 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     public async Task<ApplyResult> ApplyAsync(
         ApplyRequest request,
-        Func<RawChange, ChangeScript?, bool> includeChange,
+        Func<RawChange, ChangeScript?, ChangeInclusion> includeChange,
         Action<CompareResult>? onChangesComputed = null,
         IApplySession? session = null,
         CancellationToken cancellationToken = default)
@@ -172,15 +172,21 @@ public sealed class PostgresProvider : IDatabaseProvider
         // the apply executes something the plan gated out.
         var attributed = compared.ChangeScripts
             .ToDictionary(s => s.ObjectName, StringComparer.Ordinal);
-        bool Include(RawChange c) => includeChange(c, attributed.GetValueOrDefault(c.ObjectName));
+        var verdicts = compared.Changes.ToDictionary(
+            c => c, c => includeChange(c, attributed.GetValueOrDefault(c.ObjectName)));
 
-        var included = compared.Changes.Where(Include).ToList();
-        var excluded = compared.Changes.Where(c => !Include(c)).ToList();
+        var included = compared.Changes.Where(c => verdicts[c] != ChangeInclusion.Exclude).ToList();
+        var excluded = compared.Changes.Where(c => verdicts[c] == ChangeInclusion.Exclude).ToList();
+        var withoutDestructive = compared.Changes
+            .Where(c => verdicts[c] == ChangeInclusion.IncludeWithoutDestructive).ToList();
 
         // Exclusions are masked BEFORE synthesis: an excluded drop keeps its
         // table out of the script entirely, rather than being filtered out of
-        // statements after the fact.
-        var (desired, live) = MaskExclusions(compared.Snapshots.Desired, compared.Snapshots.Live, excluded);
+        // statements after the fact. A change kept without its destructive part is
+        // masked the same way, one level down: the columns it would drop stay on the
+        // desired side, so synthesis never writes their DROP.
+        var (desired, live) = MaskExclusions(
+            compared.Snapshots.Desired, compared.Snapshots.Live, excluded, withoutDestructive);
         var statements = DdlSynthesizer.Synthesize(TargetSchemaOf(request.ConnectionString), desired, live);
 
         // Masking removes work, so it can also remove the statement an included
@@ -352,7 +358,7 @@ public sealed class PostgresProvider : IDatabaseProvider
 
         return statements
             .GroupBy(s => s.ObjectName, StringComparer.Ordinal)
-            .Select(g => new ChangeScript(
+            .Select(g => WithDestructiveSplit(g.ToList(), new ChangeScript(
                 g.Key,
                 string.Join("\n", g.Select(s => s.Sql)),
                 Rebuild: false,
@@ -368,8 +374,48 @@ public sealed class PostgresProvider : IDatabaseProvider
                 DropsIndex: DropsIndex(
                     desiredByName.GetValueOrDefault(g.Key),
                     liveByName.GetValueOrDefault(g.Key)),
-                StatementCount: g.Count()))
+                StatementCount: g.Count(),
+                AddsColumn: AddsColumn(
+                    desiredByName.GetValueOrDefault(g.Key),
+                    liveByName.GetValueOrDefault(g.Key)))))
             .ToList();
+    }
+
+    /// <summary>
+    /// Whether this table gains a column the live one does not have. Only for a table on
+    /// both sides — a created table's columns are not additions to anything.
+    /// </summary>
+    private static bool AddsColumn(PgTable? want, PgTable? have)
+    {
+        if (want is null || have is null) return false;
+
+        var existing = have.Columns.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
+
+        return want.Columns.Any(c => !existing.Contains(c.Name));
+    }
+
+    /// <summary>
+    /// Separates the statements that lose data from the rest of one table's change —
+    /// exact, because synthesis marked them as it wrote them
+    /// (<see cref="DdlSynthesizer.Statement.LosesData"/>). The remainder is the same
+    /// statements in the same order that synthesis produces when those columns are kept
+    /// (<see cref="MaskExclusions"/>), which is what makes the plan's text and the apply's
+    /// text one thing. Nothing is split when nothing would remain: the change is then
+    /// gated whole, and a split would promise an action with no statement.
+    /// </summary>
+    private static ChangeScript WithDestructiveSplit(
+        IReadOnlyList<DdlSynthesizer.Statement> statements, ChangeScript script)
+    {
+        var losing = statements.Where(s => s.LosesData).ToList();
+        var remainder = statements.Where(s => !s.LosesData).ToList();
+        if (losing.Count == 0 || remainder.Count == 0) return script;
+
+        return script with
+        {
+            DestructiveSql = string.Join("\n", losing.Select(s => s.Sql)),
+            RemainderSql = string.Join("\n", remainder.Select(s => s.Sql)),
+            RemainderStatementCount = remainder.Count,
+        };
     }
 
     /// <summary>
@@ -516,25 +562,38 @@ public sealed class PostgresProvider : IDatabaseProvider
         string.Join("\n", statements.Select(s => s.Sql));
 
     private static (IReadOnlyList<PgTable> Desired, IReadOnlyList<PgTable> Live) MaskExclusions(
-        IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live, IReadOnlyList<RawChange> excluded)
+        IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live,
+        IReadOnlyList<RawChange> excluded, IReadOnlyList<RawChange> withoutDestructive)
     {
-        if (excluded.Count == 0) return (desired, live);
+        if (excluded.Count == 0 && withoutDestructive.Count == 0) return (desired, live);
 
         var excludedNames = excluded.Select(c => c.ObjectName).ToHashSet(StringComparer.Ordinal);
+        var keepColumnsOf = withoutDestructive.Select(c => c.ObjectName).ToHashSet(StringComparer.Ordinal);
         var liveByName = live.ToDictionary(t => t.Name, StringComparer.Ordinal);
 
         // An excluded Add vanishes from the desired side; an excluded Delete
         // vanishes from the live side; an excluded Change keeps the live shape
         // on the desired side. In every case: no statement is synthesized.
+        // A change kept without its destructive part keeps only the columns it
+        // would drop: the desired table gains them back, so no DROP COLUMN is
+        // synthesized and everything else about the table still is.
         var maskedDesired = desired
             .Where(t => !(excludedNames.Contains(t.Name) && !liveByName.ContainsKey(t.Name)))
-            .Select(t => excludedNames.Contains(t.Name) ? liveByName[t.Name] : t)
+            .Select(t => excludedNames.Contains(t.Name) ? liveByName[t.Name]
+                : keepColumnsOf.Contains(t.Name) ? WithUndeclaredColumnsKept(t, liveByName[t.Name])
+                : t)
             .ToList();
         var maskedLive = live
             .Where(t => !excludedNames.Contains(t.Name) || maskedDesired.Any(d => d.Name == t.Name))
             .ToList();
 
         return (maskedDesired, maskedLive);
+    }
+
+    private static PgTable WithUndeclaredColumnsKept(PgTable want, PgTable have)
+    {
+        var declared = want.Columns.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
+        return want with { Columns = [.. want.Columns, .. have.Columns.Where(c => !declared.Contains(c.Name))] };
     }
 
     /// <summary>P4: dialect judgment delegated to <see cref="PgMigrationLinter"/>.</summary>

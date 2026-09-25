@@ -140,12 +140,14 @@ public class ColumnDropGateTests : IAsyncLifetime
 
     /// <summary>
     /// A column being added and one being removed reach the plan as one entry on
-    /// one table. The gate is per object, so it withholds both — and the message
-    /// has to be readable enough that a reviewer understands the safe half is
-    /// waiting on the unsafe one rather than having silently failed.
+    /// one table. Only the removal loses anything, so only the removal is gated: the
+    /// addition runs beside it. Held back together — as they once were, because the
+    /// gate could only answer for the whole object — the desired state's safe half
+    /// stayed unapplied while a re-diff reported nothing applicable, and code built
+    /// against the new column met a table without it.
     /// </summary>
     [SkippableFact]
-    public async Task A_safe_change_sharing_the_table_waits_for_the_gate_with_it()
+    public async Task A_safe_change_sharing_the_table_runs_while_the_column_drop_waits()
     {
         await File.WriteAllTextAsync(Path.Combine(_schemaDir, "tables", "Workspaces.sql"), $"""
             CREATE TABLE "{_live.Name}"."Workspaces" (
@@ -159,16 +161,41 @@ public class ColumnDropGateTests : IAsyncLifetime
 
         var gated = await DiffOperation.RunAsync(_provider, _ledger, _schemaDir, _url, allowDestructive: false);
         Assert.True(gated.Success, string.Join("; ", gated.Errors.Select(e => e.Text)));
-        Assert.Empty(gated.Plan!.Actions);
 
+        var action = Assert.Single(gated.Plan!.Actions);
+        Assert.Equal(RiskLevel.Warning, action.Risk);
+        Assert.Contains("ADD COLUMN", action.Sql!);
+        Assert.DoesNotContain("DROP COLUMN", action.Sql!);
+        Assert.False(gated.Plan.HasDestructiveChanges);
+        var exclusion = Assert.Single(gated.Plan.Excluded);
+        Assert.Contains("DROP COLUMN \"Notes\"", exclusion.Statements!);
+        Assert.Contains(gated.Plan.Messages, m => m.Code == "SCHEMORPH001" && m.ObjectName == "Workspaces");
+
+        // The apply must run exactly the reviewed remainder: the plan it recomputes from
+        // its own masked synthesis has to hash the same, or it refuses.
         var outcome = await ApplyOperation.RunAsync(_provider, _ledger,
-            new ApplyOperation.Request(_schemaDir, _url));
+            new ApplyOperation.Request(_schemaDir, _url,
+                ExpectedPlanHash: PlanFingerprint.Compute(gated.Plan)));
         Assert.True(outcome.Success, string.Join("; ", outcome.Errors.Select(e => e.Text)));
 
-        // Neither half ran: the addition is held back with the removal, not applied
-        // beside it. Masking the object is what keeps apply and plan identical.
+        // The claim is about data: the addition landed, the removed column and its rows did not go.
+        Assert.Equal(1, await Columns("Tier"));
         Assert.Equal(1, await Columns("Notes"));
-        Assert.Equal(0, await Columns("Tier"));
+        Assert.Equal("keep me", await Scalar<string>("SELECT \"Notes\" FROM \"Workspaces\" LIMIT 1"));
+
+        // Everything but the drop has settled: a re-diff holds no action, only the refusal.
+        var rediff = await DiffOperation.RunAsync(_provider, _ledger, _schemaDir, _url, allowDestructive: false);
+        Assert.True(rediff.Success, string.Join("; ", rediff.Errors.Select(e => e.Text)));
+        Assert.Empty(rediff.Plan!.Actions);
+        Assert.Contains(rediff.Plan.Messages, m => m.Code == "SCHEMORPH001");
+
+        // And the drop, once enabled, completes it.
+        var allowed = await DiffOperation.RunAsync(_provider, _ledger, _schemaDir, _url, allowDestructive: true);
+        var drop = await ApplyOperation.RunAsync(_provider, _ledger,
+            new ApplyOperation.Request(_schemaDir, _url, AllowDestructive: true,
+                ExpectedPlanHash: PlanFingerprint.Compute(allowed.Plan!)));
+        Assert.True(drop.Success, string.Join("; ", drop.Errors.Select(e => e.Text)));
+        Assert.Equal(0, await Columns("Notes"));
     }
 
     /// <summary>

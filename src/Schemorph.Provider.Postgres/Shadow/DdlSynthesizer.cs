@@ -27,8 +27,16 @@ internal static class DdlSynthesizer
     /// one table, which is what lets the caller check its own work: a change the
     /// comparison reported and synthesis produced no statement for is an internal
     /// disagreement, and the apply must not report it as done.
+    /// <para>
+    /// <c>LosesData</c> marks the one statement shape whose rows nothing
+    /// recomputes: dropping a column the desired state no longer declares. It is set
+    /// where that decision is made, from the model, so the column a generation
+    /// expression re-creates (also a <c>DROP COLUMN</c> in the text) is not marked —
+    /// its new values are the expression's output. The mark is what lets a gated drop
+    /// withhold only itself instead of its whole table's change.
+    /// </para>
     /// </summary>
-    public sealed record Statement(string ObjectName, string Sql);
+    public sealed record Statement(string ObjectName, string Sql, bool LosesData = false);
 
     public static IReadOnlyList<Statement> Synthesize(
         string targetSchema, IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live)
@@ -173,7 +181,9 @@ internal static class DdlSynthesizer
         {
             if (!wantNames.Contains(column.Name))
             {
-                Add($"ALTER TABLE {qualified} DROP COLUMN {DesiredStateRenderer.Quote(column.Name)};");
+                statements.Add(new Statement(want.Name,
+                    $"ALTER TABLE {qualified} DROP COLUMN {DesiredStateRenderer.Quote(column.Name)};",
+                    LosesData: true));
             }
         }
     }

@@ -39,7 +39,7 @@ public sealed class CoreLoopTests : IDisposable
     private async Task<ApplyResult> Apply(
         string schemaDir, bool allowDestructive = false, Action<CompareResult>? onChangesComputed = null) =>
         await _provider.ApplyAsync(new ApplyRequest(await LoadAsync(schemaDir), _db.Url),
-            (c, script) => PlanBuilder.ShouldInclude(c, script, allowDestructive), onChangesComputed);
+            (c, script) => PlanBuilder.Gate(c, script, allowDestructive), onChangesComputed);
 
     private async Task<ProgrammableAnalysis> AnalyzeAsync(string schemaDir) =>
         await _provider.AnalyzeProgrammablesAsync(await LoadAsync(schemaDir));

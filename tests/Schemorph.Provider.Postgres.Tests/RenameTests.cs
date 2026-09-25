@@ -104,19 +104,25 @@ public class RenameTests : IAsyncLifetime
         Assert.Contains("DROP COLUMN", diff.UpdateScript!);
         Assert.DoesNotContain("RENAME", diff.UpdateScript!, StringComparison.OrdinalIgnoreCase);
 
-        // Which means the destructive gate sees it, and holds the whole table back.
-        Assert.Empty(diff.Plan!.Actions);
+        // The destructive gate sees the drop and withholds it — only it: the addition
+        // loses nothing and runs, exactly as a created table runs beside a withheld
+        // table drop. The plan names the shape, because the reader may mean a rename.
+        var action = Assert.Single(diff.Plan!.Actions);
+        Assert.DoesNotContain("DROP COLUMN", action.Sql!);
         Assert.Contains(diff.Plan.Messages, m => m.Code == "SCHEMORPH001");
+        Assert.Contains(diff.Plan.Messages, m => m.Code == "SCHEMORPH012" && m.ObjectName == "Workspaces");
         Assert.Contains(diff.Plan.Excluded, e => e.ObjectName == "Workspaces");
 
         var outcome = await ApplyOperation.RunAsync(_provider, _ledger,
-            new ApplyOperation.Request(_schemaDir, _url));
+            new ApplyOperation.Request(_schemaDir, _url, ExpectedPlanHash: PlanFingerprint.Compute(diff.Plan)));
         Assert.True(outcome.Success, string.Join("; ", outcome.Errors.Select(e => e.Text)));
-        Assert.Empty(outcome.Applied);
 
+        // The first half of expand/contract: the new column is there and empty, and the
+        // values are untouched in the old one — copy them, then enable the drop.
         Assert.Equal(1, await Columns("Notes"));
-        Assert.Equal(0, await Columns("Remarks"));
+        Assert.Equal(1, await Columns("Remarks"));
         Assert.Equal("keep me", await Scalar<string>("SELECT \"Notes\" FROM \"Workspaces\" LIMIT 1"));
+        Assert.Equal(1L, await Scalar<long>("SELECT count(*) FROM \"Workspaces\" WHERE \"Remarks\" IS NULL"));
     }
 
     /// <summary>

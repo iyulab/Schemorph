@@ -49,7 +49,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
     public Task<IApplySession?> BeginApplySessionAsync(string connectionString, CancellationToken cancellationToken = default)
         => Task.FromResult<IApplySession?>(null);
 
-    public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, ChangeScript?, bool> includeChange, Action<CompareResult>? onChangesComputed = null, IApplySession? session = null, CancellationToken cancellationToken = default)
+    public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, ChangeScript?, ChangeInclusion> includeChange, Action<CompareResult>? onChangesComputed = null, IApplySession? session = null, CancellationToken cancellationToken = default)
         => Task.Run(() => Apply(request, includeChange, onChangesComputed, cancellationToken), cancellationToken);
 
     public Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(IDesiredState desiredState, CancellationToken cancellationToken = default)
@@ -220,7 +220,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
     // ------------------------------------------------------------------ apply
 
-    private static ApplyResult Apply(ApplyRequest request, Func<RawChange, ChangeScript?, bool> includeChange, Action<CompareResult>? onChangesComputed, CancellationToken cancellationToken)
+    private static ApplyResult Apply(ApplyRequest request, Func<RawChange, ChangeScript?, ChangeInclusion> includeChange, Action<CompareResult>? onChangesComputed, CancellationToken cancellationToken)
     {
         var state = SqlServerDesiredState.From(request.DesiredState);
         using var session = ComparisonSession.Open(state, request.ConnectionString, cancellationToken);
@@ -258,7 +258,17 @@ public sealed class SqlServerProvider : IDatabaseProvider
         foreach (var difference in result.Differences)
         {
             var change = ToRawChange(difference);
-            if (includeChange(change, attributed.GetValueOrDefault(change.ObjectName)))
+            var verdict = includeChange(change, attributed.GetValueOrDefault(change.ObjectName));
+            // A partial verdict is only ever answered for a change whose slice separated its
+            // destructive statements, which this provider never reports: DacFx publishes a
+            // difference whole. Reaching it here would mean the plan promised a split this
+            // apply cannot carry out — refuse rather than run either half silently.
+            if (verdict == ChangeInclusion.IncludeWithoutDestructive)
+            {
+                throw new InvalidOperationException(
+                    $"The plan withholds only part of {change.ObjectName}'s change, which the SQL Server provider cannot carry out.");
+            }
+            if (verdict == ChangeInclusion.Include)
             {
                 applied.Add(change);
             }

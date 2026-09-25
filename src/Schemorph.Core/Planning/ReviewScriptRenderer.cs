@@ -114,6 +114,16 @@ public static class ReviewScriptRenderer
             {
                 sb.AppendLine($" *   {Redaction.Redact(e.ObjectName)}");
                 sb.AppendLine($" *     {Redaction.Redact(e.Reason)}");
+                // Part of this object's change runs, so its name finds statements that
+                // execute too — quote exactly the ones that do not.
+                if (e.Statements is { } withheld)
+                {
+                    sb.AppendLine(" *     Not executed:");
+                    foreach (var line in withheld.Split('\n'))
+                    {
+                        sb.AppendLine($" *       {Redaction.Redact(line.TrimEnd('\r'))}");
+                    }
+                }
             }
             sb.AppendLine(" *");
             sb.AppendLine(" * Anything NOT listed here does run. A DROP you cannot find above is a");

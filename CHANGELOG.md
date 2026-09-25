@@ -5,6 +5,48 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Changed
+
+- **PostgreSQL: a gated column drop withholds only itself.** A column the desired state
+  no longer declares is dropped by an `ALTER` of its table, and the destructive gate used
+  to answer for the whole table — so one removed column held back every other change to
+  it, a column added beside it included. The desired state's additive half stayed
+  unapplied, and a re-diff reported "No applicable changes" with exit code 0 while the
+  columns it declared were missing. The plan now carries the table's change without the
+  `DROP COLUMN` statements: the action is `warning`, its `sql` is what runs, and
+  `SCHEMORPH001` still names the withheld drop. With `--allow-destructive` nothing
+  changes. SQL Server still gates the whole table (the engine publishes a difference
+  whole); its `SCHEMORPH001` now says how many other statements were held back with the
+  drop.
+- **Plan format 1.9: `excluded[].statements`.** When only part of an object's change is
+  withheld, the object appears both among `changes` and in `excluded`, so its name no
+  longer says which statements do not run — this field quotes them, and the review
+  document lists them under *NOT EXECUTED*. Null when the whole object is excluded.
+  Additive; `planHash` changes only for plans that now withhold part of a change instead
+  of all of it — they execute something different.
+
+### Added
+
+- **`SCHEMORPH012` — a column added beside a withheld column drop may be a rename.** The
+  column analogue of `SCHEMORPH011`: with the drop withheld, the addition applies alone,
+  leaving a new empty column beside the old one that still holds the values. That is the
+  first step of an expand/contract migration if it was meant; if the new column is the old
+  one renamed, rename it in the database first, then diff again — or copy the values
+  across before enabling the drop.
+
+### Fixed
+
+- **Exit code `2` is documented for `status` too.** `status` exits `2` when there is drift
+  or a migration waiting to run; `docs/errors.md` and the CLI manifest's top-level table
+  described `2` as `diff` only.
+- Three relative links in the documentation pointed at files that do not exist.
+
+### Dependencies
+
+- `Microsoft.SqlServer.DacFx` 170.5.96, `Microsoft.Extensions.Hosting` 10.0.12.
+
 ## 0.14.4 — 2026-09-24
 
 ### Added
