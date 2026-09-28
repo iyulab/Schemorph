@@ -69,6 +69,50 @@ public sealed class PgEngineErrorTranslationTests : IAsyncLifetime
         Assert.Contains("still depends on what this statement drops", message.Text);
     }
 
+    /// <summary>
+    /// The engine names the dependents only in its <c>Detail</c>, which carries row values in other
+    /// errors and is not shown. The provider asks the catalog instead, for the objects the apply was
+    /// changing — so the reader learns what to drop or change without re-running anything.
+    /// </summary>
+    [SkippableFact]
+    public async Task A_blocked_drop_names_the_view_that_still_reads_the_column()
+    {
+        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+
+        _other = await PgTestSchema.CreateAsync(
+            $"""CREATE VIEW "DocNames" AS SELECT "Name" FROM "{_live.Name}"."Doc";""");
+        await WriteTableAsync("\"Id\" integer NOT NULL");
+
+        var outcome = await ApplyOperation.RunAsync(
+            _provider, _ledger, new ApplyOperation.Request(_schemaDir, _url, AllowDestructive: true));
+
+        var text = Assert.Single(outcome.Errors).Text;
+        Assert.Contains($"view \"{_other.Name}\".\"DocNames\"", text);
+        Assert.Contains("\"Doc\".\"Name\"", text);
+    }
+
+    [SkippableFact]
+    public async Task A_blocked_table_drop_names_the_foreign_key_that_still_references_it()
+    {
+        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+
+        _other = await PgTestSchema.CreateAsync(
+            $"""CREATE TABLE "Line" ("Id" integer PRIMARY KEY, "DocId" integer CONSTRAINT "FK_Line_Doc" REFERENCES "{_live.Name}"."Doc" ("Id"));""");
+        // An empty desired state: the apply drops "Doc", which the other schema's key still references.
+        File.Delete(Path.Combine(_schemaDir, "tables", "Doc.sql"));
+        await File.WriteAllTextAsync(Path.Combine(_schemaDir, "tables", "Keep.sql"),
+            $"""CREATE TABLE "{_live.Name}"."Keep" ("Id" integer NOT NULL);""");
+
+        var outcome = await ApplyOperation.RunAsync(
+            _provider, _ledger, new ApplyOperation.Request(_schemaDir, _url, AllowDestructive: true));
+
+        Assert.False(outcome.Success);
+        var text = Assert.Single(outcome.Errors).Text;
+        Assert.Contains("2BP01", Assert.Single(outcome.Errors).Code);
+        Assert.Contains("\"FK_Line_Doc\"", text);
+        Assert.Contains($"\"{_other.Name}\".\"Line\"", text);
+    }
+
     [SkippableFact]
     public async Task A_code_with_no_translation_is_marked_untranslated_in_the_migration_stage()
     {

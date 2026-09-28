@@ -5,6 +5,17 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Changed
+
+- **PostgreSQL: a drop the engine refuses (`2BP01`) names what still depends on it.** The engine lists
+  the dependents only in the error's detail, which Schemorph does not request (for other errors it holds
+  row values). The provider now asks the catalog for the views and foreign keys that depend on the
+  relations the apply was changing, and appends them to the hint — e.g. `view "reports"."DocNames" (on
+  "Doc"."Name")`, `foreign key "FK_Line_Doc" on "sales"."Line" (references "Doc")`. The code, the
+  message and the error envelope's shape are unchanged; a failed lookup leaves the hint as before.
+
 ## 0.15.0 — 2026-09-28
 
 ### Fixed

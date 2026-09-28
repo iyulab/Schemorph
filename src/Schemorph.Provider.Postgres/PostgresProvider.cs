@@ -220,6 +220,17 @@ public sealed class PostgresProvider : IDatabaseProvider
                 // apply actually hits in practice — an unrecognized code is marked as
                 // untranslated rather than given a guessed hint.
                 var engine = PgSqlStateHints.Describe(ex);
+                // A refused drop: name what still depends on the relations this apply changes — the
+                // engine puts that only in the withheld Detail (see PgDependents).
+                if (ex.SqlState == "2BP01")
+                {
+                    var dependents = await PgDependents.FindAsync(request.ConnectionString,
+                        TargetSchemaOf(request.ConnectionString),
+                        statements.Select(s => s.ObjectName).Distinct(StringComparer.Ordinal).ToList(),
+                        cancellationToken);
+                    if (dependents.Count > 0)
+                        engine = engine with { Hint = PgDependents.AppendTo(engine.Hint, dependents) };
+                }
                 return new ApplyResult(false, Array.Empty<RawChange>(), excluded,
                     new[] { new RawMessage("Error", engine.Code, engine.Text) })
                 {
