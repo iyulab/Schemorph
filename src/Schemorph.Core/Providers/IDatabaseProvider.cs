@@ -380,7 +380,15 @@ public sealed record ChangeScript(
 
 public sealed record RawChange(string Operation, string ObjectType, string ObjectName);
 
-public sealed record RawMessage(string Severity, string Code, string Text);
+/// <param name="Engine">
+/// The engine error behind the message, when the message reports one — so the error envelope
+/// carries the same machine-readable code and translation flag whichever stage the engine
+/// error surfaced in (docs/errors.md, "Engine errors").
+/// </param>
+public sealed record RawMessage(
+    string Severity, string Code, string Text,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    EngineErrorInfo? Engine = null);
 
 /// <summary>One desired-state programmable object, in Schemorph terms.</summary>
 /// <param name="FileText">

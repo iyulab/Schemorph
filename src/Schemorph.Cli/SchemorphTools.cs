@@ -59,7 +59,8 @@ internal sealed class SchemorphTools
                 var badState = result.Stage == DiffOperation.FailureStage.DesiredState;
                 return Error(badState ? "invalid_desired_state" : "compare_failed",
                     string.Join("; ", result.Errors.Select(m => $"{m.Code}: {m.Text}")),
-                    badState ? "Fix the desired-state files named in the message." : null);
+                    badState ? "Fix the desired-state files named in the message." : null,
+                    engine: EngineErrors.FirstIn(result.Errors));
             }
 
             return PlanRenderer.ToJson(result.Plan!);
@@ -141,7 +142,8 @@ internal sealed class SchemorphTools
             {
                 var code = result.Stage == DiffOperation.FailureStage.DesiredState ? "invalid_desired_state" : "compare_failed";
                 return Error(code, string.Join("; ", result.Errors.Select(m => $"{m.Code}: {m.Text}")),
-                    "Fix the desired-state files or verify the connection.");
+                    "Fix the desired-state files or verify the connection.",
+                    engine: EngineErrors.FirstIn(result.Errors));
             }
 
             var status = result.Status!;
@@ -272,7 +274,7 @@ internal sealed class SchemorphTools
                         // message carries the provider's translation when it has one.
                         _ => null,
                     },
-                    engine: outcome.Engine);
+                    engine: outcome.Engine ?? EngineErrors.FirstIn(outcome.Errors));
             }
 
             return JsonSerializer.Serialize(new

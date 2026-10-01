@@ -191,7 +191,8 @@ async Task<int> RunApply(string[] args, string format)
             {
                 ApplyOperation.FailureStage.DesiredState =>
                     Fail(format, "invalid_desired_state",
-                        Detail(format, outcome.Errors, "Desired state is invalid."), SeeMessages(format)),
+                        Detail(format, outcome.Errors, "Desired state is invalid."), SeeMessages(format),
+                        EngineErrors.FirstIn(outcome.Errors)),
                 ApplyOperation.FailureStage.PlanMismatch =>
                     Fail(format, "plan_mismatch", outcome.Errors[0].Text,
                         "Re-run diff, review the new plan, and pass its hash with --expect-plan."),
@@ -320,7 +321,8 @@ async Task<int> RunStatus(string[] args, string format)
                 badState ? "invalid_desired_state" : "compare_failed",
                 Detail(format, result.Errors,
                     badState ? "Desired state is invalid." : "Comparison reported errors."),
-                SeeMessages(format));
+                SeeMessages(format),
+                EngineErrors.FirstIn(result.Errors));
         }
 
         var status = result.Status!;
@@ -462,7 +464,8 @@ async Task<int> RunDiff(string[] args, string format)
                 badState ? "invalid_desired_state" : "compare_failed",
                 Detail(format, result.Errors,
                     badState ? "Desired state is invalid." : "Comparison reported errors."),
-                SeeMessages(format));
+                SeeMessages(format),
+                EngineErrors.FirstIn(result.Errors));
         }
 
         var plan = result.Plan!;
@@ -560,8 +563,9 @@ static void EchoMessage(RawMessage m, bool toError = true)
 // The error envelope contract ({kind, code, message, hint} + the optional
 // apply-only stage/committed) lives in the core (SchemorphError, docs/errors.md);
 // this is only its rendering.
-static int Fail(string format, string code, string message, string? hint)
-    => Emit(format, SchemorphError.Create(code, Redaction.Redact(message), Redaction.RedactOrNull(hint)));
+static int Fail(string format, string code, string message, string? hint, EngineErrorInfo? engine = null)
+    => Emit(format, SchemorphError.Create(code, Redaction.Redact(message), Redaction.RedactOrNull(hint))
+        with { Engine = engine });
 
 /// <summary>
 /// A failure no stage classified: described by the selected provider when it is an

@@ -287,7 +287,8 @@ internal static class ViewRedefinePlanner
     internal static RawMessage ProbeFailed(ProgrammableObjectInfo view, EngineError engine) =>
         new("Error", "SCHEMORPH013",
             $"{view.ObjectName} ({view.FilePath}): the view's file cannot be created against the desired " +
-            $"state, so its column change cannot be checked — {engine.Code}: {engine.Text}");
+            $"state, so its column change cannot be checked — {engine.Code}: {engine.Text}",
+            engine.Info);
 
     private static string DropRecreateWithDependentsRiskNote(IReadOnlyList<string> dependents) =>
         "The file's column list changed in a way CREATE OR REPLACE VIEW cannot express " +

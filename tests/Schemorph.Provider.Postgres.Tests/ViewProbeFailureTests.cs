@@ -38,6 +38,7 @@ public class ViewProbeFailureTests
         Assert.Equal("SCHEMORPH013", error.Code);
         Assert.StartsWith("v2 (views/v2.sql):", error.Text);
         Assert.Contains("42703: column \"bb\" does not exist", error.Text);
+        Assert.Equal(new Schemorph.Core.Providers.EngineErrorInfo("42703", Translated: true), error.Engine);
 
         // The other view's probe is unaffected — one bad file does not hide what the rest would do.
         var v1 = refined.Objects.Single(o => o.ObjectName == "v1");

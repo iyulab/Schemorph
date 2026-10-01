@@ -21,7 +21,10 @@ change **additively**: consumers must ignore properties they do not know.
   database has a desired definition that does not build — a typo, a column or function the desired state
   does not declare — `diff` and `apply` failed as `compare_failed` with only the engine's message, which
   says what is missing but not in which file. They now fail as `invalid_desired_state` with `SCHEMORPH013`:
-  the view, its file, then the engine's code and message. Every other view is still checked.
+  the view, its file, then the engine's code and message. The envelope's `engine` field still carries the
+  engine's code and whether it was translated — a plan message that reports an engine error now carries it
+  wherever the error surfaces, on `diff`, `status` and `apply` and their MCP tools. Every other view is still
+  checked.
 
 ### Changed
 

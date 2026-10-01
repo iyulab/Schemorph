@@ -49,6 +49,10 @@ public static class EngineErrors
     /// type (a failed re-definition, a failed migration) carries the engine error
     /// inside it, and an <see cref="AggregateException"/> may too.
     /// </summary>
+    /// <summary>The engine error the first message that carries one reports, if any.</summary>
+    public static EngineErrorInfo? FirstIn(IEnumerable<RawMessage> messages)
+        => messages.Select(m => m.Engine).FirstOrDefault(e => e is not null);
+
     public static EngineError? Find(IDatabaseProvider provider, Exception? exception)
     {
         for (var current = exception; current is not null; current = current.InnerException)

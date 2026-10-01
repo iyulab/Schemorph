@@ -215,6 +215,7 @@ public sealed class PgEngineErrorTranslationTests : IAsyncLifetime
         Assert.Equal("SCHEMORPH013", error.Code);
         Assert.Contains("42703: column \"Name\" does not exist", error.Text);
         Assert.DoesNotContain("POSITION", error.Text);
+        Assert.Equal(new EngineErrorInfo("42703", Translated: true), error.Engine);
         Assert.Contains("References a column that does not exist", error.Text);
     }
 }

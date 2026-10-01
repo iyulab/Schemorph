@@ -108,16 +108,21 @@ public sealed class PostgresCliTests : IDisposable
 
         // The table stops declaring the column its view still reads: the desired state
         // contradicts itself, and the engine says so when the comparison probes the view.
+        // That is the file's fault, so it is reported as one — naming the view and its file —
+        // and the engine's code still rides in the envelope's machine-readable slot.
         File.WriteAllText(table, $"""CREATE TABLE "{_schema}"."Notes" ("Id" integer NOT NULL PRIMARY KEY);""");
         var result = Run($"diff --schema \"{_dir}\" --format json", Url());
 
         Assert.Equal(1, result.ExitCode);
         var error = JsonDocument.Parse(result.StdErr).RootElement.GetProperty("error");
-        Assert.Equal("compare_failed", error.GetProperty("code").GetString());
+        Assert.Equal("invalid_desired_state", error.GetProperty("code").GetString());
         var engine = error.GetProperty("engine");
         Assert.Equal("42703", engine.GetProperty("code").GetString());
         Assert.True(engine.GetProperty("translated").GetBoolean());
-        Assert.Equal("42703: column \"Body\" does not exist", error.GetProperty("message").GetString());
-        Assert.Contains("References a column that does not exist", error.GetProperty("hint").GetString());
+        var message = error.GetProperty("message").GetString();
+        Assert.StartsWith("SCHEMORPH013: NoteBodies (", message);
+        Assert.Contains("NoteBodies.sql", message);
+        Assert.Contains("42703: column \"Body\" does not exist", message);
+        Assert.Contains("References a column that does not exist", message);
     }
 }
