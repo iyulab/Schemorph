@@ -49,7 +49,7 @@ internal static class ViewRedefinePlanner
 
         await using var liveConnection = new NpgsqlConnection(connectionString);
         await liveConnection.OpenAsync(cancellationToken);
-        await SetSearchPathAsync(liveConnection, schema, cancellationToken);
+        await SetSearchPathAsync(liveConnection, cancellationToken, schema);
 
         var refined = analysis.Objects.ToList();
         var messages = analysis.Messages.ToList();
@@ -80,7 +80,11 @@ internal static class ViewRedefinePlanner
         await shadow.ApplyAsync(desiredModelTexts, sourceSchema: schema, cancellationToken);
         await using var shadowConnection = new NpgsqlConnection(connectionString);
         await shadowConnection.OpenAsync(cancellationToken);
-        await SetSearchPathAsync(shadowConnection, shadow.Name, cancellationToken);
+        // The shadow first, so every object the desired state declares resolves to its desired
+        // shape; then the target schema, so a name the desired state does not declare — a function
+        // an extension installed there, say — resolves exactly as it will when apply runs (apply's
+        // search_path is the target schema alone). Unqualified CREATEs land in the first entry.
+        await SetSearchPathAsync(shadowConnection, cancellationToken, shadow.Name, schema);
         await MaterializeAsync(shadowConnection, schema, shadow.Name, analysis.Objects, cancellationToken);
 
         foreach (var view in views)
@@ -205,10 +209,10 @@ internal static class ViewRedefinePlanner
     }
 
     private static async Task SetSearchPathAsync(
-        NpgsqlConnection connection, string schema, CancellationToken cancellationToken)
+        NpgsqlConnection connection, CancellationToken cancellationToken, params string[] schemas)
     {
         await using var command = new NpgsqlCommand(
-            $"SET search_path TO {DesiredStateRenderer.Quote(schema)}", connection);
+            $"SET search_path TO {string.Join(", ", schemas.Select(DesiredStateRenderer.Quote))}", connection);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 

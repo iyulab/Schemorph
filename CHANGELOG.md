@@ -7,6 +7,16 @@ change **additively**: consumers must ignore properties they do not know.
 
 ## Unreleased
 
+### Fixed
+
+- **PostgreSQL: a view that calls an extension's function can be diffed and changed.** Before re-defining a
+  view that already exists, `diff` builds the new definition in a scratch schema to compare columns. That
+  schema held only what the desired state declares, so a function an extension installed in the target
+  schema (`digest()` from `pgcrypto`, say) was not found there: every `diff` and `apply` failed with `42883`
+  once such a view existed. The scratch schema now falls back to the target schema for names the desired
+  state does not declare — the same place `apply` looks — while declared tables, views and functions still
+  resolve to their desired shape.
+
 ### Changed
 
 - **PostgreSQL: a refused drop (`2BP01`) also names the functions, triggers and policies that block it.**
