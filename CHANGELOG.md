@@ -5,6 +5,18 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Changed
+
+- **PostgreSQL: a refused drop (`2BP01`) also names the functions, triggers and policies that block it.**
+  0.15.1 listed views and foreign keys. Three more kinds of object hold a normal dependency that stops a
+  drop: a function whose SQL-standard body (`BEGIN ATOMIC` or `RETURN`) reads the relation or column —
+  `function "reports"."FirstName"(fallback text) (on "Doc"."Name")`; a trigger that fires on updates of the
+  column; a row-level security policy whose expression reads it — `policy "NamedOnly" on "Doc" (on
+  "Doc"."Name")`. A PL/pgSQL body is not tracked by the engine and blocks nothing. Code, message and
+  envelope shape are unchanged.
+
 ## 0.15.1 — 2026-09-28
 
 ### Changed

@@ -91,6 +91,54 @@ public sealed class PgEngineErrorTranslationTests : IAsyncLifetime
         Assert.Contains("\"Doc\".\"Name\"", text);
     }
 
+    /// <summary>
+    /// A function whose SQL-standard body reads the column is a dependency the engine tracks, as a
+    /// view is — it blocks the drop the same way and has to be named the same way.
+    /// </summary>
+    [SkippableFact]
+    public async Task A_blocked_drop_names_the_function_whose_body_reads_the_column()
+    {
+        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+
+        _other = await PgTestSchema.CreateAsync(
+            $"""CREATE FUNCTION "FirstName"(fallback text) RETURNS text LANGUAGE sql RETURN (SELECT "Name" FROM "{_live.Name}"."Doc" LIMIT 1);""");
+        await WriteTableAsync("\"Id\" integer NOT NULL");
+
+        var outcome = await ApplyOperation.RunAsync(
+            _provider, _ledger, new ApplyOperation.Request(_schemaDir, _url, AllowDestructive: true));
+
+        Assert.Equal(new EngineErrorInfo("2BP01", Translated: true), outcome.Engine);
+        var text = Assert.Single(outcome.Errors).Text;
+        Assert.Contains($"function \"{_other.Name}\".\"FirstName\"(fallback text)", text);
+        Assert.Contains("(on \"Doc\".\"Name\")", text);
+    }
+
+    /// <summary>
+    /// A row-level security policy on the table itself whose expression reads the column: it lives with
+    /// the table, outside any file, and blocks the column's drop.
+    /// </summary>
+    [SkippableFact]
+    public async Task A_blocked_drop_names_the_policy_whose_expression_reads_the_column()
+    {
+        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+
+        await using (var connection = new NpgsqlConnection(_url))
+        {
+            await connection.OpenAsync();
+            await using var command = new NpgsqlCommand(
+                $"""CREATE POLICY "NamedOnly" ON "{_live.Name}"."Doc" USING ("Name" IS NOT NULL);""", connection);
+            await command.ExecuteNonQueryAsync();
+        }
+        await WriteTableAsync("\"Id\" integer NOT NULL");
+
+        var outcome = await ApplyOperation.RunAsync(
+            _provider, _ledger, new ApplyOperation.Request(_schemaDir, _url, AllowDestructive: true));
+
+        Assert.Equal(new EngineErrorInfo("2BP01", Translated: true), outcome.Engine);
+        var text = Assert.Single(outcome.Errors).Text;
+        Assert.Contains("policy \"NamedOnly\" on \"Doc\" (on \"Doc\".\"Name\")", text);
+    }
+
     [SkippableFact]
     public async Task A_blocked_table_drop_names_the_foreign_key_that_still_references_it()
     {
