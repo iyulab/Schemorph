@@ -17,6 +17,12 @@ change **additively**: consumers must ignore properties they do not know.
   state does not declare — the same place `apply` looks — while declared tables, views and functions still
   resolve to their desired shape.
 
+- **PostgreSQL: a view file that cannot be built names itself (`SCHEMORPH013`).** When a view already in the
+  database has a desired definition that does not build — a typo, a column or function the desired state
+  does not declare — `diff` and `apply` failed as `compare_failed` with only the engine's message, which
+  says what is missing but not in which file. They now fail as `invalid_desired_state` with `SCHEMORPH013`:
+  the view, its file, then the engine's code and message. Every other view is still checked.
+
 ### Changed
 
 - **PostgreSQL: a refused drop (`2BP01`) also names the functions, triggers and policies that block it.**

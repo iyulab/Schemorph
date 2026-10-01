@@ -91,7 +91,20 @@ internal static class ViewRedefinePlanner
         {
             if (!existingLive.TryGetValue(view.ObjectName, out var live)) continue;
 
-            var desired = await ProbeColumnsAsync(shadowConnection, schema, shadow.Name, view, cancellationToken);
+            List<(string Name, string Type)> desired;
+            try
+            {
+                desired = await ProbeColumnsAsync(shadowConnection, schema, shadow.Name, view, cancellationToken);
+            }
+            catch (PostgresException ex)
+            {
+                // The scratch schema holds the desired state and nothing the target schema does not
+                // already offer apply, so a view that cannot be built there is a fault in its file —
+                // a typo, a column or function that is not declared. Name the file: the engine's own
+                // message says what is missing, never where.
+                messages.Add(ProbeFailed(view, PgSqlStateHints.Describe(ex)));
+                continue;
+            }
             var index = refined.FindIndex(o => o.ObjectName == view.ObjectName);
 
             if (IsCompatiblePrefix(desired, live))
@@ -270,6 +283,11 @@ internal static class ViewRedefinePlanner
             await transaction.RollbackAsync(cancellationToken);
         }
     }
+
+    internal static RawMessage ProbeFailed(ProgrammableObjectInfo view, EngineError engine) =>
+        new("Error", "SCHEMORPH013",
+            $"{view.ObjectName} ({view.FilePath}): the view's file cannot be created against the desired " +
+            $"state, so its column change cannot be checked — {engine.Code}: {engine.Text}");
 
     private static string DropRecreateWithDependentsRiskNote(IReadOnlyList<string> dependents) =>
         "The file's column list changed in a way CREATE OR REPLACE VIEW cannot express " +

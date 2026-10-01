@@ -192,7 +192,7 @@ public sealed class PgEngineErrorTranslationTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task A_comparison_that_throws_is_described_without_the_statement_offset()
+    public async Task A_view_file_the_comparison_cannot_build_is_described_without_the_statement_offset()
     {
         Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
@@ -206,14 +206,15 @@ public sealed class PgEngineErrorTranslationTests : IAsyncLifetime
         await File.WriteAllTextAsync(Path.Combine(_schemaDir, "views", "DocNames.sql"),
             """CREATE VIEW "DocNames" AS SELECT "Name" FROM "Doc";""");
 
-        var thrown = await Record.ExceptionAsync(() =>
-            DiffOperation.RunAsync(_provider, _ledger, _schemaDir, _url, allowDestructive: false));
+        // A fault in the desired state, reported as one — naming the file — rather than thrown
+        // as the whole comparison's failure.
+        var diff = await DiffOperation.RunAsync(_provider, _ledger, _schemaDir, _url, allowDestructive: false);
 
-        Assert.NotNull(thrown);
-        var error = SchemorphError.ForUnclassified("compare_failed", thrown, _provider);
-        Assert.Equal(new EngineErrorInfo("42703", Translated: true), error.Engine);
-        Assert.StartsWith("42703: column \"Name\" does not exist", error.Message);
-        Assert.DoesNotContain("POSITION", error.Message);
-        Assert.Contains("References a column that does not exist", error.Hint);
+        Assert.Equal(DiffOperation.FailureStage.DesiredState, diff.Stage);
+        var error = Assert.Single(diff.Errors);
+        Assert.Equal("SCHEMORPH013", error.Code);
+        Assert.Contains("42703: column \"Name\" does not exist", error.Text);
+        Assert.DoesNotContain("POSITION", error.Text);
+        Assert.Contains("References a column that does not exist", error.Text);
     }
 }
