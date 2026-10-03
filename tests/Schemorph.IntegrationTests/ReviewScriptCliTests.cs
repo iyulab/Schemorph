@@ -51,6 +51,46 @@ public sealed class ReviewScriptCliTests : IDisposable
             "CREATE VIEW dbo.VOrders AS SELECT Id, Total FROM dbo.Orders;");
     }
 
+    /// <summary>
+    /// A target an earlier apply wrote a history ledger into — every target after its first apply.
+    /// The engine compares the whole database, so its update script carries statements for the ledger
+    /// table the desired state does not declare; the plan must name it as not executed, the review
+    /// document must say so above the script, the hash must still be the gate's, and the apply must
+    /// leave the ledger and its history in place.
+    /// </summary>
+    [SkippableFact]
+    public void A_ledger_from_an_earlier_apply_is_named_as_not_executed_and_survives_the_gated_apply()
+    {
+        SeedSchema();
+        Assert.Equal(0, Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\"").ExitCode);
+        var historyRows = _db.Scalar<int>("SELECT COUNT(*) FROM dbo.__SchemorphHistory");
+        Assert.True(historyRows > 0);
+
+        // A second change, reviewed against the target that now holds the ledger.
+        File.WriteAllText(Path.Combine(SchemaDir, "tables", "dbo.Orders.sql"),
+            "CREATE TABLE dbo.Orders (Id INT NOT NULL PRIMARY KEY, Total DECIMAL(18,2) NOT NULL, Note NVARCHAR(50) NULL);");
+
+        var json = JsonDocument.Parse(
+            Run($"diff --url \"{_db.Url}\" --schema \"{SchemaDir}\" --format json").StdOut).RootElement;
+        var planHash = json.GetProperty("planHash").GetString()!;
+        Assert.Contains(json.GetProperty("excluded").EnumerateArray(),
+            e => e.GetProperty("objectName").GetString() == "dbo.__SchemorphHistory");
+        Assert.DoesNotContain(json.GetProperty("changes").EnumerateArray(),
+            c => c.GetProperty("objectName").GetString() == "dbo.__SchemorphHistory");
+
+        var document = Run($"diff --url \"{_db.Url}\" --schema \"{SchemaDir}\" --format sql").StdOut;
+        var notExecuted = document.IndexOf("NOT EXECUTED", StringComparison.Ordinal);
+        Assert.True(notExecuted >= 0, "the document must say what it contains but will not run");
+        Assert.True(document.IndexOf("__SchemorphHistory", notExecuted, StringComparison.Ordinal) > notExecuted);
+        Assert.Contains($"planHash:  {planHash}", document);
+
+        Assert.Equal(0, Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\" --expect-plan {planHash}").ExitCode);
+        Assert.True(_db.Scalar<int>("SELECT COUNT(*) FROM dbo.__SchemorphHistory") > historyRows,
+            "the ledger survives the apply and records it");
+        Assert.Equal(1, _db.Scalar<int>(
+            "SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Orders') AND name = 'Note'"));
+    }
+
     [SkippableFact]
     public void The_document_covers_every_stage_and_its_hash_is_the_gate_hash()
     {
