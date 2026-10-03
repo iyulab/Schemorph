@@ -195,7 +195,9 @@ public class PgCoreLoopTests : IAsyncLifetime
             await File.WriteAllTextAsync(Path.Combine(migrationsDir, "V1__boom.sql"),
                 "INSERT INTO \"NoSuchTable\" (\"Id\") VALUES (1);");
 
-            var diff = await DiffOperation.RunAsync(_provider, _ledger, schemaDir, _url, allowDestructive: false);
+            // The reviewed plan names the migrations the apply will run — its hash binds them.
+            var diff = await DiffOperation.RunAsync(_provider, _ledger, schemaDir, _url, allowDestructive: false,
+                migrationsDir: migrationsDir);
             Assert.True(diff.Success, string.Join("; ", diff.Errors.Select(e => e.Text)));
             var expected = Schemorph.Core.Planning.PlanFingerprint.Compute(diff.Plan!);
 
