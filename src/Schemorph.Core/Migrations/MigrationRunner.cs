@@ -112,8 +112,15 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
 
     public async Task<MigrationRunResult> RunAsync(
         string migrationsDirectory, string connectionString, IApplySession? session = null, CancellationToken cancellationToken = default)
+        => await RunAsync(await PlanAsync(migrationsDirectory, connectionString, cancellationToken), connectionString, session, cancellationToken);
+
+    /// <summary>
+    /// Runs <paramref name="plan"/> exactly — the snapshot an apply gated on, not a re-reading of the
+    /// directory, so a file edited after the gate cannot run in place of the one that passed it.
+    /// </summary>
+    public async Task<MigrationRunResult> RunAsync(
+        MigrationPlan plan, string connectionString, IApplySession? session = null, CancellationToken cancellationToken = default)
     {
-        var plan = await PlanAsync(migrationsDirectory, connectionString, cancellationToken);
 
         // Run pending migrations in order. The ledger row commits in the SAME
         // transaction as the script (ADR-0004) — the session's shared one when
@@ -151,7 +158,12 @@ public sealed record MigrationPlan(
     IReadOnlyList<MigrationScript> Pending,
     int AppliedCount,
     IReadOnlyList<string> IgnoredFiles,
-    IReadOnlyList<RawMessage> Warnings);
+    IReadOnlyList<RawMessage> Warnings)
+{
+    /// <summary>The pending migrations as a plan carries them — name and checksum, in run order.</summary>
+    public IReadOnlyList<Planning.PlanMigration> ForPlan =>
+        Pending.Select(s => new Planning.PlanMigration(s.FileName, s.Checksum)).ToList();
+}
 
 public sealed record MigrationRunResult(
     IReadOnlyList<string> Applied,

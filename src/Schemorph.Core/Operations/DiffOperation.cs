@@ -1,4 +1,5 @@
 ﻿using Schemorph.Core.Ledger;
+using Schemorph.Core.Migrations;
 using Schemorph.Core.Planning;
 using Schemorph.Core.Providers;
 using Schemorph.Core.Redefine;
@@ -36,7 +37,7 @@ public static class DiffOperation
     public static async Task<DiffResult> RunAsync(
         IDatabaseProvider provider, ILedgerStore ledger,
         string schemaDir, string connectionString, bool allowDestructive,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, string? migrationsDir = null)
     {
         // One load serves compare and analysis — the desired state is read and
         // classified exactly once per operation.
@@ -74,10 +75,17 @@ public static class DiffOperation
             await new RedefineRunner(provider, ledger).PlanAsync(programmables, connectionString, cancellationToken),
             programmables, compared.TablesWithColumnChanges, compared.ProgrammablesDroppedFirst);
 
+        // Pending migrations run in the same apply, so the plan an apply is gated on names them
+        // (read-only: the ledger is consulted, nothing runs). Invalid migration inputs — a duplicate
+        // version, an applied migration edited since — throw here as they do for apply.
+        var migrations = migrationsDir is null
+            ? Array.Empty<PlanMigration>()
+            : (await new MigrationRunner(provider, ledger).PlanAsync(migrationsDir, connectionString, cancellationToken)).ForPlan;
+
         return new DiffResult(
             PlanBuilder.Build(compared with { Messages = messages }, allowDestructive,
                 redefinePlan.Pending.Select(p => p.ToPlanAction()).ToList(),
-                provider.Capabilities.PlanAtomicity),
+                provider.Capabilities.PlanAtomicity) with { Migrations = migrations },
             Array.Empty<RawMessage>(),
             UpdateScript: compared.UpdateScript);
     }

@@ -63,6 +63,44 @@ public sealed class PostgresCliTests : IDisposable
         Assert.Equal("transactional", provider.GetProperty("atomicity").GetString());
     }
 
+    /// <summary>
+    /// A reviewed plan names the migrations the apply will run, by name and checksum, so the gate
+    /// covers them: a migration edited after review fails <c>--expect-plan</c> before anything runs,
+    /// and the reviewed one runs when nothing changed.
+    /// </summary>
+    [SkippableFact]
+    public void A_migration_edited_after_review_fails_the_gate_and_the_reviewed_one_runs()
+    {
+        Skip.If(ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres CLI tests need a live server.");
+
+        var schemaDir = Directory.CreateDirectory(Path.Combine(_dir, "schema")).FullName;
+        var migrationsDir = Directory.CreateDirectory(Path.Combine(_dir, "migrations")).FullName;
+        File.WriteAllText(Path.Combine(schemaDir, "Notes.sql"), $"""
+            CREATE TABLE "{_schema}"."Notes" ("Id" integer NOT NULL, "Body" text NOT NULL, CONSTRAINT "PK_Notes" PRIMARY KEY ("Id"));
+            """);
+        var migration = Path.Combine(migrationsDir, "V1__seed.sql");
+        File.WriteAllText(migration, $"""INSERT INTO "{_schema}"."Notes" ("Id", "Body") VALUES (1, 'reviewed');""");
+
+        var reviewed = JsonDocument.Parse(
+            Run($"diff --schema \"{schemaDir}\" --migrations \"{migrationsDir}\"", Url()).StdOut).RootElement;
+        var planHash = reviewed.GetProperty("planHash").GetString()!;
+        var pending = reviewed.GetProperty("migrations").EnumerateArray().Single();
+        Assert.Equal("V1__seed.sql", pending.GetProperty("fileName").GetString());
+
+        // Edited after review: the gate refuses, and nothing — table or migration — ran.
+        File.WriteAllText(migration, $"""INSERT INTO "{_schema}"."Notes" ("Id", "Body") VALUES (1, 'changed after review');""");
+        var refused = Run($"apply --schema \"{schemaDir}\" --migrations \"{migrationsDir}\" --expect-plan {planHash}", Url());
+        Assert.NotEqual(0, refused.ExitCode);
+        Assert.Contains("plan_mismatch", refused.StdOut + refused.StdErr);
+        Assert.Equal(2, Run($"diff --schema \"{schemaDir}\"", Url()).ExitCode);
+
+        // Back to the reviewed text: the same hash passes and the migration runs.
+        File.WriteAllText(migration, $"""INSERT INTO "{_schema}"."Notes" ("Id", "Body") VALUES (1, 'reviewed');""");
+        var applied = Run($"apply --schema \"{schemaDir}\" --migrations \"{migrationsDir}\" --expect-plan {planHash}", Url());
+        Assert.Equal(0, applied.ExitCode);
+        Assert.Contains("V1__seed.sql", applied.StdOut);
+    }
+
     [SkippableFact]
     public void Diff_apply_rediff_run_identically_to_the_sqlserver_loop()
     {

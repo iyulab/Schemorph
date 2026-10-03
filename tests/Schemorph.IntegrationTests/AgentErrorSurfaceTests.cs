@@ -65,9 +65,10 @@ public sealed class AgentErrorSurfaceTests : IDisposable
         await using var client = await ConnectAsync();
 
         // The gate requires a reviewed hash, so the agent diffs first — the same
-        // path a real agent takes.
+        // path a real agent takes — with the migrations the apply will run, which
+        // the hash binds.
         var plan = Parse(await client.CallToolAsync("schemorph_diff",
-            new Dictionary<string, object?> { ["schemaDir"] = SchemaDir }));
+            new Dictionary<string, object?> { ["schemaDir"] = SchemaDir, ["migrationsDir"] = MigrationsDir }));
         var planHash = plan.GetProperty("planHash").GetString()!;
 
         var error = Parse(await client.CallToolAsync("schemorph_apply", new Dictionary<string, object?>

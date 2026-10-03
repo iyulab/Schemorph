@@ -81,6 +81,19 @@ public sealed class CliContractTests : IDisposable
     }
 
     /// <summary>
+    /// Manifest 1.7: `diff --migrations` — the pending migrations an apply runs are part of the plan
+    /// it is gated on, so the verb that produces the plan has to be able to see them.
+    /// </summary>
+    [Fact]
+    public void Manifest_lists_the_migrations_option_on_diff()
+    {
+        var manifest = JsonDocument.Parse(Run("schema").StdOut).RootElement;
+        var diff = manifest.GetProperty("verbs").EnumerateArray().Single(c => c.GetProperty("name").GetString() == "diff");
+
+        Assert.Contains(diff.GetProperty("options").EnumerateArray(), o => o.GetProperty("flag").GetString() == "--migrations");
+    }
+
+    /// <summary>
     /// Manifest 1.6: `desiredStateFormatVersion` versions the `inspect`/`schemorph://schema`
     /// file-tree rendering contract (docs/desired-state-format.md), independently of
     /// `planFormatVersion` — this is what lets a consumer diffing its own copy of rendered
@@ -92,7 +105,7 @@ public sealed class CliContractTests : IDisposable
     {
         var manifest = JsonDocument.Parse(Run("schema").StdOut).RootElement;
 
-        Assert.Equal("1.6", manifest.GetProperty("manifestVersion").GetString());
+        Assert.Equal("1.7", manifest.GetProperty("manifestVersion").GetString());
         Assert.Equal("1.0", manifest.GetProperty("desiredStateFormatVersion").GetString());
         Assert.Equal("docs/desired-state-format.md", manifest.GetProperty("docs").GetProperty("desiredStateFormat").GetString());
     }

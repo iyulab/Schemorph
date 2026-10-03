@@ -131,6 +131,14 @@ public static class ApplyOperation
         var basePlan = await redefineRunner.PlanAsync(programmables, request.ConnectionString, cancellationToken);
         var redefinePlan = basePlan;
 
+        // The migrations this apply will run, judged once and before anything executes: the gate
+        // fingerprints this snapshot and the migration stage runs it, so the file that passed the
+        // gate is the file that runs. Invalid inputs (duplicate version, an applied migration edited
+        // since) throw here, still ahead of any DB work.
+        var migrationPlan = request.MigrationsDir is { } dir
+            ? await new MigrationRunner(provider, ledger).PlanAsync(dir, request.ConnectionString, cancellationToken)
+            : null;
+
         // Every execution call below shares ONE session when the provider
         // promises atomicity: transactional (ADR-0004 addendum) — opened here,
         // right before the first execution call, never during the read-only
@@ -158,7 +166,10 @@ public static class ApplyOperation
                     plan = PlanBuilder.Build(
                         computed, request.AllowDestructive,
                         redefinePlan.Pending.Select(p => p.ToPlanAction()).ToList(),
-                        provider.Capabilities.PlanAtomicity);
+                        provider.Capabilities.PlanAtomicity) with
+                    {
+                        Migrations = migrationPlan?.ForPlan ?? Array.Empty<PlanMigration>(),
+                    };
                     if (request.ExpectedPlanHash is { } expected)
                     {
                         var actual = PlanFingerprint.Compute(plan);
@@ -272,11 +283,11 @@ public static class ApplyOperation
 
         // Strategy 3: versioned migrations run after the declarative apply.
         MigrationRunResult? migrationRun = null;
-        if (request.MigrationsDir is { } migrationsDir)
+        if (migrationPlan is not null)
         {
             try
             {
-                migrationRun = await new MigrationRunner(provider, ledger).RunAsync(migrationsDir, request.ConnectionString, session, cancellationToken);
+                migrationRun = await new MigrationRunner(provider, ledger).RunAsync(migrationPlan, request.ConnectionString, session, cancellationToken);
             }
             catch (MigrationExecutionException ex)
             {

@@ -21,9 +21,10 @@ internal static class CliManifest
     // so a consumer can compute "not supported" for this provider without
     // hand-maintaining another provider's declared list. 1.6: desiredStateFormatVersion
     // — versions the `inspect`/`schemorph://schema` file-tree rendering contract
-    // (docs/desired-state-format.md), independent of planFormatVersion. All additive;
-    // consumers ignore properties they do not know.
-    public const string ManifestVersion = "1.6";
+    // (docs/desired-state-format.md), independent of planFormatVersion. 1.7: diff
+    // --migrations — the pending migrations an apply runs join the plan it is gated on.
+    // All additive; consumers ignore properties they do not know.
+    public const string ManifestVersion = "1.7";
 
     public static string ToJson(string toolVersion) => JsonSerializer.Serialize(new
     {
@@ -87,6 +88,7 @@ internal static class CliManifest
                     new { flag = "--url", value = "connection-string", required = false, description = "Target database; SCHEMORPH_URL is used when omitted." },
                     new { flag = "--schema", value = "dir", required = true, description = "Desired-state SQL directory; non-model .sql files (deploy scripts, seed DML) are skipped with a warning." },
                     new { flag = "--allow-destructive", value = (string?)null, required = false, description = "Include destructive changes in the plan." },
+                    new { flag = "--migrations", value = "dir", required = false, description = "Versioned migration scripts; the pending ones join the plan (name + checksum) and its planHash. Pass the same directory to apply." },
                     new { flag = "--format", value = "json|text|sql", required = false, description = "Output form; json is the plan format (docs/plan-format.md); sql is the human-review document (read-only, planHash in its header)." },
                 },
                 exitCodes = new[] { 0, 1, 2 },

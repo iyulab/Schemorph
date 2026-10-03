@@ -93,8 +93,19 @@ public static class ReviewScriptRenderer
         sb.AppendLine(" *");
         sb.AppendLine($" *   schemorph apply --schema <dir> --expect-plan {hash}");
         sb.AppendLine(" *");
-        sb.AppendLine(" * Migrations are not part of this document: they are run-once scripts");
+        sb.AppendLine(" * Migrations are not part of this document's text: they are run-once scripts");
         sb.AppendLine(" * reviewed as files in the repository, not regenerated per plan.");
+        if (plan.Migrations.Count > 0)
+        {
+            // Named here, though, and bound by the planHash: they run in this apply, so a file
+            // edited or added after review must not pass the gate.
+            sb.AppendLine(" * The pending ones this apply runs after the stages below are bound by the");
+            sb.AppendLine(" * planHash, by name and checksum — pass the same --migrations to apply:");
+            foreach (var migration in plan.Migrations)
+            {
+                sb.AppendLine($" *   {migration.FileName}  sha256:{migration.Checksum}");
+            }
+        }
         sb.AppendLine(" * --------------------------------------------------------------- */");
 
         // Ahead of the messages, because it is about this document rather than about

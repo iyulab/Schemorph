@@ -114,10 +114,17 @@ public sealed record Plan(
     IReadOnlyList<PlanMessage> Messages,
     ApplyAtomicity Atomicity = ApplyAtomicity.Partial,
     string? UpdateScript = null,
-    IReadOnlyList<PlanExclusion>? Excluded = null)
+    IReadOnlyList<PlanExclusion>? Excluded = null,
+    IReadOnlyList<PlanMigration>? Migrations = null)
 {
     /// <summary>Never null; an empty list means the script and the plan agree.</summary>
     public IReadOnlyList<PlanExclusion> Excluded { get; init; } = Excluded ?? Array.Empty<PlanExclusion>();
+
+    /// <summary>
+    /// Never null; empty when no migrations directory was given or none is pending. Bound by
+    /// <see cref="PlanFingerprint"/>: a migration the apply would run is part of what it executes.
+    /// </summary>
+    public IReadOnlyList<PlanMigration> Migrations { get; init; } = Migrations ?? Array.Empty<PlanMigration>();
 
     /// <summary>
     /// Version of the machine-readable plan format (docs/plan-format.md), following
@@ -125,9 +132,17 @@ public sealed record Plan(
     /// additions (consumers must ignore unknown properties); the major version
     /// increments for breaking changes. Independent of the product version.
     /// </summary>
-    public const string CurrentFormatVersion = "1.9";   // 1.9: excluded[].statements — the withheld statements when a gated column drop withholds only itself (see docs/plan-format.md)
+    public const string CurrentFormatVersion = "1.10";   // 1.10: migrations[] — pending migrations, bound by planHash (see docs/plan-format.md)
 
     public bool HasChanges => Actions.Count > 0;
 
     public bool HasDestructiveChanges => Actions.Any(a => a.Risk == RiskLevel.Destructive);
 }
+
+/// <summary>
+/// A pending versioned migration the apply would run after the declarative stage: its file name and
+/// the SHA-256 of its text — the same checksum the history ledger records once it has run. The text
+/// itself is not carried: a migration is reviewed as a file in the repository, and the checksum is
+/// what binds the apply to the file that was reviewed.
+/// </summary>
+public sealed record PlanMigration(string FileName, string Checksum);

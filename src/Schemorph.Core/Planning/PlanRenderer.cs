@@ -50,6 +50,9 @@ public static class PlanRenderer
         // learn they are in the text: both describe what executes, and the difference
         // between the two is exactly what a reviewer was left to guess at.
         plan.Excluded,
+        // Pending migrations the apply would run after the declarative stage — name and checksum,
+        // the file itself being what a reviewer reads. Bound by planHash.
+        plan.Migrations,
     };
 
     public static string ToJson(Plan plan) => JsonSerializer.Serialize(ToJsonModel(plan), JsonOptions);
@@ -73,6 +76,19 @@ public static class PlanRenderer
             }
             // The gate token: apply exactly this reviewed plan or refuse.
             sb.AppendLine($"  (apply this exact plan with --expect-plan {PlanFingerprint.Compute(plan)})");
+        }
+
+        if (plan.Migrations.Count > 0)
+        {
+            sb.AppendLine($"Pending migrations: {plan.Migrations.Count} (bound by the plan hash)");
+            foreach (var migration in plan.Migrations)
+            {
+                sb.AppendLine($"  > {migration.FileName}  sha256:{migration.Checksum}");
+            }
+            if (!plan.HasChanges)
+            {
+                sb.AppendLine($"  (apply this exact plan with --expect-plan {PlanFingerprint.Compute(plan)})");
+            }
         }
 
         foreach (var message in plan.Messages)

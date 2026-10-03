@@ -90,6 +90,9 @@ switch (verb)
               --url <connection-string>   target database (required)
               --schema <dir>              desired-state SQL directory (required)
               --allow-destructive         include destructive changes in the plan
+              --migrations <dir>          versioned migration scripts — the pending ones join
+                                          the plan (name + checksum) and its planHash; pass
+                                          the same directory to apply
               --format json|text|sql      output form (default: text on a terminal,
                                           json when stdout is redirected). sql renders
                                           the whole plan as one review document, in
@@ -195,7 +198,7 @@ async Task<int> RunApply(string[] args, string format)
                         EngineErrors.FirstIn(outcome.Errors)),
                 ApplyOperation.FailureStage.PlanMismatch =>
                     Fail(format, "plan_mismatch", outcome.Errors[0].Text,
-                        "Re-run diff, review the new plan, and pass its hash with --expect-plan."),
+                        "Re-run diff (with the same --migrations, if this apply runs migrations), review the new plan, and pass its hash with --expect-plan."),
                 ApplyOperation.FailureStage.Redefine or ApplyOperation.FailureStage.Migration
                     or ApplyOperation.FailureStage.Commit =>
                     FailApplyStage(format, outcome),
@@ -449,13 +452,20 @@ async Task<int> RunDiff(string[] args, string format)
             "Pass the directory that holds the desired-state .sql files.");
     }
 
+    var migrationsDir = ParseOption(args, "--migrations");
+    if (migrationsDir is not null && !Directory.Exists(migrationsDir))
+    {
+        return Fail(format, "migrations_dir_not_found", $"Migrations directory not found: {migrationsDir}",
+            "Pass the directory that holds V####__description.sql files.");
+    }
+
     try
     {
         // The diff itself lives in the core (DiffOperation) so the CLI and the MCP
         // surface render the same operation; this method only renders and maps errors.
         var (provider, ledger) = ProviderSelection.Current;
         var result = await DiffOperation.RunAsync(
-            provider, ledger, schemaDir, url, allowDestructive);
+            provider, ledger, schemaDir, url, allowDestructive, migrationsDir: migrationsDir);
 
         if (!result.Success)
         {
@@ -491,6 +501,11 @@ async Task<int> RunDiff(string[] args, string format)
     catch (TemporaryWorkspaceException ex)
     {
         return FailTempWorkspace(format, ex);
+    }
+    catch (MigrationException ex)
+    {
+        return Fail(format, "migration_failed", ex.Message,
+            ex.Hint ?? "Applied migrations are immutable; add a new V####__*.sql instead of editing old ones.");
     }
     catch (RedefineException ex)
     {

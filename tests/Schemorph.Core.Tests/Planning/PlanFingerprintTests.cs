@@ -191,4 +191,28 @@ public class PlanFingerprintTests
 
         Assert.NotEqual(PlanFingerprint.Compute(addA), PlanFingerprint.Compute(addB));
     }
+
+    // Pending migrations run in the same apply as the plan, so they are part of what it executes.
+    [Fact]
+    public void A_plan_with_no_pending_migrations_hashes_as_it_did_before_migrations_were_bound()
+    {
+        var plan = PlanWith("ALTER TABLE s.\"T\" ADD COLUMN a int;",
+            new PlanAction("s.T", "Table", PlanOperation.Alter, RiskLevel.Safe));
+
+        Assert.Equal(PlanFingerprint.Compute(plan),
+            PlanFingerprint.Compute(plan with { Migrations = Array.Empty<PlanMigration>() }));
+    }
+
+    [Fact]
+    public void A_pending_migration_and_its_content_both_move_the_hash()
+    {
+        var plan = PlanWith(updateScript: null);
+        var reviewed = plan with { Migrations = [new PlanMigration("V1__seed.sql", "aaaa")] };
+        var edited = plan with { Migrations = [new PlanMigration("V1__seed.sql", "bbbb")] };
+        var added = plan with { Migrations = [new PlanMigration("V1__seed.sql", "aaaa"), new PlanMigration("V2__more.sql", "cccc")] };
+
+        Assert.NotEqual(PlanFingerprint.Compute(plan), PlanFingerprint.Compute(reviewed));
+        Assert.NotEqual(PlanFingerprint.Compute(reviewed), PlanFingerprint.Compute(edited));
+        Assert.NotEqual(PlanFingerprint.Compute(reviewed), PlanFingerprint.Compute(added));
+    }
 }

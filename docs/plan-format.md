@@ -19,10 +19,11 @@ independent of the product version:
 - **Major** increments are breaking changes to existing properties. These are
   rare and deliberate.
 
-Current version: **`1.9`**.
+Current version: **`1.10`**.
 
 | Version | Change |
 |---|---|
+| `1.10` | Adds `migrations[]` (additive) — the versioned migrations the apply would run after the declarative stage, by `fileName` and `checksum` (SHA-256 of the file text, the value the history ledger records). Present when `diff` or `apply` is given a migrations directory; empty otherwise and when none is pending. **`planHash` binds them**: a migration edited or added after review moves the hash, so `apply --expect-plan` refuses it (`plan_mismatch`) instead of running unreviewed SQL. A plan with no pending migrations hashes exactly as under 1.9, so a hash captured then still matches. An apply that runs migrations must be gated on a hash from a `diff` given the same directory |
 | `1.9` | Adds `excluded[].statements` (additive). A provider that can separate a change's data-losing statements from the rest (PostgreSQL: a column the desired state no longer declares) now withholds only those when destructive changes are not enabled — the object then appears in `changes` (a `warning` action whose `sql` is what runs) **and** in `excluded`, and this field quotes the withheld statements. Null when the whole object is excluded, as before. `planHash` is computed as before; it moves only for a plan that now withholds part of a change instead of all of it, because that plan executes something different |
 | `1.8` | Adds `changes[].statementCount` (additive). `changes.Count` is an object count, not a size — several statements against one object (e.g. three `CREATE INDEX` on the same table) fold into a single `alter` entry, so a consumer summing plan size from `changes.Count` alone always undercounts. `statementCount` says how many statements that entry's `sql` runs. Computed by the provider that attributed `sql` — mirrors its nullability exactly (present iff `sql` is). **`planHash` is unchanged** — it describes the same executed text `sql` already binds, not a different execution; a hash captured under ≤1.7 still matches |
 | `1.0` | Initial stable shape: `changes[]` with per-change `actions` lists |
@@ -90,6 +91,9 @@ Current version: **`1.9`**.
 | `messages` | array | Diagnostics attached to the plan (gated-out destructive changes, skipped non-model files, engine warnings) — see [errors.md § Provider messages](errors.md#provider-messages) |
 | `messages[].objectName` | string? | The `changes[].objectName` this message is about, when it is about one (since 1.7). Absent on messages that are not about a single object — an engine-level diagnostic, or a desired-state file problem raised before a plan exists. Excluded from `planHash` (messages always are) |
 | `excluded` | array | Objects the update script has statements for that this plan will **not** execute (since 1.6). Distinct from an apply's excluded changes: those are changes the plan held and the run left out, whereas these never became actions. Present and empty when there are none, so "nothing excluded" is distinguishable from "this version does not report it". Excluded from `planHash` |
+| `migrations` | array | Pending versioned migrations the apply would run, in run order (since 1.10). Empty when no migrations directory was given or nothing is pending. **Bound by `planHash`** |
+| `migrations[].fileName` | string | The migration's file name (`V####__description.sql`) |
+| `migrations[].checksum` | string | SHA-256 of the file text — what the history ledger records once it runs. The text itself is reviewed as a file in the repository; the checksum ties the apply to that file |
 | `excluded[].objectName` | string | Fully qualified object name (`schema.object`) |
 | `excluded[].reason` | string | Why it does not execute, in the reviewer's terms — what the tool does with the object, not which branch dropped it |
 | `excluded[].statements` | string? | The withheld statements, when only part of the object's change is withheld (since 1.9). The object is then also in `changes`, so its name alone no longer says which of its statements do not run. `null` when the whole object is excluded |

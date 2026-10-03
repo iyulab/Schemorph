@@ -17,6 +17,13 @@ schemorph diff --schema ./schema --format sql > plan-2026-07-21.sql
 schemorph apply --schema ./schema --expect-plan 4f1c9a2e…
 ```
 
+If the apply runs versioned migrations, give `diff` the same directory:
+`schemorph diff --schema ./schema --migrations ./migrations --format sql`, then
+`schemorph apply --schema ./schema --migrations ./migrations --expect-plan …`. The
+document then lists each pending migration by file name and checksum, and the
+fingerprint binds them — a migration edited or added after the review is refused
+like any other change to what runs.
+
 `SCHEMORPH_URL` carries the connection string, so it stays out of shell history
 and out of the reviewed document (the header shows the target with the password
 redacted).
@@ -45,9 +52,10 @@ correctness. Running the text with `sqlcmd` or SSMS would skip:
 - the **history ledger**, which is the audit trail and the basis of every
   run-once guarantee;
 - the **re-definition ordering**, which is computed from the dependency graph;
-- the **migration run-once contract** — migrations are deliberately *not* in this
-  document, because they are versioned files reviewed in the repository, not
-  regenerated per plan.
+- the **migration run-once contract** — a migration's *text* is deliberately not in
+  this document, because migrations are versioned files reviewed in the repository,
+  not regenerated per plan. The pending ones are named, with their checksums, and
+  bound by the fingerprint.
 
 The document exists so a person can read exactly what will run. Running it
 directly makes the tool's own record of the change wrong.

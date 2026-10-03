@@ -5,6 +5,23 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Changed
+
+- **`apply --expect-plan` now covers the migrations the apply runs.** A reviewed plan gated
+  the declarative and re-definition stages, but the same apply also ran pending versioned
+  migrations, which were outside the fingerprint: a migration edited or added after review ran
+  under a hash that had never seen it. `diff` (and MCP `schemorph_diff`) now takes
+  `--migrations <dir>` (`migrationsDir`); the pending migrations join the plan as
+  `migrations[]` — file name and checksum — and `planHash` binds them. The review document
+  (`--format sql`) lists them in its header. The apply runs the migration snapshot it gated,
+  not a re-reading of the directory. Plan format **1.10**.
+- 🔴 **An apply that runs pending migrations must be gated on a hash from a `diff` given the
+  same migrations directory.** A hash from a `diff` without `--migrations` no longer matches such
+  an apply and is refused with `plan_mismatch` — it fails closed, nothing runs. A plan with no
+  pending migrations hashes as before.
+
 ## 0.16.0 — 2026-10-01
 
 ### Fixed

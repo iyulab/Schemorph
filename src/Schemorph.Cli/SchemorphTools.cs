@@ -3,6 +3,7 @@ using System.Text.Json;
 using ModelContextProtocol.Server;
 using Schemorph.Core;
 using Schemorph.Core.Errors;
+using Schemorph.Core.Migrations;
 using Schemorph.Core.Operations;
 using Schemorph.Core.Planning;
 using Schemorph.Core.Providers;
@@ -37,6 +38,7 @@ internal sealed class SchemorphTools
     public static async Task<string> Diff(
         [Description("Directory holding desired-state .sql files (non-model files are skipped with a warning)")] string schemaDir,
         [Description("Include destructive changes (data-holding DROPs) in the plan")] bool allowDestructive = false,
+        [Description("Optional directory of versioned migration scripts — pending ones join the plan and its planHash; pass the same directory to schemorph_apply")] string? migrationsDir = null,
         CancellationToken cancellationToken = default)
     {
         if (ResolveUrl() is not { } url)
@@ -48,12 +50,17 @@ internal sealed class SchemorphTools
             return Error("schema_dir_not_found", $"Schema directory not found: {schemaDir}",
                 "Pass the directory that holds the desired-state .sql files.");
         }
+        if (migrationsDir is not null && !Directory.Exists(migrationsDir))
+        {
+            return Error("migrations_dir_not_found", $"Migrations directory not found: {migrationsDir}",
+                "Pass the directory that holds V####__description.sql files.");
+        }
 
         try
         {
             var (provider, ledger) = ProviderSelection.Current;
             var result = await DiffOperation.RunAsync(
-                provider, ledger, schemaDir, url, allowDestructive, cancellationToken);
+                provider, ledger, schemaDir, url, allowDestructive, cancellationToken, migrationsDir);
             if (!result.Success)
             {
                 var badState = result.Stage == DiffOperation.FailureStage.DesiredState;
@@ -64,6 +71,11 @@ internal sealed class SchemorphTools
             }
 
             return PlanRenderer.ToJson(result.Plan!);
+        }
+        catch (MigrationException ex)
+        {
+            return Error("migration_failed", ex.Message,
+                ex.Hint ?? "Applied migrations are immutable; add a new V####__*.sql instead of editing old ones.");
         }
         catch (TemporaryWorkspaceException ex)
         {
@@ -267,7 +279,7 @@ internal sealed class SchemorphTools
                 return Error(code, text,
                     code switch
                     {
-                        "plan_mismatch" => "Re-run schemorph_diff, review the new plan, and retry with its planHash.",
+                        "plan_mismatch" => "Re-run schemorph_diff (with the same migrationsDir, if this apply runs migrations), review the new plan, and retry with its planHash.",
                         "invalid_desired_state" => "Fix the desired-state files named in the message.",
                         // Publish is transactional — nothing committed — but the
                         // cause is the engine's, so it is not guessed at here: the
