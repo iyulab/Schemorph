@@ -48,7 +48,7 @@ public static class StatusOperation
     }
 
     private static readonly string[] LedgerKinds =
-        { "declarative", RedefineRunner.LedgerKind, MigrationRunner.LedgerKind };
+        { VersionedStage.Pre.LedgerKind, "declarative", RedefineRunner.LedgerKind, MigrationRunner.LedgerKind };
 
     public static async Task<StatusResult> RunAsync(
         IDatabaseProvider provider, ILedgerStore ledger, Request request,

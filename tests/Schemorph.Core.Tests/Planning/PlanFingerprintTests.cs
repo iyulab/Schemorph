@@ -215,4 +215,38 @@ public class PlanFingerprintTests
         Assert.NotEqual(PlanFingerprint.Compute(reviewed), PlanFingerprint.Compute(edited));
         Assert.NotEqual(PlanFingerprint.Compute(reviewed), PlanFingerprint.Compute(added));
     }
+
+    // Pre-stage scripts run first in the same apply and decide what the declarative actions are.
+    [Fact]
+    public void A_pending_pre_stage_script_and_its_content_both_move_the_hash()
+    {
+        var plan = PlanWith(updateScript: null);
+        var reviewed = plan with { PreScripts = [new PlanMigration("V1__rename.sql", "aaaa")] };
+        var edited = plan with { PreScripts = [new PlanMigration("V1__rename.sql", "bbbb")] };
+
+        Assert.NotEqual(PlanFingerprint.Compute(plan), PlanFingerprint.Compute(reviewed));
+        Assert.NotEqual(PlanFingerprint.Compute(reviewed), PlanFingerprint.Compute(edited));
+    }
+
+    // The same file as a pre-stage script or as a migration runs at a different point of the apply —
+    // a different plan, so a different hash.
+    [Fact]
+    public void A_script_s_stage_is_part_of_the_identity()
+    {
+        var plan = PlanWith(updateScript: null);
+        var script = new PlanMigration("V1__rename.sql", "aaaa");
+
+        Assert.NotEqual(
+            PlanFingerprint.Compute(plan with { PreScripts = [script] }),
+            PlanFingerprint.Compute(plan with { Migrations = [script] }));
+    }
+
+    [Fact]
+    public void A_plan_with_no_pending_pre_stage_scripts_hashes_as_before()
+    {
+        var plan = PlanWith(updateScript: null) with { Migrations = [new PlanMigration("V1__seed.sql", "aaaa")] };
+
+        Assert.Equal(PlanFingerprint.Compute(plan),
+            PlanFingerprint.Compute(plan with { PreScripts = Array.Empty<PlanMigration>() }));
+    }
 }

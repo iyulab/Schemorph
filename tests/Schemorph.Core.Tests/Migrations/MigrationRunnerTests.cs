@@ -23,6 +23,49 @@ public sealed class MigrationRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_pre_stage_runner_records_its_scripts_under_its_own_kind_and_reads_only_those()
+    {
+        WriteMigration("V1__rename.sql", "RENAME A;");
+        // A migration with the same file name already ran — it is not this stage's history.
+        _ledger.Entries.Add(new LedgerEntry(MigrationRunner.LedgerKind, "V1__rename.sql", "Run", "other", true, null));
+        var pre = new MigrationRunner(_provider, _ledger, VersionedStage.Pre);
+
+        var result = await pre.RunAsync(_dir, "conn");
+
+        Assert.Equal(new[] { "V1__rename.sql" }, result.Applied);
+        var recorded = _ledger.Entries.Last();
+        Assert.Equal("pre", recorded.Kind);
+        Assert.Equal(VersionedStage.Pre.LedgerKind, recorded.Kind);
+        Assert.Empty((await pre.PlanAsync(_dir, "conn")).Pending);   // run once
+    }
+
+    [Fact]
+    public async Task A_pre_stage_script_edited_after_it_ran_is_refused_in_its_own_words()
+    {
+        var path = WriteMigration("V1__rename.sql", "RENAME A;");
+        var pre = new MigrationRunner(_provider, _ledger, VersionedStage.Pre);
+        await pre.RunAsync(_dir, "conn");
+        File.WriteAllText(path, "RENAME B;");
+
+        var ex = await Assert.ThrowsAsync<MigrationException>(() => pre.PlanAsync(_dir, "conn"));
+
+        Assert.StartsWith("Pre-stage script V1__rename.sql was modified after being applied", ex.Message);
+    }
+
+    [Fact]
+    public async Task A_failing_pre_stage_script_names_its_stage()
+    {
+        WriteMigration("V1__rename.sql", "RENAME A;");
+        var provider = new FakeProvider { Ledger = _ledger, FailOnScriptContaining = "RENAME A" };
+
+        var ex = await Assert.ThrowsAsync<MigrationExecutionException>(
+            () => new MigrationRunner(provider, _ledger, VersionedStage.Pre).RunAsync(_dir, "conn"));
+
+        Assert.Same(VersionedStage.Pre, ex.Stage);
+        Assert.StartsWith("Pre-stage script V1__rename.sql failed", ex.Message);
+    }
+
+    [Fact]
     public async Task Runs_pending_migrations_in_numeric_version_order()
     {
         // Lexicographic order would run V10 before V2 — numeric order must win.

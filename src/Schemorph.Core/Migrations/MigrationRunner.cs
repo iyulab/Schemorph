@@ -4,13 +4,34 @@ using Schemorph.Core.Providers;
 namespace Schemorph.Core.Migrations;
 
 /// <summary>
-/// Versioned-migration semantics (strategy 3): ordered, checksummed, run once.
+/// Which run-once stage a <see cref="MigrationRunner"/> serves. The two differ only in where they
+/// run in an apply and how the history ledger files them: versioned migrations after the
+/// declarative and redefine stages, pre-stage scripts before the declarative stage — for changes a
+/// desired-state diff cannot express, such as a rename, that the diff must then see as done.
+/// </summary>
+/// <param name="LedgerKind">The history ledger's <c>kind</c> for this stage's scripts.</param>
+/// <param name="Noun">How a message names one of its scripts.</param>
+public sealed record VersionedStage(string LedgerKind, string Noun)
+{
+    /// <summary>Versioned migrations: run after the declarative and redefine stages.</summary>
+    public static VersionedStage Migration { get; } = new("migration", "Migration");
+
+    /// <summary>Pre-stage scripts: run before the declarative stage, so the plan is computed after them.</summary>
+    public static VersionedStage Pre { get; } = new("pre", "Pre-stage script");
+}
+
+/// <summary>
+/// Versioned-script semantics (strategy 3): ordered, checksummed, run once — for
+/// <see cref="VersionedStage.Migration"/> and, with the same contract, <see cref="VersionedStage.Pre"/>.
 /// The runner owns discovery, ordering, tamper detection and ledger bookkeeping;
 /// the provider only executes scripts (mechanism).
 /// </summary>
-public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore ledger)
+public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore ledger, VersionedStage? stage = null)
 {
     public const string LedgerKind = "migration";
+
+    /// <summary>The stage this runner serves; <see cref="VersionedStage.Migration"/> unless given.</summary>
+    public VersionedStage Stage { get; } = stage ?? VersionedStage.Migration;
 
     /// <summary>
     /// Discovery + ledger consultation, without executing anything (read-only):
@@ -35,11 +56,11 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
         if (duplicate is not null)
         {
             throw new MigrationException(
-                $"Duplicate migration version V{duplicate.Key}: {string.Join(", ", duplicate.Select(s => s.FileName))}");
+                $"Duplicate {Stage.Noun.ToLowerInvariant()} version V{duplicate.Key}: {string.Join(", ", duplicate.Select(s => s.FileName))}");
         }
 
         // 2. Consult the ledger; validate ALL applied checksums before running anything.
-        var appliedEntries = (await ledger.ReadAsync(connectionString, LedgerKind, cancellationToken))
+        var appliedEntries = (await ledger.ReadAsync(connectionString, Stage.LedgerKind, cancellationToken))
             .Where(e => e.Succeeded)
             .ToDictionary(e => e.ObjectName, e => e, StringComparer.OrdinalIgnoreCase);
 
@@ -49,9 +70,9 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
             if (!string.Equals(recorded, script.Checksum, StringComparison.OrdinalIgnoreCase))
             {
                 throw new MigrationException(
-                    $"Migration {script.FileName} was modified after being applied " +
+                    $"{Stage.Noun} {script.FileName} was modified after being applied " +
                     $"(ledger checksum {recorded}, file checksum {script.Checksum}). " +
-                    "Applied migrations are immutable; add a new migration instead.");
+                    $"Applied {Stage.Noun.ToLowerInvariant()}s are immutable; add a new one instead.");
             }
         }
 
@@ -130,7 +151,7 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
         var applied = new List<string>();
         foreach (var script in plan.Pending)
         {
-            var entry = new LedgerEntry(LedgerKind, script.FileName, "Run", script.Checksum, Succeeded: true, Detail: null);
+            var entry = new LedgerEntry(Stage.LedgerKind, script.FileName, "Run", script.Checksum, Succeeded: true, Detail: null);
             try
             {
                 // The discovery snapshot runs — the same text the checksum covers.
@@ -144,7 +165,7 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
                 // Same reasoning as the redefine stage: the run-once contract
                 // makes "which ones already ran" the operator's first question,
                 // and only this frame knows the answer.
-                throw new MigrationExecutionException(script.FileName, applied.ToList(), ex, EngineErrors.Find(provider, ex));
+                throw new MigrationExecutionException(script.FileName, applied.ToList(), ex, EngineErrors.Find(provider, ex), Stage);
             }
             applied.Add(script.FileName);
         }
@@ -192,9 +213,12 @@ public sealed class MigrationException(string message, string? hint = null) : Ex
 /// that had already run.
 /// </summary>
 public sealed class MigrationExecutionException(
-    string fileName, IReadOnlyList<string> applied, Exception inner, EngineError? engine = null)
-    : Exception($"Migration {fileName} failed: {engine?.Describe() ?? inner.Message}", inner)
+    string fileName, IReadOnlyList<string> applied, Exception inner, EngineError? engine = null, VersionedStage? stage = null)
+    : Exception($"{(stage ?? VersionedStage.Migration).Noun} {fileName} failed: {engine?.Describe() ?? inner.Message}", inner)
 {
+    /// <summary>The stage the failed script belongs to.</summary>
+    public VersionedStage Stage { get; } = stage ?? VersionedStage.Migration;
+
     /// <summary>
     /// The engine error behind the failure, as the provider described it — null when
     /// the failure was not the database's (the message then carries the exception's own).

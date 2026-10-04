@@ -93,8 +93,17 @@ public static class ReviewScriptRenderer
         sb.AppendLine(" *");
         sb.AppendLine($" *   schemorph apply --schema <dir> --expect-plan {hash}");
         sb.AppendLine(" *");
-        sb.AppendLine(" * Migrations are not part of this document's text: they are run-once scripts");
+        sb.AppendLine(" * Migrations and pre-stage scripts are not part of this document's text: they are run-once scripts");
         sb.AppendLine(" * reviewed as files in the repository, not regenerated per plan.");
+        if (plan.PreScripts.Count > 0)
+        {
+            sb.AppendLine(" * The pending pre-stage scripts this apply runs BEFORE the stages below (the stages");
+            sb.AppendLine(" * are computed as of after them) are bound by the planHash — pass the same --pre to apply:");
+            foreach (var pre in plan.PreScripts)
+            {
+                sb.AppendLine($" *   {pre.FileName}  sha256:{pre.Checksum}");
+            }
+        }
         if (plan.Migrations.Count > 0)
         {
             // Named here, though, and bound by the planHash: they run in this apply, so a file

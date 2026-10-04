@@ -115,7 +115,8 @@ public sealed record Plan(
     ApplyAtomicity Atomicity = ApplyAtomicity.Partial,
     string? UpdateScript = null,
     IReadOnlyList<PlanExclusion>? Excluded = null,
-    IReadOnlyList<PlanMigration>? Migrations = null)
+    IReadOnlyList<PlanMigration>? Migrations = null,
+    IReadOnlyList<PlanMigration>? PreScripts = null)
 {
     /// <summary>Never null; an empty list means the script and the plan agree.</summary>
     public IReadOnlyList<PlanExclusion> Excluded { get; init; } = Excluded ?? Array.Empty<PlanExclusion>();
@@ -127,12 +128,19 @@ public sealed record Plan(
     public IReadOnlyList<PlanMigration> Migrations { get; init; } = Migrations ?? Array.Empty<PlanMigration>();
 
     /// <summary>
+    /// Never null; empty when no pre-stage directory was given or none is pending. The pre-stage
+    /// scripts the apply runs <em>before</em> the declarative stage — the actions above are computed
+    /// as of after them. Bound by <see cref="PlanFingerprint"/> like <see cref="Migrations"/>.
+    /// </summary>
+    public IReadOnlyList<PlanMigration> PreScripts { get; init; } = PreScripts ?? Array.Empty<PlanMigration>();
+
+    /// <summary>
     /// Version of the machine-readable plan format (docs/plan-format.md), following
     /// Terraform's convention: the minor version increments for backward-compatible
     /// additions (consumers must ignore unknown properties); the major version
     /// increments for breaking changes. Independent of the product version.
     /// </summary>
-    public const string CurrentFormatVersion = "1.10";   // 1.10: migrations[] — pending migrations, bound by planHash (see docs/plan-format.md)
+    public const string CurrentFormatVersion = "1.11";   // 1.11: pre[] — pending pre-stage scripts, bound by planHash (see docs/plan-format.md)
 
     public bool HasChanges => Actions.Count > 0;
 
@@ -140,7 +148,8 @@ public sealed record Plan(
 }
 
 /// <summary>
-/// A pending versioned migration the apply would run after the declarative stage: its file name and
+/// A pending run-once script the apply would run — a versioned migration after the declarative stage,
+/// or a pre-stage script before it (<see cref="Plan.PreScripts"/>): its file name and
 /// the SHA-256 of its text — the same checksum the history ledger records once it has run. The text
 /// itself is not carried: a migration is reviewed as a file in the repository, and the checksum is
 /// what binds the apply to the file that was reviewed.

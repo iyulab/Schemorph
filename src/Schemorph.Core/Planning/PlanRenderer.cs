@@ -53,6 +53,8 @@ public static class PlanRenderer
         // Pending migrations the apply would run after the declarative stage — name and checksum,
         // the file itself being what a reviewer reads. Bound by planHash.
         plan.Migrations,
+        // Pending pre-stage scripts the apply runs before the declarative stage — same shape, same binding.
+        Pre = plan.PreScripts,
     };
 
     public static string ToJson(Plan plan) => JsonSerializer.Serialize(ToJsonModel(plan), JsonOptions);
@@ -78,6 +80,15 @@ public static class PlanRenderer
             sb.AppendLine($"  (apply this exact plan with --expect-plan {PlanFingerprint.Compute(plan)})");
         }
 
+        if (plan.PreScripts.Count > 0)
+        {
+            sb.AppendLine($"Pending pre-stage scripts: {plan.PreScripts.Count} (run first; the plan above is as of after them; bound by the plan hash)");
+            foreach (var pre in plan.PreScripts)
+            {
+                sb.AppendLine($"  < {pre.FileName}  sha256:{pre.Checksum}");
+            }
+        }
+
         if (plan.Migrations.Count > 0)
         {
             sb.AppendLine($"Pending migrations: {plan.Migrations.Count} (bound by the plan hash)");
@@ -85,10 +96,11 @@ public static class PlanRenderer
             {
                 sb.AppendLine($"  > {migration.FileName}  sha256:{migration.Checksum}");
             }
-            if (!plan.HasChanges)
-            {
-                sb.AppendLine($"  (apply this exact plan with --expect-plan {PlanFingerprint.Compute(plan)})");
-            }
+        }
+
+        if (!plan.HasChanges && (plan.Migrations.Count > 0 || plan.PreScripts.Count > 0))
+        {
+            sb.AppendLine($"  (apply this exact plan with --expect-plan {PlanFingerprint.Compute(plan)})");
         }
 
         foreach (var message in plan.Messages)

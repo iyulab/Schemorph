@@ -19,10 +19,11 @@ independent of the product version:
 - **Major** increments are breaking changes to existing properties. These are
   rare and deliberate.
 
-Current version: **`1.10`**.
+Current version: **`1.11`**.
 
 | Version | Change |
 |---|---|
+| `1.11` | Adds `pre[]` (additive) — the pre-stage scripts the apply would run **before** the declarative stage, by `fileName` and `checksum`, in run order. The plan's changes are computed as of after them. **`planHash` binds them** (tagged by stage: the same file as a pre-stage script and as a migration hashes differently). A plan with none hashes exactly as under 1.10 |
 | `1.10` | Adds `migrations[]` (additive) — the versioned migrations the apply would run after the declarative stage, by `fileName` and `checksum` (SHA-256 of the file text, the value the history ledger records). Present when `diff` or `apply` is given a migrations directory; empty otherwise and when none is pending. **`planHash` binds them**: a migration edited or added after review moves the hash, so `apply --expect-plan` refuses it (`plan_mismatch`) instead of running unreviewed SQL. A plan with no pending migrations hashes exactly as under 1.9, so a hash captured then still matches. An apply that runs migrations must be gated on a hash from a `diff` given the same directory |
 | `1.9` | Adds `excluded[].statements` (additive). A provider that can separate a change's data-losing statements from the rest (PostgreSQL: a column the desired state no longer declares) now withholds only those when destructive changes are not enabled — the object then appears in `changes` (a `warning` action whose `sql` is what runs) **and** in `excluded`, and this field quotes the withheld statements. Null when the whole object is excluded, as before. `planHash` is computed as before; it moves only for a plan that now withholds part of a change instead of all of it, because that plan executes something different |
 | `1.8` | Adds `changes[].statementCount` (additive). `changes.Count` is an object count, not a size — several statements against one object (e.g. three `CREATE INDEX` on the same table) fold into a single `alter` entry, so a consumer summing plan size from `changes.Count` alone always undercounts. `statementCount` says how many statements that entry's `sql` runs. Computed by the provider that attributed `sql` — mirrors its nullability exactly (present iff `sql` is). **`planHash` is unchanged** — it describes the same executed text `sql` already binds, not a different execution; a hash captured under ≤1.7 still matches |
@@ -94,6 +95,7 @@ Current version: **`1.10`**.
 | `migrations` | array | Pending versioned migrations the apply would run, in run order (since 1.10). Empty when no migrations directory was given or nothing is pending. **Bound by `planHash`** |
 | `migrations[].fileName` | string | The migration's file name (`V####__description.sql`) |
 | `migrations[].checksum` | string | SHA-256 of the file text — what the history ledger records once it runs. The text itself is reviewed as a file in the repository; the checksum ties the apply to that file |
+| `pre` | array | Pending pre-stage scripts the apply would run before the declarative stage, in run order (since 1.11). Same shape as `migrations[]`. Empty when no pre-stage directory was given or nothing is pending. **Bound by `planHash`** |
 | `excluded[].objectName` | string | Fully qualified object name (`schema.object`) |
 | `excluded[].reason` | string | Why it does not execute, in the reviewer's terms — what the tool does with the object, not which branch dropped it |
 | `excluded[].statements` | string? | The withheld statements, when only part of the object's change is withheld (since 1.9). The object is then also in `changes`, so its name alone no longer says which of its statements do not run. `null` when the whole object is excluded |

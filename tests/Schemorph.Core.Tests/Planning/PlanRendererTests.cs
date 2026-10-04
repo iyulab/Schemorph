@@ -205,4 +205,21 @@ public class PlanRendererTests
     {
         Assert.Contains($"--expect-plan {PlanFingerprint.Compute(Sample)}", PlanRenderer.ToText(Sample));
     }
+
+    [Fact]
+    public void Pending_pre_stage_scripts_are_named_in_json_and_text_and_gated_even_without_changes()
+    {
+        var plan = new Plan(Plan.CurrentFormatVersion, Array.Empty<PlanAction>(), Array.Empty<PlanMessage>())
+            with { PreScripts = [new PlanMigration("V1__rename.sql", "abcd")] };
+
+        var json = PlanRenderer.ToJson(plan);
+        Assert.Contains("\"pre\"", json);
+        Assert.Contains("V1__rename.sql", json);
+
+        var text = PlanRenderer.ToText(plan);
+        Assert.Contains("Pending pre-stage scripts: 1", text);
+        Assert.Contains("< V1__rename.sql  sha256:abcd", text);
+        Assert.Contains($"--expect-plan {PlanFingerprint.Compute(plan)}", text);
+    }
 }
+

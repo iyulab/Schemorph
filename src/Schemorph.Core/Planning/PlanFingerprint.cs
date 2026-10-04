@@ -19,9 +19,10 @@ namespace Schemorph.Core.Planning;
 /// executed text differs even when a provider leaves the per-change <c>sql</c>
 /// null, so this is what closes the hole for every provider.
 ///
-/// A third input joins when the apply would run versioned migrations: each pending migration's
-/// file name and checksum. They execute in the same apply, so a migration edited or added after the
-/// plan was reviewed has to move the hash like any other change to what runs.
+/// A third input joins when the apply would run run-once scripts: each pending pre-stage script's and
+/// each pending migration's file name and checksum, tagged with its stage. They execute in the same
+/// apply, so a script edited or added after the plan was reviewed has to move the hash like any other
+/// change to what runs — and a pre-stage script also decides what the declarative actions are.
 ///
 /// Still excluded, deliberately: messages (diagnostics, not execution),
 /// <c>explanation</c> (prose about a change, not the change), and
@@ -63,6 +64,10 @@ public static class PlanFingerprint
         // Pending migrations run in the same apply, so a migration edited or added after review must
         // not pass the gate. Appended only when there are any: a plan with none hashes exactly as it
         // did before migrations were bound, so a hash reviewed then still gates an apply now.
+        foreach (var pre in plan.PreScripts)
+        {
+            identity += $"{Record}pre{Field}{pre.FileName}{Field}{pre.Checksum}";
+        }
         foreach (var migration in plan.Migrations)
         {
             identity += $"{Record}migration{Field}{migration.FileName}{Field}{migration.Checksum}";

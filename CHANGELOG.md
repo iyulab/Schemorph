@@ -5,6 +5,17 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Added
+
+- **Pre-stage scripts — the run-once contract of versioned migrations, before the declarative
+  stage.** The library's runner serves both stages (`VersionedStage.Migration`, `VersionedStage.Pre`):
+  ordered `V<n>__slug.sql`, checksummed, recorded once in the history ledger — pre-stage scripts
+  under their own kind `pre`, which `status` now counts. A plan carries the pending ones as `pre[]`
+  (file name and checksum, plan format **1.11**) and `planHash` binds them, tagged by stage; the
+  text and review renderings name them. A plan with none hashes as before.
+
 ## 0.17.0 — 2026-10-04
 
 ### Changed
