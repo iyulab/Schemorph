@@ -64,7 +64,9 @@ public static class DiffOperation
         {
             if (simulation is null)
             {
-                return new DiffResult(null, new[] { PreStageUnsupported() }, FailureStage.DesiredState);
+                // No way to plan as of after them here: the plan is the pre-stage alone, and the rest
+                // is computed on the run after it (see PreStageOnly).
+                return new DiffResult(PreStageOnly(provider, prePlan), Array.Empty<RawMessage>());
             }
             foreach (var script in prePlan.Pending)
             {
@@ -132,8 +134,24 @@ public static class DiffOperation
             UpdateScript: compared.UpdateScript);
     }
 
-    /// <summary>Pending pre-stage scripts on a provider that cannot plan as of after them.</summary>
-    internal static RawMessage PreStageUnsupported() => new("Error", "pre_stage_unsupported",
-        "Pending pre-stage scripts need a provider that can run them inside a transaction it reads its " +
-        "comparison through; this one cannot, so no plan is computed as of after them.");
+    /// <summary>
+    /// The plan when pre-stage scripts are pending and the provider cannot plan as of after them — its
+    /// DDL is not transactional, or its comparison cannot read through a transaction (SQL Server: the
+    /// engine compares on a connection of its own). The plan is the pre-stage alone: an apply of it runs
+    /// the scripts, each committed with its ledger row, and stops; the next diff and apply see them done
+    /// and plan the rest. Planning the rest now would compare against the schema before the scripts —
+    /// exactly the drop+create they exist to prevent. Migrations wait for that next run too: they run
+    /// after the declarative stage, which this run does not reach.
+    /// </summary>
+    internal static Plan PreStageOnly(IDatabaseProvider provider, MigrationPlan prePlan) =>
+        new Plan(Plan.CurrentFormatVersion, Array.Empty<PlanAction>(), new[]
+        {
+            new PlanMessage("Warning", "SCHEMORPH014",
+                $"{prePlan.Pending.Count} pre-stage script(s) pending, and this provider cannot plan as of after " +
+                "them: this plan runs them only. Apply it, then diff and apply again — the rest is planned " +
+                "against the schema they leave."),
+        }, provider.Capabilities.PlanAtomicity)
+        {
+            PreScripts = prePlan.ForPlan,
+        };
 }

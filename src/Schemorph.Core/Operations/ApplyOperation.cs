@@ -71,6 +71,13 @@ public static class ApplyOperation
         /// <summary>The pre-stage scripts that ran (before the declarative stage); null when there were none to run.</summary>
         public MigrationRunResult? PreScripts { get; init; }
 
+        /// <summary>
+        /// True when this apply ran the pending pre-stage scripts and stopped there, because the provider
+        /// cannot plan the rest until they are done (<c>SCHEMORPH014</c>). Not a failure: running the same
+        /// apply again plans and applies the rest.
+        /// </summary>
+        public bool Deferred { get; init; }
+
         /// <summary>Counts of what ran, whatever became of it.</summary>
         public CommittedWork Attempted => new(
             Applied.Count, Redefines?.Redefined.Count ?? 0, Migrations?.Applied.Count ?? 0, PreScripts?.Applied.Count ?? 0);
@@ -127,7 +134,7 @@ public static class ApplyOperation
         var preRuns = prePlan is { Pending.Count: > 0 };
         if (preRuns && !transactional)
         {
-            return Failure(FailureStage.DesiredState, new[] { DiffOperation.PreStageUnsupported() });
+            return await RunPreStageOnlyAsync(provider, ledger, request, prePlan!, onPlan, cancellationToken);
         }
 
         IApplySession? session = null;
@@ -412,6 +419,55 @@ public static class ApplyOperation
             plan, result.AppliedChanges, excludedVisible, visibleMessages, redefineRun, migrationRun)
         {
             PreScripts = preRun,
+        };
+    }
+
+    /// <summary>
+    /// The first of two runs on a provider that cannot plan as of after pending pre-stage scripts: the
+    /// gate checks the pre-stage-only plan (the one diff showed), the scripts run — each committed with its
+    /// ledger row, there being no session to hold them — and the apply reports itself
+    /// <see cref="Outcome.Deferred"/>. A failing script leaves the ones before it committed, as migrations do
+    /// under this atomicity; re-running resumes from the ledger.
+    /// </summary>
+    private static async Task<Outcome> RunPreStageOnlyAsync(
+        IDatabaseProvider provider, ILedgerStore ledger, Request request, MigrationPlan prePlan,
+        Action<Plan>? onPlan, CancellationToken cancellationToken)
+    {
+        var plan = DiffOperation.PreStageOnly(provider, prePlan);
+        if (request.ExpectedPlanHash is { } expected
+            && !string.Equals(expected, PlanFingerprint.Compute(plan), StringComparison.OrdinalIgnoreCase))
+        {
+            var mismatch = new PlanMismatchException(expected, PlanFingerprint.Compute(plan));
+            return Failure(FailureStage.PlanMismatch,
+                new[] { new RawMessage("Error", "plan_mismatch", mismatch.Message) }) with { Plan = plan };
+        }
+        onPlan?.Invoke(plan);
+
+        await ledger.EnsureInitializedAsync(request.ConnectionString, session: null, cancellationToken);
+        MigrationRunResult preRun;
+        try
+        {
+            preRun = await new MigrationRunner(provider, ledger, VersionedStage.Pre)
+                .RunAsync(prePlan, request.ConnectionString, session: null, cancellationToken);
+        }
+        catch (MigrationExecutionException ex)
+        {
+            return Failure(FailureStage.PreStage,
+                new[] { new RawMessage("Error", "pre_stage_execution_failed", ex.Message) }) with
+            {
+                Plan = plan,
+                PreScripts = new MigrationRunResult(ex.Applied, 0, Array.Empty<string>(), Array.Empty<RawMessage>()),
+                Engine = ex.Engine?.Info,
+            };
+        }
+
+        return new Outcome(true, FailureStage.None, Array.Empty<RawMessage>(), plan,
+            Array.Empty<RawChange>(), Array.Empty<RawChange>(),
+            plan.Messages.Select(m => new RawMessage(m.Severity, m.Code, m.Text)).ToList(),
+            new RedefineRunResult(Array.Empty<string>(), 0, Array.Empty<string>()), Migrations: null)
+        {
+            PreScripts = preRun,
+            Deferred = true,
         };
     }
 

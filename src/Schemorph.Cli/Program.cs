@@ -496,7 +496,7 @@ async Task<int> RunDiff(string[] args, string format)
         {
             Console.WriteLine(format == "json" ? PlanRenderer.ToJson(plan) : PlanRenderer.ToText(plan));
         }
-        return plan.HasChanges ? ExitChangesPending : ExitNoChanges;
+        return plan.HasPendingWork ? ExitChangesPending : ExitNoChanges;
     }
     catch (TemporaryWorkspaceException ex)
     {

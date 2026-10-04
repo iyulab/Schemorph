@@ -144,6 +144,13 @@ public sealed record Plan(
 
     public bool HasChanges => Actions.Count > 0;
 
+    /// <summary>
+    /// Whether an apply of this plan would execute anything: a change, or a pending migration or
+    /// pre-stage script. <see cref="HasChanges"/> counts the declarative and re-definition actions only,
+    /// which is what the plan format's <c>hasChanges</c> reports — this is what "work is pending" means.
+    /// </summary>
+    public bool HasPendingWork => HasChanges || Migrations.Count > 0 || PreScripts.Count > 0;
+
     public bool HasDestructiveChanges => Actions.Any(a => a.Risk == RiskLevel.Destructive);
 }
 

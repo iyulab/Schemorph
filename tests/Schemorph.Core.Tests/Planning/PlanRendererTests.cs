@@ -221,5 +221,18 @@ public class PlanRendererTests
         Assert.Contains("< V1__rename.sql  sha256:abcd", text);
         Assert.Contains($"--expect-plan {PlanFingerprint.Compute(plan)}", text);
     }
+
+    // diff's exit code 2 means "an apply would execute something" — a pending migration or pre-stage
+    // script is that, even with no change to the schema's declared shape.
+    [Fact]
+    public void Pending_scripts_are_pending_work_without_any_change()
+    {
+        var empty = new Plan(Plan.CurrentFormatVersion, Array.Empty<PlanAction>(), Array.Empty<PlanMessage>());
+
+        Assert.False(empty.HasPendingWork);
+        Assert.True((empty with { Migrations = [new PlanMigration("V1__seed.sql", "a")] }).HasPendingWork);
+        Assert.True((empty with { PreScripts = [new PlanMigration("V1__rename.sql", "a")] }).HasPendingWork);
+        Assert.False((empty with { PreScripts = [new PlanMigration("V1__rename.sql", "a")] }).HasChanges);
+    }
 }
 

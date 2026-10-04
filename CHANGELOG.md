@@ -21,12 +21,18 @@ change **additively**: consumers must ignore properties they do not know.
   (`Request.PreDir`) runs them first in its one session, records each under the ledger kind `pre`, and
   plans the declarative and re-definition stages as of after them; a failing one stops the apply with
   `pre_stage_execution_failed` (stage `pre`), and the error envelope's `committed` counts them as `pre`.
-  A plan-hash mismatch rolls the scripts back with the session. A provider that cannot plan through a
-  transaction refuses pending pre-stage scripts (`pre_stage_unsupported`) rather than plan as of before
-  them.
+  A plan-hash mismatch rolls the scripts back with the session.
+- **On SQL Server the same work takes two runs.** The engine compares on a connection of its own, so it
+  cannot see a script before it commits. With pre-stage scripts pending, the plan is the pre-stage alone
+  (`SCHEMORPH014`); its gated apply runs them — each committed with its ledger row — and reports the
+  apply `Deferred`. The next diff sees them done and plans the rest; re-running the same apply converges.
 
 ### Changed
 
+- 🔴 **`diff` exits `2` when an apply would run anything** — a pending migration (with `--migrations`) or
+  pre-stage script included, not only a schema change. Before, a plan whose only work was a pending
+  migration exited `0`, "no changes pending", for an apply that would execute it. `hasChanges` in the plan
+  format is unchanged (it still counts changes); the library's `Plan.HasPendingWork` is the new test.
 - **Live reads can go through a session.** `CompareRequest.Session`, and a `session` parameter on
   `RefineProgrammablesAsync`, `FilterExistingLiveAsync` and `FilterMatchingLiveDefinitionsAsync`: a read
   given one sees what that session has executed. The PostgreSQL provider's apply now compares through its
