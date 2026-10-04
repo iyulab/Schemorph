@@ -131,12 +131,24 @@ which is worse than losing it visibly, because nothing downstream reports it. An
 out-of-band hint would instead move the assertion outside the desired state, where
 the plan can no longer check it against anything.
 
-**What this means for you:** rename with the engine's own statement — it carries
-the identity the files cannot — and then update the desired state to match. The
-next diff is empty and the values are where you left them. Do the two in the other
-order and the plan will offer to drop the column instead — and on PostgreSQL an
-apply of that plan adds the new column empty. From there, copy the values across
-and then enable the drop, or drop the empty column and rename.
+**What this means for you:** state the rename where the tool can see it — a
+**pre-stage script** — and update the desired state to the new name in the same
+change. Pre-stage scripts (`--pre <dir>`, `V####__description.sql`) run once, before
+the declarative stage, and are recorded in the history ledger; the plan is computed
+as of after them, so it shows no drop and no create, and the values stay where they
+were. The rename is the engine's own statement (`ALTER TABLE … RENAME …`,
+`sp_rename`), carrying the identity the files cannot. On PostgreSQL one run does it
+all: `diff` runs the pending scripts in a transaction it rolls back, and `apply` runs
+them in its session. On SQL Server the comparison cannot see a script before it
+commits, so it takes two runs — the first plan is the pre-stage alone
+(`SCHEMORPH014`), its apply runs it and exits `2`, and the next `diff` and `apply`
+plan the rest.
+
+Without a pre-stage script, rename in the database first and then diff — the same
+end, outside the tool. Do it the other way round and the plan offers to drop the
+column instead — and on PostgreSQL an apply of that plan adds the new column empty.
+From there, copy the values across and then enable the drop, or drop the empty
+column and rename.
 
 ## Ordering across strategies is documented, not automatic
 

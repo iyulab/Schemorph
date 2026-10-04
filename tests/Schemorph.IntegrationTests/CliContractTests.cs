@@ -94,6 +94,66 @@ public sealed class CliContractTests : IDisposable
     }
 
     /// <summary>
+    /// Manifest 1.8: `--pre` — pre-stage scripts are passed the same way to the verb that plans, the
+    /// one that applies and the one that reports, and apply can now end with 2 (work left for the
+    /// next run).
+    /// </summary>
+    [Fact]
+    public void Manifest_lists_the_pre_stage_option_and_apply_s_pending_exit_code()
+    {
+        var manifest = JsonDocument.Parse(Run("schema").StdOut).RootElement;
+        var verbs = manifest.GetProperty("verbs").EnumerateArray().ToList();
+
+        foreach (var name in new[] { "diff", "apply", "status" })
+        {
+            var verb = verbs.Single(c => c.GetProperty("name").GetString() == name);
+            Assert.Contains(verb.GetProperty("options").EnumerateArray(), o => o.GetProperty("flag").GetString() == "--pre");
+        }
+        var apply = verbs.Single(c => c.GetProperty("name").GetString() == "apply");
+        Assert.Contains(2, apply.GetProperty("exitCodes").EnumerateArray().Select(e => e.GetInt32()));
+    }
+
+    [Fact]
+    public void A_missing_pre_stage_directory_is_named()
+    {
+        var result = Run("diff --format json --schema . --pre ./no-such-pre-dir", "Server=x");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("pre_dir_not_found", result.StdErr);
+    }
+
+    /// <summary>
+    /// The two-run pre-stage end to end on the CLI: diff says work is pending, the gated apply runs the
+    /// pre-stage only and says so with 2, and the second round converges to 0.
+    /// </summary>
+    [SkippableFact]
+    public void A_deferred_apply_exits_2_and_the_next_round_converges()
+    {
+        using var db = new TestDatabase();
+        var schema = Directory.CreateDirectory(Path.Combine(_dir, "schema", "tables")).Parent!.FullName;
+        var pre = Directory.CreateDirectory(Path.Combine(_dir, "pre")).FullName;
+        db.Execute("CREATE TABLE dbo.T (Id INT NOT NULL PRIMARY KEY, Notes NVARCHAR(50) NULL)");
+        db.Execute("INSERT INTO dbo.T VALUES (1, N'keep me')");
+        File.WriteAllText(Path.Combine(schema, "tables", "dbo.T.sql"),
+            "CREATE TABLE dbo.T (Id INT NOT NULL PRIMARY KEY, Remarks NVARCHAR(50) NULL);\nGO\n");
+        File.WriteAllText(Path.Combine(pre, "V1__rename.sql"), "EXEC sp_rename 'dbo.T.Notes', 'Remarks', 'COLUMN';");
+
+        var diff = Run($"diff --schema \"{schema}\" --pre \"{pre}\"", db.Url);
+        Assert.Equal(2, diff.ExitCode);
+        var hash = JsonDocument.Parse(diff.StdOut).RootElement.GetProperty("planHash").GetString();
+
+        var apply = Run($"apply --schema \"{schema}\" --pre \"{pre}\" --expect-plan {hash}", db.Url);
+        Assert.Equal(2, apply.ExitCode);
+        var applied = JsonDocument.Parse(apply.StdOut).RootElement;
+        Assert.True(applied.GetProperty("deferred").GetBoolean());
+        Assert.Equal("V1__rename.sql", applied.GetProperty("pre").GetProperty("applied")[0].GetString());
+
+        var again = Run($"diff --schema \"{schema}\" --pre \"{pre}\"", db.Url);
+        Assert.Equal(0, again.ExitCode);
+        Assert.Equal("keep me", db.Scalar<string>("SELECT Remarks FROM dbo.T"));
+    }
+
+    /// <summary>
     /// Manifest 1.6: `desiredStateFormatVersion` versions the `inspect`/`schemorph://schema`
     /// file-tree rendering contract (docs/desired-state-format.md), independently of
     /// `planFormatVersion` — this is what lets a consumer diffing its own copy of rendered
@@ -105,7 +165,7 @@ public sealed class CliContractTests : IDisposable
     {
         var manifest = JsonDocument.Parse(Run("schema").StdOut).RootElement;
 
-        Assert.Equal("1.7", manifest.GetProperty("manifestVersion").GetString());
+        Assert.Equal("1.8", manifest.GetProperty("manifestVersion").GetString());
         Assert.Equal("1.0", manifest.GetProperty("desiredStateFormatVersion").GetString());
         Assert.Equal("docs/desired-state-format.md", manifest.GetProperty("docs").GetProperty("desiredStateFormat").GetString());
     }

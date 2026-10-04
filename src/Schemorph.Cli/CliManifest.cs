@@ -23,8 +23,10 @@ internal static class CliManifest
     // — versions the `inspect`/`schemorph://schema` file-tree rendering contract
     // (docs/desired-state-format.md), independent of planFormatVersion. 1.7: diff
     // --migrations — the pending migrations an apply runs join the plan it is gated on.
+    // 1.8: --pre on diff, apply and status (pre-stage scripts), and exit code 2 on apply —
+    // only the pre-stage ran, the rest is planned on the next run.
     // All additive; consumers ignore properties they do not know.
-    public const string ManifestVersion = "1.7";
+    public const string ManifestVersion = "1.8";
 
     public static string ToJson(string toolVersion) => JsonSerializer.Serialize(new
     {
@@ -55,7 +57,7 @@ internal static class CliManifest
             sqlFormat = "diff only: the whole plan as one review document in execution order, " +
                 "planHash in the header. Read-only — apply it with --expect-plan, not with a SQL client",
             errorEnvelope = "errors are one JSON object {error:{kind,code,message,hint}} on stderr with --format json; " +
-                "a failed apply adds stage and committed{declarative,redefines,migrations}. " +
+                "a failed apply adds stage and committed{declarative,redefines,migrations,pre}. " +
                 "Optional fields are absent, not null; hint is omitted when no cause was established (docs/errors.md)",
             redaction = "passwords are redacted from every output channel",
         },
@@ -63,7 +65,7 @@ internal static class CliManifest
         {
             new { code = 0, meaning = "success; for diff: no changes pending" },
             new { code = 1, meaning = "error (typed envelope on stderr)" },
-            new { code = 2, meaning = "diff and status only: work is pending (diff: anything an apply would run — a change, a pending migration or pre-stage script; status: drift or migrations waiting to run)" },
+            new { code = 2, meaning = "work is pending: diff — anything an apply would run (a change, a pending migration or pre-stage script); status — drift or scripts waiting to run; apply — only the pre-stage ran (the provider plans the rest once it is done), run it again" },
         },
         verbs = new object[]
         {
@@ -89,6 +91,7 @@ internal static class CliManifest
                     new { flag = "--schema", value = "dir", required = true, description = "Desired-state SQL directory; non-model .sql files (deploy scripts, seed DML) are skipped with a warning." },
                     new { flag = "--allow-destructive", value = (string?)null, required = false, description = "Include destructive changes in the plan." },
                     new { flag = "--migrations", value = "dir", required = false, description = "Versioned migration scripts; the pending ones join the plan (name + checksum) and its planHash. Pass the same directory to apply." },
+                    new { flag = "--pre", value = "dir", required = false, description = "Pre-stage scripts (V####__description.sql), run once before the declarative stage; the plan is computed as of after the pending ones, which join it (pre[]) and its planHash. Pass the same directory to apply." },
                     new { flag = "--format", value = "json|text|sql", required = false, description = "Output form; json is the plan format (docs/plan-format.md); sql is the human-review document (read-only, planHash in its header)." },
                 },
                 exitCodes = new[] { 0, 1, 2 },
@@ -102,11 +105,12 @@ internal static class CliManifest
                     new { flag = "--url", value = "connection-string", required = false, description = "Target database; SCHEMORPH_URL is used when omitted." },
                     new { flag = "--schema", value = "dir", required = true, description = "Desired-state SQL directory." },
                     new { flag = "--migrations", value = "dir", required = false, description = "Versioned migration scripts (V####__description.sql), run once each, tamper-checked." },
+                    new { flag = "--pre", value = "dir", required = false, description = "Pre-stage scripts, run first and recorded once each; where the provider cannot plan past them, only they run and the exit code is 2." },
                     new { flag = "--allow-destructive", value = (string?)null, required = false, description = "Apply destructive changes too." },
                     new { flag = "--expect-plan", value = "hash", required = false, description = "Apply only if the computed plan matches this fingerprint (diff's planHash); a mismatch aborts with error code plan_mismatch before anything executes." },
                     new { flag = "--format", value = "json|text", required = false, description = "Output form; the json envelope embeds the executed plan." },
                 },
-                exitCodes = new[] { 0, 1 },
+                exitCodes = new[] { 0, 1, 2 },
             },
             new
             {
@@ -117,6 +121,7 @@ internal static class CliManifest
                     new { flag = "--url", value = "connection-string", required = false, description = "Target database; SCHEMORPH_URL is used when omitted." },
                     new { flag = "--schema", value = "dir", required = true, description = "Desired-state SQL directory." },
                     new { flag = "--migrations", value = "dir", required = false, description = "Also report pending migration scripts." },
+                    new { flag = "--pre", value = "dir", required = false, description = "Pre-stage scripts: drift is planned as of after the pending ones, which are listed." },
                     new { flag = "--format", value = "json|text", required = false, description = "Output form." },
                 },
                 exitCodes = new[] { 0, 1, 2 },

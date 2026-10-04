@@ -79,6 +79,8 @@ switch (verb)
               --url <connection-string>   target database (required)
               --schema <dir>              desired-state SQL directory (required)
               --migrations <dir>          also report pending migration scripts
+              --pre <dir>                 pre-stage scripts: drift is planned as of after
+                                          the pending ones, which are listed
               --format json|text          output form (default: text on a terminal,
                                           json when stdout is redirected)
 
@@ -93,6 +95,11 @@ switch (verb)
               --migrations <dir>          versioned migration scripts — the pending ones join
                                           the plan (name + checksum) and its planHash; pass
                                           the same directory to apply
+              --pre <dir>                 pre-stage scripts (V####__description.sql) that
+                                          run once, before the declarative stage — a rename
+                                          the desired state cannot express. The plan is
+                                          computed as of after them; pass the same
+                                          directory to apply
               --format json|text|sql      output form (default: text on a terminal,
                                           json when stdout is redirected). sql renders
                                           the whole plan as one review document, in
@@ -104,6 +111,9 @@ switch (verb)
               --url <connection-string>   target database (required)
               --schema <dir>              desired-state SQL directory (required)
               --migrations <dir>          versioned migration scripts (V####__description.sql)
+              --pre <dir>                 pre-stage scripts, run first; where they cannot be
+                                          planned past (SQL Server), the apply runs only them
+                                          and exits 2 — run it again for the rest
               --allow-destructive         apply destructive changes too
               --expect-plan <hash>        apply only if the computed plan matches this
                                           fingerprint (printed by diff); mismatch = abort
@@ -170,6 +180,13 @@ async Task<int> RunApply(string[] args, string format)
             "Pass the directory that holds V####__description.sql files.");
     }
 
+    var preDir = ParseOption(args, "--pre");
+    if (preDir is not null && !Directory.Exists(preDir))
+    {
+        return Fail(format, "pre_dir_not_found", $"Pre-stage directory not found: {preDir}",
+            "Pass the directory that holds the V####__description.sql scripts to run before the declarative stage.");
+    }
+
     try
     {
         // The apply itself lives in the core (ApplyOperation) — the CLI and the
@@ -178,7 +195,7 @@ async Task<int> RunApply(string[] args, string format)
         var outcome = await ApplyOperation.RunAsync(
             provider, ledger,
             new ApplyOperation.Request(schemaDir, url, allowDestructive, migrationsDir,
-                ParseOption(args, "--expect-plan")),
+                ParseOption(args, "--expect-plan"), preDir),
             onPlan: plan =>
             {
                 if (format != "json")
@@ -198,7 +215,7 @@ async Task<int> RunApply(string[] args, string format)
                         EngineErrors.FirstIn(outcome.Errors)),
                 ApplyOperation.FailureStage.PlanMismatch =>
                     Fail(format, "plan_mismatch", outcome.Errors[0].Text,
-                        "Re-run diff (with the same --migrations, if this apply runs migrations), review the new plan, and pass its hash with --expect-plan."),
+                        "Re-run diff (with the same --migrations and --pre, if this apply runs them), review the new plan, and pass its hash with --expect-plan."),
                 ApplyOperation.FailureStage.PreStage or ApplyOperation.FailureStage.Redefine
                     or ApplyOperation.FailureStage.Migration or ApplyOperation.FailureStage.Commit =>
                     FailApplyStage(format, outcome),
@@ -234,6 +251,14 @@ async Task<int> RunApply(string[] args, string format)
                     ignoredFiles = migrationRun.IgnoredFiles,
                     warnings = migrationRun.Warnings,
                 },
+                pre = outcome.PreScripts is not { } preRun ? null : new
+                {
+                    applied = preRun.Applied,
+                    skipped = preRun.Skipped,
+                    ignoredFiles = preRun.IgnoredFiles,
+                    warnings = preRun.Warnings,
+                },
+                deferred = outcome.Deferred,
             }, new JsonSerializerOptions
             {
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -243,6 +268,17 @@ async Task<int> RunApply(string[] args, string format)
         }
         else
         {
+            if (outcome.PreScripts is { } preRun)
+            {
+                Console.WriteLine($"Pre-stage: {preRun.Applied.Count} script(s) ran, {preRun.Skipped} already applied.");
+                foreach (var name in preRun.Applied) Console.WriteLine($"  ran      {name}");
+                foreach (var name in preRun.IgnoredFiles) Console.WriteLine($"  ignored  {name} (name does not match V####__description.sql)");
+                foreach (var w in preRun.Warnings) Console.WriteLine($"  [{w.Severity}] {w.Code}: {w.Text}");
+            }
+            if (outcome.Deferred)
+            {
+                Console.WriteLine("Only the pre-stage ran: this provider plans the rest once it is done. Run diff and apply again.");
+            }
             Console.WriteLine($"Applied {outcome.Applied.Count} change(s); excluded {outcome.ExcludedVisible.Count}.");
             foreach (var c in outcome.Applied) Console.WriteLine($"  applied  {c.Operation,-8} {c.ObjectType,-12} {c.ObjectName}");
             foreach (var c in outcome.ExcludedVisible) Console.WriteLine($"  excluded {c.Operation,-8} {c.ObjectType,-12} {c.ObjectName}");
@@ -262,7 +298,9 @@ async Task<int> RunApply(string[] args, string format)
                 foreach (var w in migrationRun.Warnings) Console.WriteLine($"  [{w.Severity}] {w.Code}: {w.Text}");
             }
         }
-        return ExitNoChanges;
+        // A deferred apply succeeded and left work for the next run — the same "work is pending" code
+        // diff and status use, so a deployment script loops on it instead of stopping half-way.
+        return outcome.Deferred ? ExitChangesPending : ExitNoChanges;
     }
     catch (TemporaryWorkspaceException ex)
     {
@@ -296,7 +334,7 @@ async Task<int> RunStatus(string[] args, string format)
     if (url is null || schemaDir is null)
     {
         return Fail(format, "invalid_arguments", "status requires --url (or SCHEMORPH_URL) and --schema.",
-            "schemorph status --url \"<connection-string>\" --schema ./schema [--migrations ./migrations]");
+            "schemorph status --url \"<connection-string>\" --schema ./schema [--migrations ./migrations] [--pre ./pre]");
     }
     if (!Directory.Exists(schemaDir))
     {
@@ -310,12 +348,19 @@ async Task<int> RunStatus(string[] args, string format)
             "Pass the directory that holds V####__description.sql files.");
     }
 
+    var preDir = ParseOption(args, "--pre");
+    if (preDir is not null && !Directory.Exists(preDir))
+    {
+        return Fail(format, "pre_dir_not_found", $"Pre-stage directory not found: {preDir}",
+            "Pass the directory that holds the V####__description.sql scripts to run before the declarative stage.");
+    }
+
     try
     {
         var (provider, ledger) = ProviderSelection.Current;
         var result = await StatusOperation.RunAsync(
             provider, ledger,
-            new StatusOperation.Request(schemaDir, url, migrationsDir));
+            new StatusOperation.Request(schemaDir, url, migrationsDir, preDir));
 
         if (!result.Success)
         {
@@ -459,13 +504,20 @@ async Task<int> RunDiff(string[] args, string format)
             "Pass the directory that holds V####__description.sql files.");
     }
 
+    var preDir = ParseOption(args, "--pre");
+    if (preDir is not null && !Directory.Exists(preDir))
+    {
+        return Fail(format, "pre_dir_not_found", $"Pre-stage directory not found: {preDir}",
+            "Pass the directory that holds the V####__description.sql scripts to run before the declarative stage.");
+    }
+
     try
     {
         // The diff itself lives in the core (DiffOperation) so the CLI and the MCP
         // surface render the same operation; this method only renders and maps errors.
         var (provider, ledger) = ProviderSelection.Current;
         var result = await DiffOperation.RunAsync(
-            provider, ledger, schemaDir, url, allowDestructive, migrationsDir: migrationsDir);
+            provider, ledger, schemaDir, url, allowDestructive, migrationsDir: migrationsDir, preDir: preDir);
 
         if (!result.Success)
         {

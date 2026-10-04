@@ -13,7 +13,7 @@ Terraform's `-detailed-exitcode` convention:
 |---|---|
 | `0` | Success; for `diff`, additionally: no changes pending |
 | `1` | Error (an `error` envelope was written to stderr) |
-| `2` | `diff` and `status` only: success, and work is pending — for `diff`, anything an apply would run (a change, or a pending migration or pre-stage script); for `status`, drift or migrations waiting to run |
+| `2` | Success, and work is pending — for `diff`, anything an apply would run (a change, or a pending migration or pre-stage script); for `status`, drift or scripts waiting to run; for `apply`, only the pre-stage ran (the provider plans the rest once it is done — `SCHEMORPH014`) and running it again finishes the work |
 
 ## The error envelope
 
@@ -132,12 +132,14 @@ hand: the ledger is what makes the run-once and redefine contracts hold.
 | `invalid_arguments` | `usage` | Required options missing |
 | `schema_dir_not_found` | `usage` | `--schema` directory does not exist |
 | `migrations_dir_not_found` | `usage` | `--migrations` directory does not exist |
+| `pre_dir_not_found` | `usage` | `--pre` directory does not exist |
 | `temp_workspace_unavailable` | `usage` | Schemorph could not create the directory it keeps its own intermediate files in (`<TMP>/schemorph`). Point `TMP`/`TEMP` at a writable directory — these files are the tool's, not yours, and it never names them in an error |
 | `invalid_desired_state` | `invalid_state` | Desired-state files fail to load or validate (e.g. `SCHEMORPH003/004/007`) — same code on every verb, `diff`/`status`/`apply` alike |
 | `migration_failed` | `invalid_state` | Duplicate versions, or an applied migration was edited (tamper detection) — found before any migration runs |
 | `redefine_failed` | `invalid_state` | Dependency cycle among programmable objects — found before any re-definition runs |
 | `redefine_execution_failed` | `execution` | A re-definition script failed against the database. Carries `stage` and `committed`; under `partial` atomicity the declarative publish had already committed, under `transactional` the session was rolled back and `committed` is zero |
 | `migration_execution_failed` | `execution` | A migration script failed against the database. Carries `stage` and `committed` |
+| `pre_stage_execution_failed` | `execution` | A pre-stage script failed against the database during `apply`. Carries `stage` (`pre`) and `committed` (`pre` counts the scripts that ran). In `diff`, a failing pre-stage script is reported as `invalid_desired_state` with message code `pre_stage_failed` |
 | `commit_failed` | `execution` | `atomicity: "transactional"` only: every strategy ran, but the session's own commit did not confirm (e.g. the connection dropped between the last statement and the acknowledgement). Carries `stage: "commit"` and `committed`; whether the database actually kept the work is unknown — see [failure-semantics.md](failure-semantics.md#commit-acknowledgement-failures) |
 | `plan_mismatch` | `invalid_state` | `apply --expect-plan` (or MCP `expectedPlanHash`): the plan computed at apply time differs from the reviewed fingerprint — nothing was applied; re-run `diff`, review, retry with the new hash |
 | `compare_failed` | `execution` | `diff` could not compare (connection, engine error) |

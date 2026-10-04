@@ -9,10 +9,12 @@ failed.
 
 ## An apply runs in three stages
 
-They always run in this order, and each has its own failure behaviour.
+They always run in this order, and each has its own failure behaviour. When `--pre` is
+given and pre-stage scripts are pending, they run first (stage 0, below the table).
 
 | # | Stage | What it does | If it fails |
 |---|---|---|---|
+| 0 | **Pre-stage** (`--pre`) | Run-once scripts for what the desired state cannot express — a rename — before anything is planned | `pre_stage_execution_failed`, stage `pre`. Stops at the first failure: on SQL Server earlier scripts stay applied (like migrations); on PostgreSQL the session rolls everything back |
 | 1 | **Declarative publish** | Every structural change — tables, columns, indexes, constraints — as one publish | **All of it rolls back.** No change from this stage survives |
 | 2 | **Redefinitions** | Each programmable object (view, procedure, function, trigger) re-defined idempotently | Stops at the first failure. Objects before it stay re-defined; that one and the rest do not |
 | 3 | **Migrations** | Versioned run-once data scripts, in order | Stops at the first failure. That script rolls back whole; earlier ones stay applied |

@@ -39,6 +39,7 @@ internal sealed class SchemorphTools
         [Description("Directory holding desired-state .sql files (non-model files are skipped with a warning)")] string schemaDir,
         [Description("Include destructive changes (data-holding DROPs) in the plan")] bool allowDestructive = false,
         [Description("Optional directory of versioned migration scripts — pending ones join the plan and its planHash; pass the same directory to schemorph_apply")] string? migrationsDir = null,
+        [Description("Optional directory of pre-stage scripts (V####__description.sql) that run once before the declarative stage — a rename the desired state cannot express; the plan is computed as of after the pending ones. Pass the same directory to every verb")] string? preDir = null,
         CancellationToken cancellationToken = default)
     {
         if (ResolveUrl() is not { } url)
@@ -55,12 +56,17 @@ internal sealed class SchemorphTools
             return Error("migrations_dir_not_found", $"Migrations directory not found: {migrationsDir}",
                 "Pass the directory that holds V####__description.sql files.");
         }
+        if (preDir is not null && !Directory.Exists(preDir))
+        {
+            return Error("pre_dir_not_found", $"Pre-stage directory not found: {preDir}",
+                "Pass the directory that holds the V####__description.sql scripts to run before the declarative stage.");
+        }
 
         try
         {
             var (provider, ledger) = ProviderSelection.Current;
             var result = await DiffOperation.RunAsync(
-                provider, ledger, schemaDir, url, allowDestructive, cancellationToken, migrationsDir);
+                provider, ledger, schemaDir, url, allowDestructive, cancellationToken, migrationsDir, preDir);
             if (!result.Success)
             {
                 var badState = result.Stage == DiffOperation.FailureStage.DesiredState;
@@ -127,6 +133,7 @@ internal sealed class SchemorphTools
     public static async Task<string> Status(
         [Description("Directory holding desired-state .sql files")] string schemaDir,
         [Description("Optional directory of versioned migration scripts to report pending ones")] string? migrationsDir = null,
+        [Description("Optional directory of pre-stage scripts (V####__description.sql) that run once before the declarative stage — a rename the desired state cannot express; the plan is computed as of after the pending ones. Pass the same directory to every verb")] string? preDir = null,
         CancellationToken cancellationToken = default)
     {
         if (ResolveUrl() is not { } url)
@@ -143,13 +150,18 @@ internal sealed class SchemorphTools
             return Error("migrations_dir_not_found", $"Migrations directory not found: {migrationsDir}",
                 "Pass the directory that holds V####__description.sql files.");
         }
+        if (preDir is not null && !Directory.Exists(preDir))
+        {
+            return Error("pre_dir_not_found", $"Pre-stage directory not found: {preDir}",
+                "Pass the directory that holds the V####__description.sql scripts to run before the declarative stage.");
+        }
 
         try
         {
             var (provider, ledger) = ProviderSelection.Current;
             var result = await StatusOperation.RunAsync(
                 provider, ledger,
-                new StatusOperation.Request(schemaDir, url, migrationsDir), cancellationToken);
+                new StatusOperation.Request(schemaDir, url, migrationsDir, preDir), cancellationToken);
             if (!result.Success)
             {
                 var code = result.Stage == DiffOperation.FailureStage.DesiredState ? "invalid_desired_state" : "compare_failed";
@@ -199,14 +211,17 @@ internal sealed class SchemorphTools
                  "expectedPlanHash (the planHash from schemorph_diff) is REQUIRED — the apply runs only " +
                  "if the plan computed now matches the reviewed one; any drift aborts before executing " +
                  "(error code plan_mismatch: re-run diff, review, retry with the new hash). " +
-                 "Declarative publish → programmable-object redefines → versioned migrations, " +
-                 "all recorded in the history ledger. " +
+                 "Pre-stage scripts (preDir) → declarative publish → programmable-object redefines → " +
+                 "versioned migrations, all recorded in the history ledger. Where the provider cannot plan " +
+                 "past pending pre-stage scripts (SQL Server), the apply runs only them and returns " +
+                 "deferred: true — diff and apply again for the rest. " +
                  "The target database comes from SCHEMORPH_URL in the server environment.")]
     public static async Task<string> Apply(
         [Description("Directory holding desired-state .sql files")] string schemaDir,
         [Description("The planHash from schemorph_diff — the reviewed plan this apply is allowed to execute")] string expectedPlanHash,
         [Description("Apply destructive changes (data-holding DROPs) too")] bool allowDestructive = false,
         [Description("Optional directory of versioned migration scripts (V####__description.sql)")] string? migrationsDir = null,
+        [Description("Optional directory of pre-stage scripts (V####__description.sql) that run once before the declarative stage — a rename the desired state cannot express; the plan is computed as of after the pending ones. Pass the same directory to every verb")] string? preDir = null,
         CancellationToken cancellationToken = default)
     {
         if (ResolveUrl() is not { } url)
@@ -223,6 +238,11 @@ internal sealed class SchemorphTools
             return Error("migrations_dir_not_found", $"Migrations directory not found: {migrationsDir}",
                 "Pass the directory that holds V####__description.sql files.");
         }
+        if (preDir is not null && !Directory.Exists(preDir))
+        {
+            return Error("pre_dir_not_found", $"Pre-stage directory not found: {preDir}",
+                "Pass the directory that holds the V####__description.sql scripts to run before the declarative stage.");
+        }
         if (string.IsNullOrWhiteSpace(expectedPlanHash))
         {
             return Error("invalid_arguments", "expectedPlanHash is required.",
@@ -234,7 +254,7 @@ internal sealed class SchemorphTools
             var (provider, ledger) = ProviderSelection.Current;
             var outcome = await ApplyOperation.RunAsync(
                 provider, ledger,
-                new ApplyOperation.Request(schemaDir, url, allowDestructive, migrationsDir, expectedPlanHash),
+                new ApplyOperation.Request(schemaDir, url, allowDestructive, migrationsDir, expectedPlanHash, preDir),
                 cancellationToken: cancellationToken);
 
             if (!outcome.Success)
@@ -280,7 +300,7 @@ internal sealed class SchemorphTools
                 return Error(code, text,
                     code switch
                     {
-                        "plan_mismatch" => "Re-run schemorph_diff (with the same migrationsDir, if this apply runs migrations), review the new plan, and retry with its planHash.",
+                        "plan_mismatch" => "Re-run schemorph_diff (with the same migrationsDir and preDir, if this apply runs them), review the new plan, and retry with its planHash.",
                         "invalid_desired_state" => "Fix the desired-state files named in the message.",
                         // Publish is transactional — nothing committed — but the
                         // cause is the engine's, so it is not guessed at here: the
@@ -309,6 +329,14 @@ internal sealed class SchemorphTools
                     ignoredFiles = outcome.Migrations.IgnoredFiles,
                     warnings = outcome.Migrations.Warnings,
                 },
+                pre = outcome.PreScripts is null ? null : new
+                {
+                    applied = outcome.PreScripts.Applied,
+                    skipped = outcome.PreScripts.Skipped,
+                    ignoredFiles = outcome.PreScripts.IgnoredFiles,
+                    warnings = outcome.PreScripts.Warnings,
+                },
+                deferred = outcome.Deferred,
             }, ResultJson);
         }
         catch (TemporaryWorkspaceException ex)

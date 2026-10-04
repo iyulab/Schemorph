@@ -67,11 +67,14 @@ schema/                      ← declarative: desired state, diffed automaticall
 migrations/                  ← versioned: ordered, checksummed, run once
   V0001__seed_reference_data.sql
   V0002__backfill_legacy_codes.sql
+pre/                         ← pre-stage: run once BEFORE the diff is planned (--pre)
+  V0001__rename_assets_to_equipment.sql
 ```
 
 - **Structural objects** (tables, indexes, constraints) are diffed: Schemorph compares your SQL files against the live database and generates the `CREATE` / `ALTER` / `DROP` plan.
 - **Programmable objects** (procedures, functions, views, triggers) are re-applied idempotently via `CREATE OR ALTER`. Text-based diffing of procedure bodies is unreliable by nature; re-definition is not. This sidesteps an entire class of bugs that diff-only tools struggle with.
 - **Data changes** (seeds, backfills, one-off transformations) are versioned migrations tracked in a checksummed history ledger, Flyway-style. State diffing cannot express these; a ledger can.
+- **Renames** cannot be expressed as desired state either — the files carry no identity across a name change. A pre-stage script (`--pre`) states it with the engine's own statement, runs once before the declarative stage, and the plan is computed as of after it — so a renamed table keeps its rows instead of becoming a drop beside an empty create. See [limitations.md](./docs/limitations.md).
 
 See [Architecture](./docs/architecture.md) for the full model.
 

@@ -27,6 +27,11 @@ change **additively**: consumers must ignore properties they do not know.
   (`SCHEMORPH014`); its gated apply runs them — each committed with its ledger row — and reports the
   apply `Deferred`. The next diff sees them done and plans the rest; re-running the same apply converges.
 
+- **`--pre <dir>` on `diff`, `apply` and `status`** (MCP: `preDir` on `schemorph_diff`, `schemorph_apply`,
+  `schemorph_status`). A missing directory is `pre_dir_not_found`. `apply` output carries `pre` (what ran)
+  and `deferred`; a deferred apply exits **`2`** — work is pending, run it again (CLI manifest **1.8**).
+  `status` plans its drift as of after the pending pre-stage scripts and counts them as pending work.
+
 ### Changed
 
 - 🔴 **`diff` exits `2` when an apply would run anything** — a pending migration (with `--migrations`) or

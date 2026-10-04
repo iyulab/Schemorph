@@ -18,7 +18,8 @@ public static class StatusOperation
     public sealed record Request(
         string SchemaDir,
         string ConnectionString,
-        string? MigrationsDir = null);
+        string? MigrationsDir = null,
+        string? PreDir = null);
 
     public sealed record LedgerSummary(
         int TotalEntries,
@@ -37,8 +38,8 @@ public static class StatusOperation
         LedgerSummary Ledger,
         MigrationsSummary? Migrations)
     {
-        /// <summary>Anything to do — drift, or migrations waiting to run.</summary>
-        public bool HasPendingWork => Plan.HasChanges || Migrations is { PendingFiles.Count: > 0 };
+        /// <summary>Anything to do — drift, or migrations or pre-stage scripts waiting to run.</summary>
+        public bool HasPendingWork => Plan.HasPendingWork || Migrations is { PendingFiles.Count: > 0 };
     }
 
     public sealed record StatusResult(
@@ -58,7 +59,10 @@ public static class StatusOperation
         var diff = await DiffOperation.RunAsync(
             provider, ledger, request.SchemaDir, request.ConnectionString,
             allowDestructive: true,   // status reports ALL drift, gated or not
-            cancellationToken);
+            cancellationToken,
+            // Drift is what an apply with the same pre-stage would do: planned as of after the pending
+            // pre-stage scripts (or, where that cannot be simulated, the pre-stage alone).
+            preDir: request.PreDir);
         if (!diff.Success)
         {
             return new StatusResult(null, diff.Errors, diff.Stage);
