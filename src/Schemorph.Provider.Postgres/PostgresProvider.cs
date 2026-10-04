@@ -100,7 +100,7 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     public async Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken cancellationToken = default)
     {
-        var compared = await CompareCoreAsync(request.DesiredState, request.ConnectionString, cancellationToken);
+        var compared = await CompareCoreAsync(request.DesiredState, request.ConnectionString, request.Session, cancellationToken);
         return new CompareResult(compared.Changes, compared.Messages,
             compared.UpdateScript, compared.ChangeScripts, compared.TablesWithColumnChanges,
             compared.ViewsDroppedFirst);
@@ -141,6 +141,15 @@ public sealed class PostgresProvider : IDatabaseProvider
         return await PgApplySession.OpenAsync(connectionString, cancellationToken);
     }
 
+    /// <summary>
+    /// A transaction that is never committed — the session a <c>diff</c> runs pending pre-stage
+    /// scripts in, so its comparison sees them done, and then discards. Unlike
+    /// <see cref="BeginApplySessionAsync"/> it bootstraps nothing: a diff writes nothing durable.
+    /// PostgreSQL DDL is transactional, which is what makes the simulation exact.
+    /// </summary>
+    public async Task<IApplySession?> BeginSimulationAsync(string connectionString, CancellationToken cancellationToken = default)
+        => await PgApplySession.OpenAsync(connectionString, cancellationToken);
+
     public async Task<ApplyResult> ApplyAsync(
         ApplyRequest request,
         Func<RawChange, ChangeScript?, ChangeInclusion> includeChange,
@@ -150,8 +159,10 @@ public sealed class PostgresProvider : IDatabaseProvider
     {
         // Same-snapshot invariant: the comparison announced through the hook is
         // the one this apply executes — no second comparison, no diff-apply race.
+        // Read through the session: it may already hold work this comparison has to see (a pre-stage
+        // script), and when it holds none the result is the committed state, as before.
         var compared =
-            await CompareCoreAsync(request.DesiredState, request.ConnectionString, cancellationToken);
+            await CompareCoreAsync(request.DesiredState, request.ConnectionString, session, cancellationToken);
 
         // A comparison this provider cannot carry out never becomes an announced
         // plan: the hook is what the fingerprint gate and the caller's rendering
@@ -297,22 +308,24 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// a false match that would silently adopt a differing one.
     /// </summary>
     public Task<IReadOnlyList<ProgrammableObjectInfo>> FilterMatchingLiveDefinitionsAsync(
-        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default)
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default,
+        IApplySession? session = null)
         => Task.FromResult<IReadOnlyList<ProgrammableObjectInfo>>(Array.Empty<ProgrammableObjectInfo>());
 
     /// <inheritdoc/>
     public Task<IReadOnlyList<ProgrammableObjectInfo>> FilterExistingLiveAsync(
-        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default)
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default,
+        IApplySession? session = null)
         => PgLiveProgrammables.FilterExistingAsync(
-            connectionString, TargetSchemaOf(connectionString), objects, cancellationToken);
+            connectionString, TargetSchemaOf(connectionString), objects, cancellationToken, session);
 
     /// <inheritdoc/>
     public Task<ProgrammableAnalysis> RefineProgrammablesAsync(
         ProgrammableAnalysis analysis, IDesiredState desiredState, string connectionString,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, IApplySession? session = null)
         => ViewRedefinePlanner.RefineAsync(
             analysis, PgDesiredState.From(desiredState).ModelTexts,
-            connectionString, TargetSchemaOf(connectionString), cancellationToken);
+            connectionString, TargetSchemaOf(connectionString), cancellationToken, session);
 
     // ------------------------------------------------------------- pipeline
 
@@ -338,7 +351,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// schema, both sides read back in comparison mode, compared structurally.
     /// </summary>
     private async Task<Compared> CompareCoreAsync(
-        IDesiredState desiredState, string connectionString, CancellationToken cancellationToken)
+        IDesiredState desiredState, string connectionString, IApplySession? session, CancellationToken cancellationToken)
     {
         var state = PgDesiredState.From(desiredState);
         var schema = TargetSchemaOf(connectionString);
@@ -350,8 +363,10 @@ public sealed class PostgresProvider : IDatabaseProvider
             desired = await CatalogReader.ReadTablesAsync(
                 connectionString, shadow.Name, normalizeSameSchemaReferences: true, cancellationToken);
         }
+        // The live side reads through the session when there is one; the shadow above is its own,
+        // committed schema and stays on its own connection.
         var live = await CatalogReader.ReadTablesAsync(
-            connectionString, schema, normalizeSameSchemaReferences: true, cancellationToken);
+            connectionString, schema, normalizeSameSchemaReferences: true, cancellationToken, session);
 
         // Programmable objects are created and changed by re-definition, never here —
         // but a file that is deleted leaves its object behind, and only a comparison of
@@ -361,13 +376,13 @@ public sealed class PostgresProvider : IDatabaseProvider
         var declaredObjects = PgProgrammables.Analyze(state.ProgrammableFiles).Objects;
         var declared = declaredObjects.Select(o => o.ObjectName).ToHashSet(StringComparer.Ordinal);
         var undeclared = await PgLiveProgrammables.ReadUndeclaredAsync(
-            connectionString, schema, declared, cancellationToken);
+            connectionString, schema, declared, cancellationToken, session);
 
         // A declared view that reads what this change removes — a table, a column, a view
         // no file declares — or a column whose type changes blocks that statement
         // (2BP01 / 0A000) for as long as it exists, and re-definition only runs after the
         // declarative stage. So it goes first too, and the redefine stage re-creates it.
-        var viewReads = await PgLiveProgrammables.ReadViewReadsAsync(connectionString, schema, cancellationToken);
+        var viewReads = await PgLiveProgrammables.ReadViewReadsAsync(connectionString, schema, cancellationToken, session);
         var viewsDroppedFirst = ViewsDroppedFirst(
             desired, live,
             declaredObjects.Where(o => o.ObjectType == "View").Select(o => o.ObjectName).ToHashSet(StringComparer.Ordinal),

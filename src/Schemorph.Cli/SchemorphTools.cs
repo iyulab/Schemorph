@@ -242,11 +242,12 @@ internal sealed class SchemorphTools
                 var text = string.Join("; ", outcome.Errors.Select(m => $"{m.Code}: {m.Text}"));
                 // Stages that ran after the publish committed carry what they left
                 // behind — same envelope the CLI emits, so an agent reads one shape.
-                if (outcome.Stage is ApplyOperation.FailureStage.Redefine or ApplyOperation.FailureStage.Migration
-                    or ApplyOperation.FailureStage.Commit)
+                if (outcome.Stage is ApplyOperation.FailureStage.PreStage or ApplyOperation.FailureStage.Redefine
+                    or ApplyOperation.FailureStage.Migration or ApplyOperation.FailureStage.Commit)
                 {
                     var (stageCode, stageLabel) = outcome.Stage switch
                     {
+                        ApplyOperation.FailureStage.PreStage => ("pre_stage_execution_failed", "pre"),
                         ApplyOperation.FailureStage.Redefine => ("redefine_execution_failed", "redefine"),
                         ApplyOperation.FailureStage.Migration => ("migration_execution_failed", "migration"),
                         // Everything ran; only the session's own commit failed to

@@ -15,6 +15,24 @@ change **additively**: consumers must ignore properties they do not know.
   under their own kind `pre`, which `status` now counts. A plan carries the pending ones as `pre[]`
   (file name and checksum, plan format **1.11**) and `planHash` binds them, tagged by stage; the
   text and review renderings name them. A plan with none hashes as before.
+- **The core operations run them on PostgreSQL.** `DiffOperation.RunAsync(…, preDir)` runs the pending
+  pre-stage scripts in a transaction the provider never commits (`BeginSimulationAsync`), plans through
+  it, and discards it — still read-only: nothing is recorded and nothing is kept. `ApplyOperation`
+  (`Request.PreDir`) runs them first in its one session, records each under the ledger kind `pre`, and
+  plans the declarative and re-definition stages as of after them; a failing one stops the apply with
+  `pre_stage_execution_failed` (stage `pre`), and the error envelope's `committed` counts them as `pre`.
+  A plan-hash mismatch rolls the scripts back with the session. A provider that cannot plan through a
+  transaction refuses pending pre-stage scripts (`pre_stage_unsupported`) rather than plan as of before
+  them.
+
+### Changed
+
+- **Live reads can go through a session.** `CompareRequest.Session`, and a `session` parameter on
+  `RefineProgrammablesAsync`, `FilterExistingLiveAsync` and `FilterMatchingLiveDefinitionsAsync`: a read
+  given one sees what that session has executed. The PostgreSQL provider's apply now compares through its
+  own session — the same committed state when the session has run nothing, which is every apply without
+  pre-stage scripts. Provider implementers: the new parameters are optional and may be ignored by a
+  provider whose `BeginSimulationAsync` returns null (the default).
 
 ## 0.17.0 — 2026-10-04
 

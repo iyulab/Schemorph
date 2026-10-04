@@ -56,7 +56,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
         => Task.Run(() => AnalyzeProgrammables(SqlServerDesiredState.From(desiredState)), cancellationToken);
 
     public async Task<IReadOnlyList<ProgrammableObjectInfo>> FilterMatchingLiveDefinitionsAsync(
-        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default)
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default,
+        IApplySession? session = null)
     {
         if (objects.Count == 0) return Array.Empty<ProgrammableObjectInfo>();
 
@@ -87,7 +88,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
     }
 
     public async Task<IReadOnlyList<ProgrammableObjectInfo>> FilterExistingLiveAsync(
-        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default)
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default,
+        IApplySession? session = null)
     {
         if (objects.Count == 0) return Array.Empty<ProgrammableObjectInfo>();
 

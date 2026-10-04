@@ -52,6 +52,18 @@ public interface IDatabaseProvider
     Task<IApplySession?> BeginApplySessionAsync(string connectionString, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Opens a transaction that is never committed, for a read-only operation that has to plan as of
+    /// after something it must not keep: <c>diff</c> runs the pending pre-stage scripts in it, reads
+    /// through it (<see cref="CompareRequest.Session"/> and the <c>session</c> parameters below), and
+    /// disposes it, which rolls everything back. It writes nothing durable — unlike
+    /// <see cref="BeginApplySessionAsync"/>, which may bootstrap. Null when the provider cannot
+    /// simulate that way (its DDL is not transactional, or its comparison cannot read through a
+    /// transaction) — the default.
+    /// </summary>
+    Task<IApplySession?> BeginSimulationAsync(string connectionString, CancellationToken cancellationToken = default)
+        => Task.FromResult<IApplySession?>(null);
+
+    /// <summary>
     /// Apply desired state to the target database. <paramref name="includeChange"/>
     /// is the core's policy hook: the provider mechanically applies exactly the
     /// changes the core includes (destructive gating, self-exclusion, ...) — and,
@@ -112,7 +124,8 @@ public interface IDatabaseProvider
     /// idempotent redefinition).
     /// </summary>
     Task<IReadOnlyList<ProgrammableObjectInfo>> FilterMatchingLiveDefinitionsAsync(
-        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default);
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default,
+        IApplySession? session = null);
 
     /// <summary>
     /// Of the given desired-state programmable objects, the subset that exists
@@ -127,7 +140,8 @@ public interface IDatabaseProvider
     /// there".
     /// </summary>
     Task<IReadOnlyList<ProgrammableObjectInfo>> FilterExistingLiveAsync(
-        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default);
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default,
+        IApplySession? session = null);
 
     /// <summary>
     /// Refines a programmable-object analysis against the live database — dialect
@@ -150,7 +164,7 @@ public interface IDatabaseProvider
     /// </summary>
     Task<ProgrammableAnalysis> RefineProgrammablesAsync(
         ProgrammableAnalysis analysis, IDesiredState desiredState, string connectionString,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, IApplySession? session = null)
         => Task.FromResult(analysis);
 
     /// <summary>
@@ -299,7 +313,13 @@ public static class DesiredStateFormat
     public const string CurrentVersion = "1.0";
 }
 
-public sealed record CompareRequest(IDesiredState DesiredState, string ConnectionString);
+/// <param name="Session">
+/// A session the comparison reads the live database through, so it sees what that session has
+/// already executed (a pre-stage script) — null reads the committed state on a connection of its own.
+/// A provider that cannot read through a session never receives one: it returns no simulation and
+/// does not support an apply session that runs anything before the comparison.
+/// </param>
+public sealed record CompareRequest(IDesiredState DesiredState, string ConnectionString, IApplySession? Session = null);
 
 /// <summary>
 /// Provider-raw comparison output, in Schemorph terms (no engine types).

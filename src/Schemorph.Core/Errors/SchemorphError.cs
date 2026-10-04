@@ -91,7 +91,7 @@ public sealed record SchemorphError(string Kind, string Code, string Message, st
         // not generate the script the review document is made of, so no document
         // is produced rather than a partial one.
         "compare_failed" or "apply_failed" or "inspect_failed"
-            or "redefine_execution_failed" or "migration_execution_failed"
+            or "redefine_execution_failed" or "migration_execution_failed" or "pre_stage_execution_failed"
             or "review_script_unavailable"
             => "execution",
         _ => "internal",
@@ -101,6 +101,7 @@ public sealed record SchemorphError(string Kind, string Code, string Message, st
 /// <summary>
 /// What a failed apply had already committed, by strategy (ADR-0002 order).
 /// <paramref name="Declarative"/> is all-or-nothing — the publish is one
-/// transaction — while the other two are per-script progress counts.
+/// transaction — while the others are per-script progress counts.
+/// <paramref name="Pre"/> counts pre-stage scripts, which run before the declarative stage.
 /// </summary>
-public sealed record CommittedWork(int Declarative, int Redefines, int Migrations);
+public sealed record CommittedWork(int Declarative, int Redefines, int Migrations, int Pre = 0);

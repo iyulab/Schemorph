@@ -25,7 +25,8 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
     /// redefines what already matches (ADR-0002 addendum). Read-only.
     /// </summary>
     public async Task<RedefinePlan> PlanAsync(
-        ProgrammableAnalysis analysis, string connectionString, CancellationToken cancellationToken = default)
+        ProgrammableAnalysis analysis, string connectionString, CancellationToken cancellationToken = default,
+        IApplySession? session = null)
     {
         var ordered = TopologicalOrder(analysis.Objects);
 
@@ -52,7 +53,7 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
         var missing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (steady.Count > 0)
         {
-            var existing = await provider.FilterExistingLiveAsync(connectionString, steady, cancellationToken);
+            var existing = await provider.FilterExistingLiveAsync(connectionString, steady, cancellationToken, session);
             var existingNames = existing.Select(o => o.ObjectName).ToHashSet(StringComparer.OrdinalIgnoreCase);
             missing.UnionWith(steady.Where(o => !existingNames.Contains(o.ObjectName)).Select(o => o.ObjectName));
         }
@@ -63,7 +64,7 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
         var unknown = candidates.Where(o => !lastChecksum.ContainsKey(o.ObjectName)).ToList();
         var reconcilable = unknown.Count == 0
             ? Array.Empty<ProgrammableObjectInfo>()
-            : await provider.FilterMatchingLiveDefinitionsAsync(connectionString, unknown, cancellationToken);
+            : await provider.FilterMatchingLiveDefinitionsAsync(connectionString, unknown, cancellationToken, session);
         var reconcilableNames = reconcilable.Select(o => o.ObjectName).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         return new RedefinePlan(

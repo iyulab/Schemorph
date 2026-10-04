@@ -102,7 +102,7 @@ internal sealed class FakeProvider : IDatabaseProvider
     public List<IReadOnlyList<string>> LiveMatchQueries { get; } = new();
 
     public Task<IReadOnlyList<ProgrammableObjectInfo>> FilterMatchingLiveDefinitionsAsync(
-        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken ct = default)
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken ct = default, IApplySession? session = null)
     {
         LiveMatchQueries.Add(objects.Select(o => o.ObjectName).ToList());
         return Task.FromResult<IReadOnlyList<ProgrammableObjectInfo>>(
@@ -116,7 +116,7 @@ internal sealed class FakeProvider : IDatabaseProvider
     public List<IReadOnlyList<string>> LiveExistenceQueries { get; } = new();
 
     public Task<IReadOnlyList<ProgrammableObjectInfo>> FilterExistingLiveAsync(
-        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken ct = default)
+        string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken ct = default, IApplySession? session = null)
     {
         LiveExistenceQueries.Add(objects.Select(o => o.ObjectName).ToList());
         return Task.FromResult<IReadOnlyList<ProgrammableObjectInfo>>(

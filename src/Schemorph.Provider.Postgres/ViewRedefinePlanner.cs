@@ -42,14 +42,17 @@ internal static class ViewRedefinePlanner
 
     public static async Task<ProgrammableAnalysis> RefineAsync(
         ProgrammableAnalysis analysis, IReadOnlyList<string> desiredModelTexts,
-        string connectionString, string schema, CancellationToken cancellationToken)
+        string connectionString, string schema, CancellationToken cancellationToken, IApplySession? session = null)
     {
         var views = analysis.Objects.Where(o => o.ObjectType == "View").ToList();
         if (views.Count == 0) return analysis;
 
-        await using var liveConnection = new NpgsqlConnection(connectionString);
-        await liveConnection.OpenAsync(cancellationToken);
-        await SetSearchPathAsync(liveConnection, cancellationToken, schema);
+        // Live reads go through the session when there is one — it may already have changed what
+        // they read (PgReadConnection). The shadow below stays on a connection of its own: it is a
+        // separate, committed schema the session never touches.
+        await using var liveLease = await PgReadConnection.OpenAsync(connectionString, session, cancellationToken);
+        var liveConnection = liveLease.Connection;
+        await liveLease.SetSearchPathAsync(cancellationToken, schema);
 
         var refined = analysis.Objects.ToList();
         var messages = analysis.Messages.ToList();
@@ -118,11 +121,11 @@ internal static class ViewRedefinePlanner
 
             // The views reading this one go with it — dropped ahead of it, re-created after it —
             // when every one of them is the desired state's to re-create.
-            reads ??= await PgLiveProgrammables.ReadViewReadsAsync(connectionString, schema, cancellationToken);
+            reads ??= await PgLiveProgrammables.ReadViewReadsAsync(connectionString, schema, cancellationToken, session);
             var dependents = ReadersOf(view.ObjectName, reads);
             var declaredNames = views.Select(v => v.ObjectName).ToHashSet(StringComparer.Ordinal);
             var blocked = await FirstUndroppableAsync(
-                liveConnection, schema, [.. dependents, view.ObjectName], cancellationToken);
+                liveLease, schema, [.. dependents, view.ObjectName], cancellationToken);
             if (blocked is not null)
             {
                 messages.Add(new RawMessage("Error", "SCHEMORPH010",
@@ -325,18 +328,16 @@ internal static class ViewRedefinePlanner
     /// view, a rule, a function body: whatever it knows about). Null when all of them can go;
     /// otherwise the first one something else still depends on.
     /// </summary>
-    private static async Task<string?> FirstUndroppableAsync(
-        NpgsqlConnection liveConnection, string schema, IReadOnlyList<string> viewsInDropOrder,
+    private static Task<string?> FirstUndroppableAsync(
+        PgReadConnection live, string schema, IReadOnlyList<string> viewsInDropOrder,
         CancellationToken cancellationToken)
-    {
-        await using var transaction = await liveConnection.BeginTransactionAsync(cancellationToken);
-        try
+        => live.ProbeAsync<string?>(async transaction =>
         {
             foreach (var name in viewsInDropOrder)
             {
                 await using var drop = new NpgsqlCommand(
                     $"DROP VIEW {DesiredStateRenderer.Quote(schema)}.{DesiredStateRenderer.Quote(name)} RESTRICT",
-                    liveConnection, transaction);
+                    live.Connection, transaction);
                 try
                 {
                     await drop.ExecuteNonQueryAsync(cancellationToken);
@@ -347,12 +348,7 @@ internal static class ViewRedefinePlanner
                 }
             }
             return null;
-        }
-        finally
-        {
-            await transaction.RollbackAsync(cancellationToken);
-        }
-    }
+        }, cancellationToken);
 
     private const string ColumnsSql = """
         SELECT a.attname, format_type(a.atttypid, a.atttypmod)

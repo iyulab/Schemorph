@@ -199,8 +199,8 @@ async Task<int> RunApply(string[] args, string format)
                 ApplyOperation.FailureStage.PlanMismatch =>
                     Fail(format, "plan_mismatch", outcome.Errors[0].Text,
                         "Re-run diff (with the same --migrations, if this apply runs migrations), review the new plan, and pass its hash with --expect-plan."),
-                ApplyOperation.FailureStage.Redefine or ApplyOperation.FailureStage.Migration
-                    or ApplyOperation.FailureStage.Commit =>
+                ApplyOperation.FailureStage.PreStage or ApplyOperation.FailureStage.Redefine
+                    or ApplyOperation.FailureStage.Migration or ApplyOperation.FailureStage.Commit =>
                     FailApplyStage(format, outcome),
                 _ => Emit(format, SchemorphError.Create("apply_failed",
                     Redaction.Redact(Detail(format, outcome.Errors, "Apply reported errors.")), SeeMessages(format)) with
@@ -607,6 +607,7 @@ static int FailApplyStage(string format, ApplyOperation.Outcome outcome)
     var message = Detail(format, outcome.Errors, outcome.Errors[0].Text);
     var (code, stageLabel) = outcome.Stage switch
     {
+        ApplyOperation.FailureStage.PreStage => ("pre_stage_execution_failed", "pre"),
         ApplyOperation.FailureStage.Redefine => ("redefine_execution_failed", "redefine"),
         ApplyOperation.FailureStage.Migration => ("migration_execution_failed", "migration"),
         // Everything ran; only the session's own commit failed to confirm
@@ -649,23 +650,26 @@ static int FailApplyStage(string format, ApplyOperation.Outcome outcome)
 }
 
 static string Describe(CommittedWork c) =>
-    c is { Declarative: 0, Redefines: 0, Migrations: 0 }
+    c is { Declarative: 0, Redefines: 0, Migrations: 0, Pre: 0 }
         ? "Nothing was committed."
-        : $"Committed before the failure: {c.Declarative} declarative change(s), " +
+        : $"Committed before the failure: {PreRan(c)}{c.Declarative} declarative change(s), " +
           $"{c.Redefines} re-definition(s), {c.Migrations} migration(s).";
+
+/// <summary>Pre-stage scripts lead the list when any ran — they run first — and stay out of it otherwise.</summary>
+static string PreRan(CommittedWork c) => c.Pre == 0 ? "" : $"{c.Pre} pre-stage script(s), ";
 
 /// <summary>
 /// Same shape as <see cref="Describe"/>, worded for the stages where "committed"
 /// cannot be asserted as fact — the session's own commit or rollback is what failed.
 /// </summary>
 static string DescribeAttempted(CommittedWork c) =>
-    c is { Declarative: 0, Redefines: 0, Migrations: 0 }
+    c is { Declarative: 0, Redefines: 0, Migrations: 0, Pre: 0 }
         ? "Nothing was attempted,"
-        : $"Ran {c.Declarative} declarative change(s), " +
+        : $"Ran {PreRan(c)}{c.Declarative} declarative change(s), " +
           $"{c.Redefines} re-definition(s), {c.Migrations} migration(s),";
 
 static string DescribeRan(CommittedWork c) =>
-    $"{c.Declarative} declarative change(s), {c.Redefines} re-definition(s), " +
+    $"{PreRan(c)}{c.Declarative} declarative change(s), {c.Redefines} re-definition(s), " +
     $"{c.Migrations} migration(s) ran";
 
 static int Emit(string format, SchemorphError error)

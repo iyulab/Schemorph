@@ -24,7 +24,8 @@ public static class ApplyOperation
         string ConnectionString,
         bool AllowDestructive = false,
         string? MigrationsDir = null,
-        string? ExpectedPlanHash = null);
+        string? ExpectedPlanHash = null,
+        string? PreDir = null);
 
     /// <summary>
     /// Where an apply stopped. The strategy order (ADR-0002) is also the order of
@@ -40,7 +41,7 @@ public static class ApplyOperation
     /// actually persisted the work — it must be told the attempt, not handed a
     /// false success.
     /// </summary>
-    public enum FailureStage { None, DesiredState, PlanMismatch, Publish, Redefine, Migration, Commit }
+    public enum FailureStage { None, DesiredState, PlanMismatch, PreStage, Publish, Redefine, Migration, Commit }
 
     /// <summary>
     /// What the database holds of the work a failed apply reports in
@@ -67,9 +68,12 @@ public static class ApplyOperation
         MigrationRunResult? Migrations,
         Durability Durability = Durability.Committed)
     {
+        /// <summary>The pre-stage scripts that ran (before the declarative stage); null when there were none to run.</summary>
+        public MigrationRunResult? PreScripts { get; init; }
+
         /// <summary>Counts of what ran, whatever became of it.</summary>
         public CommittedWork Attempted => new(
-            Applied.Count, Redefines?.Redefined.Count ?? 0, Migrations?.Applied.Count ?? 0);
+            Applied.Count, Redefines?.Redefined.Count ?? 0, Migrations?.Applied.Count ?? 0, PreScripts?.Applied.Count ?? 0);
 
         /// <summary>
         /// Counts of what is known to be durable — the envelope's
@@ -78,7 +82,7 @@ public static class ApplyOperation
         /// they are the caller's best information, worded as such by the renderer).
         /// </summary>
         public CommittedWork Committed =>
-            Durability == Durability.RolledBack ? new CommittedWork(0, 0, 0) : Attempted;
+            Durability == Durability.RolledBack ? new CommittedWork(0, 0, 0, 0) : Attempted;
 
         /// <summary>
         /// The engine error the failure came from, when it came from the database —
@@ -111,10 +115,55 @@ public static class ApplyOperation
         {
             return Failure(FailureStage.DesiredState, programmables.Messages);
         }
+        // Pending pre-stage scripts, judged before anything executes (invalid inputs throw here, as
+        // for migrations). When there are any, they are the apply's first execution, and everything
+        // planned after them must see them done — so the session opens here instead of right before
+        // the publish, and the reads below go through it. Without any, the order is exactly what it
+        // was before this stage existed.
+        var prePlan = request.PreDir is { } preDir
+            ? await new MigrationRunner(provider, ledger, VersionedStage.Pre).PlanAsync(preDir, request.ConnectionString, cancellationToken)
+            : null;
+        var transactional = provider.Capabilities.PlanAtomicity == ApplyAtomicity.Transactional;
+        var preRuns = prePlan is { Pending.Count: > 0 };
+        if (preRuns && !transactional)
+        {
+            return Failure(FailureStage.DesiredState, new[] { DiffOperation.PreStageUnsupported() });
+        }
+
+        IApplySession? session = null;
+        MigrationRunResult? preRun = null;
+        if (preRuns)
+        {
+            // The ledger exists before the session opens, committed: each pre-stage script's row
+            // commits with it, in the session (ADR-0004). Creating it this early is safe where pre-stage
+            // scripts run — a transactional provider's comparison leaves Schemorph's own objects out —
+            // and creating it on its own connection first avoids racing the session for the schema.
+            await ledger.EnsureInitializedAsync(request.ConnectionString, session: null, cancellationToken);
+            session = await provider.BeginApplySessionAsync(request.ConnectionString, cancellationToken);
+            try
+            {
+                preRun = await new MigrationRunner(provider, ledger, VersionedStage.Pre)
+                    .RunAsync(prePlan!, request.ConnectionString, session, cancellationToken);
+            }
+            catch (MigrationExecutionException ex)
+            {
+                var rollbackError = await TryRollbackAsync(session);
+                await DisposeAsync(session);
+                return Failure(FailureStage.PreStage,
+                    new[] { new RawMessage("Error", "pre_stage_execution_failed", WithRollbackNote(ex.Message, rollbackError)) }) with
+                {
+                    PreScripts = new MigrationRunResult(ex.Applied, 0, Array.Empty<string>(), Array.Empty<RawMessage>()),
+                    Durability = DurabilityAfterRollback(session, rollbackError),
+                    Engine = ex.Engine?.Info,
+                };
+            }
+        }
+        await using var preSession = session;   // disposed on every path below; a no-op once completed
+
         // Dialect knowledge only a connection can supply — see DiffOperation's
         // identical call. Ahead of the apply gate below, same as the analysis
         // it refines: what is fingerprinted and gated is what this call decided.
-        programmables = await provider.RefineProgrammablesAsync(programmables, state, request.ConnectionString, cancellationToken);
+        programmables = await provider.RefineProgrammablesAsync(programmables, state, request.ConnectionString, cancellationToken, session);
         if (programmables.Messages.Any(m => m.Severity == "Error"))
         {
             return Failure(FailureStage.DesiredState, programmables.Messages);
@@ -128,7 +177,7 @@ public static class ApplyOperation
         // it (a column change invalidates what depends on that column), so the
         // final plan is only known inside the hook — and that is the plan that is
         // fingerprinted, shown, and executed.
-        var basePlan = await redefineRunner.PlanAsync(programmables, request.ConnectionString, cancellationToken);
+        var basePlan = await redefineRunner.PlanAsync(programmables, request.ConnectionString, cancellationToken, session);
         var redefinePlan = basePlan;
 
         // The migrations this apply will run, judged once and before anything executes: the gate
@@ -144,10 +193,10 @@ public static class ApplyOperation
         // right before the first execution call, never during the read-only
         // planning above. `await using` disposes it on every return path,
         // committed or not (a no-op if it was never opened).
-        var transactional = provider.Capabilities.PlanAtomicity == ApplyAtomicity.Transactional;
-        await using var session = transactional
+        await using var lateSession = transactional && session is null
             ? await provider.BeginApplySessionAsync(request.ConnectionString, cancellationToken)
             : null;
+        session ??= lateSession;
 
         // The plan is announced from the SAME comparison session that applies
         // (provider hook), so what is gated and shown is exactly what runs.
@@ -169,6 +218,7 @@ public static class ApplyOperation
                         provider.Capabilities.PlanAtomicity) with
                     {
                         Migrations = migrationPlan?.ForPlan ?? Array.Empty<PlanMigration>(),
+                        PreScripts = prePlan?.ForPlan ?? Array.Empty<PlanMigration>(),
                     };
                     if (request.ExpectedPlanHash is { } expected)
                     {
@@ -185,11 +235,17 @@ public static class ApplyOperation
         }
         catch (PlanMismatchException ex)
         {
-            // Nothing executed yet — the gate runs inside the hook, before the
-            // provider does any DDL — so a session opened above holds no
-            // work. Leaving it uncommitted is enough; `await using` discards it.
+            // Nothing of the plan executed — the gate runs inside the hook, before
+            // the provider does any DDL. The session holds at most the pre-stage
+            // scripts, which ran so the comparison could see them; leaving it
+            // uncommitted discards them too (`await using`), so nothing is applied.
             return Failure(FailureStage.PlanMismatch,
-                new[] { new RawMessage("Error", "plan_mismatch", ex.Message) }) with { Plan = plan };
+                new[] { new RawMessage("Error", "plan_mismatch", ex.Message) }) with
+            {
+                Plan = plan,
+                PreScripts = preRun,
+                Durability = preRun is null ? Durability.Committed : Durability.RolledBack,
+            };
         }
 
         // The ledger is initialized HERE — after the gate has recomputed and
@@ -231,7 +287,11 @@ public static class ApplyOperation
             var visibleErrors = messages
                 .Where(m => !LedgerObjects.IsLedgerObject(m.Text))
                 .ToList();
-            return Failure(FailureStage.Publish, visibleErrors) with { Plan = plan, Engine = result.Engine?.Info };
+            return Failure(FailureStage.Publish, visibleErrors) with
+            {
+                Plan = plan, Engine = result.Engine?.Info, PreScripts = preRun,
+                Durability = preRun is null ? Durability.Committed : DurabilityAfterRollback(session, rollbackError),
+            };
         }
 
         // Every applied change is recorded in the history ledger — the audit
@@ -276,6 +336,7 @@ public static class ApplyOperation
                 Plan = plan,
                 Applied = result.AppliedChanges,
                 Redefines = new RedefineRunResult(ex.Redefined, 0, Array.Empty<string>()),
+                PreScripts = preRun,
                 Durability = DurabilityAfterRollback(session, rollbackError),
                 Engine = ex.Engine?.Info,
             };
@@ -300,6 +361,7 @@ public static class ApplyOperation
                     Redefines = redefineRun,
                     Migrations = new MigrationRunResult(
                         ex.Applied, 0, Array.Empty<string>(), Array.Empty<RawMessage>()),
+                    PreScripts = preRun,
                     Durability = DurabilityAfterRollback(session, rollbackError),
                     Engine = ex.Engine?.Info,
                 };
@@ -330,6 +392,7 @@ public static class ApplyOperation
                     Applied = result.AppliedChanges,
                     Redefines = redefineRun,
                     Migrations = migrationRun,
+                    PreScripts = preRun,
                     Durability = Durability.Unknown,
                 };
             }
@@ -346,7 +409,15 @@ public static class ApplyOperation
             .ToList();
 
         return new Outcome(true, FailureStage.None, Array.Empty<RawMessage>(),
-            plan, result.AppliedChanges, excludedVisible, visibleMessages, redefineRun, migrationRun);
+            plan, result.AppliedChanges, excludedVisible, visibleMessages, redefineRun, migrationRun)
+        {
+            PreScripts = preRun,
+        };
+    }
+
+    private static async Task DisposeAsync(IApplySession? session)
+    {
+        if (session is not null) await session.DisposeAsync();
     }
 
     private static Outcome Failure(FailureStage stage, IReadOnlyList<RawMessage> errors) =>

@@ -1,4 +1,5 @@
 using Npgsql;
+using Schemorph.Core.Providers;
 
 namespace Schemorph.Provider.Postgres;
 
@@ -28,18 +29,17 @@ internal static class CatalogReader
     public static async Task<IReadOnlyList<PgTable>> ReadTablesAsync(
         string connectionString, string schema,
         bool normalizeSameSchemaReferences = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IApplySession? session = null)
     {
-        await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync(cancellationToken);
+        await using var lease = await PgReadConnection.OpenAsync(connectionString, session, cancellationToken);
+        var connection = lease.Connection;
 
         if (normalizeSameSchemaReferences)
         {
             // Not parameterizable (SET takes no parameters); the identifier is
             // quoted with the same rule the renderer uses everywhere.
-            await using var setPath = new NpgsqlCommand(
-                $"SET search_path TO {DesiredStateRenderer.Quote(schema)}", connection);
-            await setPath.ExecuteNonQueryAsync(cancellationToken);
+            await lease.SetSearchPathAsync(cancellationToken, schema);
         }
 
         var columns = await ReadColumnsAsync(connection, schema, cancellationToken);

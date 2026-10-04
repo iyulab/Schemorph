@@ -37,12 +37,12 @@ internal static class PgLiveProgrammables
 
     public static async Task<IReadOnlyList<ProgrammableObjectInfo>> FilterExistingAsync(
         string connectionString, string schema, IReadOnlyList<ProgrammableObjectInfo> objects,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, IApplySession? session = null)
     {
         if (objects.Count == 0) return Array.Empty<ProgrammableObjectInfo>();
 
-        await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync(cancellationToken);
+        await using var lease = await PgReadConnection.OpenAsync(connectionString, session, cancellationToken);
+        var connection = lease.Connection;
 
         var views = await ReadNamesAsync(connection, ViewsSql, schema, cancellationToken);
         var routines = await ReadNamesAsync(connection, RoutinesSql, schema, cancellationToken);
@@ -85,10 +85,10 @@ internal static class PgLiveProgrammables
 
     /// <summary>Every relation and column each live view in the target schema reads.</summary>
     public static async Task<IReadOnlyList<ViewRead>> ReadViewReadsAsync(
-        string connectionString, string schema, CancellationToken cancellationToken)
+        string connectionString, string schema, CancellationToken cancellationToken, IApplySession? session = null)
     {
-        await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync(cancellationToken);
+        await using var lease = await PgReadConnection.OpenAsync(connectionString, session, cancellationToken);
+        var connection = lease.Connection;
         await using var command = new NpgsqlCommand(ViewReadsSql, connection);
         command.Parameters.AddWithValue("schema", schema);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -169,10 +169,10 @@ internal static class PgLiveProgrammables
     /// </remarks>
     public static async Task<IReadOnlyList<Undeclared>> ReadUndeclaredAsync(
         string connectionString, string schema, IReadOnlySet<string> declaredNames,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, IApplySession? session = null)
     {
-        await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync(cancellationToken);
+        await using var lease = await PgReadConnection.OpenAsync(connectionString, session, cancellationToken);
+        var connection = lease.Connection;
 
         var result = new List<Undeclared>();
 

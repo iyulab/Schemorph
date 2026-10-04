@@ -11,6 +11,8 @@ namespace Schemorph.Core.Operations;
 /// tool) renders the same operation instead of re-wiring it (architecture.md:
 /// "two renderings of the same core API"). Read-only: compares, analyzes
 /// programmables, judges redefines/reconciles — never writes to the database.
+/// Pending pre-stage scripts are the one thing it executes, inside a simulation the
+/// provider never commits, so the plan is computed as of after them.
 /// </summary>
 public static class DiffOperation
 {
@@ -37,7 +39,7 @@ public static class DiffOperation
     public static async Task<DiffResult> RunAsync(
         IDatabaseProvider provider, ILedgerStore ledger,
         string schemaDir, string connectionString, bool allowDestructive,
-        CancellationToken cancellationToken = default, string? migrationsDir = null)
+        CancellationToken cancellationToken = default, string? migrationsDir = null, string? preDir = null)
     {
         // One load serves compare and analysis — the desired state is read and
         // classified exactly once per operation.
@@ -47,7 +49,43 @@ public static class DiffOperation
             return new DiffResult(null, state.Errors, FailureStage.DesiredState);
         }
 
-        var compared = await provider.CompareAsync(new CompareRequest(state, connectionString), cancellationToken);
+        // Pre-stage scripts change what the comparison has to see — a rename turns drop+create into
+        // nothing — so pending ones run first, in a simulation the provider never commits, and every
+        // live read below goes through it. Read-only either way: nothing is recorded, and disposing the
+        // simulation undoes the scripts. A provider that cannot simulate is refused rather than given
+        // a plan computed as of before them, which would show exactly the drop+create they prevent.
+        var prePlan = preDir is null
+            ? null
+            : await new MigrationRunner(provider, ledger, VersionedStage.Pre).PlanAsync(preDir, connectionString, cancellationToken);
+        await using var simulation = prePlan is { Pending.Count: > 0 }
+            ? await provider.BeginSimulationAsync(connectionString, cancellationToken)
+            : null;
+        if (prePlan is { Pending.Count: > 0 })
+        {
+            if (simulation is null)
+            {
+                return new DiffResult(null, new[] { PreStageUnsupported() }, FailureStage.DesiredState);
+            }
+            foreach (var script in prePlan.Pending)
+            {
+                try
+                {
+                    await provider.ExecuteScriptAsync(connectionString, script.Text, simulation, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    // The engine aborts the transaction on the first failure; nothing after it can be read.
+                    var detail = EngineErrors.Find(provider, ex)?.Describe() ?? ex.Message;
+                    return new DiffResult(null, new[]
+                    {
+                        new RawMessage("Error", "pre_stage_failed",
+                            $"Pre-stage script {script.FileName} failed against the database: {detail}"),
+                    }, FailureStage.DesiredState);
+                }
+            }
+        }
+
+        var compared = await provider.CompareAsync(new CompareRequest(state, connectionString, simulation), cancellationToken);
         // Classification skip warnings (deploy scripts, seed DML) surface once
         // per operation, riding the compare messages into the plan.
         var messages = state.Warnings.Concat(compared.Messages).ToList();
@@ -66,13 +104,13 @@ public static class DiffOperation
         // Dialect knowledge only a connection can supply (e.g. PostgreSQL: can
         // CREATE OR REPLACE VIEW express this file's column list against what is
         // live?) — a no-op for a provider with no such gap.
-        programmables = await provider.RefineProgrammablesAsync(programmables, state, connectionString, cancellationToken);
+        programmables = await provider.RefineProgrammablesAsync(programmables, state, connectionString, cancellationToken, simulation);
         if (programmables.Messages.Any(m => m.Severity == "Error"))
         {
             return new DiffResult(null, programmables.Messages, FailureStage.DesiredState);
         }
         var redefinePlan = RedefineRunner.WithInvalidations(
-            await new RedefineRunner(provider, ledger).PlanAsync(programmables, connectionString, cancellationToken),
+            await new RedefineRunner(provider, ledger).PlanAsync(programmables, connectionString, cancellationToken, simulation),
             programmables, compared.TablesWithColumnChanges, compared.ProgrammablesDroppedFirst);
 
         // Pending migrations run in the same apply, so the plan an apply is gated on names them
@@ -85,8 +123,17 @@ public static class DiffOperation
         return new DiffResult(
             PlanBuilder.Build(compared with { Messages = messages }, allowDestructive,
                 redefinePlan.Pending.Select(p => p.ToPlanAction()).ToList(),
-                provider.Capabilities.PlanAtomicity) with { Migrations = migrations },
+                provider.Capabilities.PlanAtomicity) with
+            {
+                Migrations = migrations,
+                PreScripts = prePlan?.ForPlan ?? Array.Empty<PlanMigration>(),
+            },
             Array.Empty<RawMessage>(),
             UpdateScript: compared.UpdateScript);
     }
+
+    /// <summary>Pending pre-stage scripts on a provider that cannot plan as of after them.</summary>
+    internal static RawMessage PreStageUnsupported() => new("Error", "pre_stage_unsupported",
+        "Pending pre-stage scripts need a provider that can run them inside a transaction it reads its " +
+        "comparison through; this one cannot, so no plan is computed as of after them.");
 }
