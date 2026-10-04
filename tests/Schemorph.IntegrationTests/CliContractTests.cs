@@ -113,6 +113,43 @@ public sealed class CliContractTests : IDisposable
         Assert.Contains(2, apply.GetProperty("exitCodes").EnumerateArray().Select(e => e.GetInt32()));
     }
 
+    /// <summary>
+    /// An option the verb does not take is refused before anything runs — and named, with the nearest
+    /// one it does take. Ignoring it would run a different command than the one typed.
+    /// </summary>
+    [Fact]
+    public void An_unknown_option_is_refused_with_the_nearest_known_one()
+    {
+        var result = Run("diff --format json --schema . --migration ./m", "Server=x");
+
+        Assert.Equal(1, result.ExitCode);
+        var error = JsonDocument.Parse(result.StdErr).RootElement.GetProperty("error");
+        Assert.Equal("invalid_arguments", error.GetProperty("code").GetString());
+        Assert.Equal("usage", error.GetProperty("kind").GetString());
+        Assert.Contains("--migration", error.GetProperty("message").GetString());
+        Assert.Contains("Did you mean --migrations?", error.GetProperty("hint").GetString());
+    }
+
+    /// <summary>The parser's list is the manifest's: every option a verb advertises is accepted.</summary>
+    [Fact]
+    public void Every_option_the_manifest_lists_is_accepted_by_its_verb()
+    {
+        var manifest = JsonDocument.Parse(Run("schema").StdOut).RootElement;
+        foreach (var verb in manifest.GetProperty("verbs").EnumerateArray())
+        {
+            var name = verb.GetProperty("name").GetString()!;
+            foreach (var option in verb.GetProperty("options").EnumerateArray())
+            {
+                var flag = option.GetProperty("flag").GetString();
+                var takesValue = option.GetProperty("value").ValueKind == JsonValueKind.String;
+                // No URL: every verb stops at its own argument checks, after option validation, without
+                // reaching for a database.
+                var result = Run($"{name} {flag}{(takesValue ? " x" : "")}");
+                Assert.DoesNotContain("Unknown option", result.StdErr);
+            }
+        }
+    }
+
     [Fact]
     public void A_missing_pre_stage_directory_is_named()
     {

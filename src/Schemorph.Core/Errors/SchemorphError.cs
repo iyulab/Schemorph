@@ -71,7 +71,7 @@ public sealed record SchemorphError(string Kind, string Code, string Message, st
     {
         // temp_workspace_unavailable: the fix is environmental (TMP/TEMP), like the
         // rest of this band — retrying unchanged fails identically.
-        "invalid_arguments" or "schema_dir_not_found" or "migrations_dir_not_found"
+        "invalid_arguments" or "schema_dir_not_found" or "migrations_dir_not_found" or "pre_dir_not_found"
             or "temp_workspace_unavailable"
             => "usage",
         "not_implemented"

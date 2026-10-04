@@ -10,6 +10,7 @@ public sealed class SchemorphErrorTests
     [InlineData("invalid_arguments", "usage")]
     [InlineData("schema_dir_not_found", "usage")]
     [InlineData("migrations_dir_not_found", "usage")]
+    [InlineData("pre_dir_not_found", "usage")]
     [InlineData("not_implemented", "unsupported")]
     [InlineData("invalid_desired_state", "invalid_state")]
     [InlineData("migration_failed", "invalid_state")]

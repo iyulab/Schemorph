@@ -28,6 +28,120 @@ internal static class CliManifest
     // All additive; consumers ignore properties they do not know.
     public const string ManifestVersion = "1.8";
 
+    /// <summary>
+    /// Every verb with its options and exit codes — the manifest's <c>verbs</c>, and the one list
+    /// <see cref="UnknownOption"/> checks a command line against, so an option is known to the parser
+    /// exactly when the manifest advertises it.
+    /// </summary>
+    private static readonly object[] Verbs = new object[]
+    {
+        new
+        {
+            name = "inspect",
+            summary = "Read a live database into desired-state SQL files.",
+            options = new object[]
+            {
+                new { flag = "--url", value = "connection-string", required = false, description = "Source database; SCHEMORPH_URL is used when omitted." },
+                new { flag = "--out", value = "dir", required = true, description = "Output directory for desired-state files." },
+                new { flag = "--format", value = "json|text", required = false, description = "Output form." },
+            },
+            exitCodes = new[] { 0, 1 },
+        },
+        new
+        {
+            name = "diff",
+            summary = "Compute the change plan (never applies anything).",
+            options = new object[]
+            {
+                new { flag = "--url", value = "connection-string", required = false, description = "Target database; SCHEMORPH_URL is used when omitted." },
+                new { flag = "--schema", value = "dir", required = true, description = "Desired-state SQL directory; non-model .sql files (deploy scripts, seed DML) are skipped with a warning." },
+                new { flag = "--allow-destructive", value = (string?)null, required = false, description = "Include destructive changes in the plan." },
+                new { flag = "--migrations", value = "dir", required = false, description = "Versioned migration scripts; the pending ones join the plan (name + checksum) and its planHash. Pass the same directory to apply." },
+                new { flag = "--pre", value = "dir", required = false, description = "Pre-stage scripts (V####__description.sql), run once before the declarative stage; the plan is computed as of after the pending ones, which join it (pre[]) and its planHash. Pass the same directory to apply." },
+                new { flag = "--format", value = "json|text|sql", required = false, description = "Output form; json is the plan format (docs/plan-format.md); sql is the human-review document (read-only, planHash in its header)." },
+            },
+            exitCodes = new[] { 0, 1, 2 },
+        },
+        new
+        {
+            name = "apply",
+            summary = "Execute the change plan and record it in the history ledger.",
+            options = new object[]
+            {
+                new { flag = "--url", value = "connection-string", required = false, description = "Target database; SCHEMORPH_URL is used when omitted." },
+                new { flag = "--schema", value = "dir", required = true, description = "Desired-state SQL directory." },
+                new { flag = "--migrations", value = "dir", required = false, description = "Versioned migration scripts (V####__description.sql), run once each, tamper-checked." },
+                new { flag = "--pre", value = "dir", required = false, description = "Pre-stage scripts, run first and recorded once each; where the provider cannot plan past them, only they run and the exit code is 2." },
+                new { flag = "--allow-destructive", value = (string?)null, required = false, description = "Apply destructive changes too." },
+                new { flag = "--expect-plan", value = "hash", required = false, description = "Apply only if the computed plan matches this fingerprint (diff's planHash); a mismatch aborts with error code plan_mismatch before anything executes." },
+                new { flag = "--format", value = "json|text", required = false, description = "Output form; the json envelope embeds the executed plan." },
+            },
+            exitCodes = new[] { 0, 1, 2 },
+        },
+        new
+        {
+            name = "status",
+            summary = "Show drift (the plan a diff would produce right now), a ledger summary, and pending migrations. Read-only.",
+            options = new object[]
+            {
+                new { flag = "--url", value = "connection-string", required = false, description = "Target database; SCHEMORPH_URL is used when omitted." },
+                new { flag = "--schema", value = "dir", required = true, description = "Desired-state SQL directory." },
+                new { flag = "--migrations", value = "dir", required = false, description = "Also report pending migration scripts." },
+                new { flag = "--pre", value = "dir", required = false, description = "Pre-stage scripts: drift is planned as of after the pending ones, which are listed." },
+                new { flag = "--format", value = "json|text", required = false, description = "Output form." },
+            },
+            exitCodes = new[] { 0, 1, 2 },
+        },
+        new
+        {
+            name = "schema",
+            summary = "Print this manifest.",
+            options = Array.Empty<object>(),
+            exitCodes = new[] { 0 },
+        },
+        new
+        {
+            name = "mcp",
+            summary = "Run as an MCP server over stdio. Tools: schemorph_diff, schemorph_inspect, schemorph_status (read-only) and schemorph_apply (gated: requires the reviewed plan's expectedPlanHash). Resources: schemorph://schema, schemorph://schema/{kind}/{name}, schemorph://plan (needs SCHEMORPH_SCHEMA_DIR). SCHEMORPH_URL must be set in the server's environment — credentials never flow through the conversation.",
+            options = Array.Empty<object>(),
+            exitCodes = new[] { 0 },
+        },
+        new
+        {
+            name = "version",
+            summary = "Print the tool version.",
+            options = Array.Empty<object>(),
+            exitCodes = new[] { 0 },
+        },
+    };
+
+    /// <summary>
+    /// The first option on <paramref name="args"/> that <paramref name="verb"/> does not take, or null.
+    /// A flag the manifest lists with a value consumes the argument after it. A verb the manifest does
+    /// not list is not checked here — the dispatcher answers that one with usage.
+    /// </summary>
+    /// <remarks>
+    /// An option the tool does not know used to be ignored: a misspelled <c>--migration</c>, or a flag a
+    /// newer release added, ran the command as if it had not been given — a plan without the scripts
+    /// the caller meant to include, with nothing saying so.
+    /// </remarks>
+    public static (string Unknown, IReadOnlyList<string> Known)? UnknownOption(string verb, string[] args)
+    {
+        var spec = JsonSerializer.SerializeToElement(Verbs).EnumerateArray()
+            .FirstOrDefault(v => v.GetProperty("name").GetString() == verb);
+        if (spec.ValueKind == JsonValueKind.Undefined) return null;
+
+        var options = spec.GetProperty("options").EnumerateArray()
+            .ToDictionary(o => o.GetProperty("flag").GetString()!, o => o.GetProperty("value").ValueKind == JsonValueKind.String);
+        for (var i = 1; i < args.Length; i++)
+        {
+            if (!args[i].StartsWith('-')) continue;
+            if (!options.TryGetValue(args[i], out var takesValue)) return (args[i], options.Keys.ToList());
+            if (takesValue) i++;
+        }
+        return null;
+    }
+
     public static string ToJson(string toolVersion) => JsonSerializer.Serialize(new
     {
         manifestVersion = ManifestVersion,
@@ -67,87 +181,7 @@ internal static class CliManifest
             new { code = 1, meaning = "error (typed envelope on stderr)" },
             new { code = 2, meaning = "work is pending: diff — anything an apply would run (a change, a pending migration or pre-stage script); status — drift or scripts waiting to run; apply — only the pre-stage ran (the provider plans the rest once it is done), run it again" },
         },
-        verbs = new object[]
-        {
-            new
-            {
-                name = "inspect",
-                summary = "Read a live database into desired-state SQL files.",
-                options = new object[]
-                {
-                    new { flag = "--url", value = "connection-string", required = false, description = "Source database; SCHEMORPH_URL is used when omitted." },
-                    new { flag = "--out", value = "dir", required = true, description = "Output directory for desired-state files." },
-                    new { flag = "--format", value = "json|text", required = false, description = "Output form." },
-                },
-                exitCodes = new[] { 0, 1 },
-            },
-            new
-            {
-                name = "diff",
-                summary = "Compute the change plan (never applies anything).",
-                options = new object[]
-                {
-                    new { flag = "--url", value = "connection-string", required = false, description = "Target database; SCHEMORPH_URL is used when omitted." },
-                    new { flag = "--schema", value = "dir", required = true, description = "Desired-state SQL directory; non-model .sql files (deploy scripts, seed DML) are skipped with a warning." },
-                    new { flag = "--allow-destructive", value = (string?)null, required = false, description = "Include destructive changes in the plan." },
-                    new { flag = "--migrations", value = "dir", required = false, description = "Versioned migration scripts; the pending ones join the plan (name + checksum) and its planHash. Pass the same directory to apply." },
-                    new { flag = "--pre", value = "dir", required = false, description = "Pre-stage scripts (V####__description.sql), run once before the declarative stage; the plan is computed as of after the pending ones, which join it (pre[]) and its planHash. Pass the same directory to apply." },
-                    new { flag = "--format", value = "json|text|sql", required = false, description = "Output form; json is the plan format (docs/plan-format.md); sql is the human-review document (read-only, planHash in its header)." },
-                },
-                exitCodes = new[] { 0, 1, 2 },
-            },
-            new
-            {
-                name = "apply",
-                summary = "Execute the change plan and record it in the history ledger.",
-                options = new object[]
-                {
-                    new { flag = "--url", value = "connection-string", required = false, description = "Target database; SCHEMORPH_URL is used when omitted." },
-                    new { flag = "--schema", value = "dir", required = true, description = "Desired-state SQL directory." },
-                    new { flag = "--migrations", value = "dir", required = false, description = "Versioned migration scripts (V####__description.sql), run once each, tamper-checked." },
-                    new { flag = "--pre", value = "dir", required = false, description = "Pre-stage scripts, run first and recorded once each; where the provider cannot plan past them, only they run and the exit code is 2." },
-                    new { flag = "--allow-destructive", value = (string?)null, required = false, description = "Apply destructive changes too." },
-                    new { flag = "--expect-plan", value = "hash", required = false, description = "Apply only if the computed plan matches this fingerprint (diff's planHash); a mismatch aborts with error code plan_mismatch before anything executes." },
-                    new { flag = "--format", value = "json|text", required = false, description = "Output form; the json envelope embeds the executed plan." },
-                },
-                exitCodes = new[] { 0, 1, 2 },
-            },
-            new
-            {
-                name = "status",
-                summary = "Show drift (the plan a diff would produce right now), a ledger summary, and pending migrations. Read-only.",
-                options = new object[]
-                {
-                    new { flag = "--url", value = "connection-string", required = false, description = "Target database; SCHEMORPH_URL is used when omitted." },
-                    new { flag = "--schema", value = "dir", required = true, description = "Desired-state SQL directory." },
-                    new { flag = "--migrations", value = "dir", required = false, description = "Also report pending migration scripts." },
-                    new { flag = "--pre", value = "dir", required = false, description = "Pre-stage scripts: drift is planned as of after the pending ones, which are listed." },
-                    new { flag = "--format", value = "json|text", required = false, description = "Output form." },
-                },
-                exitCodes = new[] { 0, 1, 2 },
-            },
-            new
-            {
-                name = "schema",
-                summary = "Print this manifest.",
-                options = Array.Empty<object>(),
-                exitCodes = new[] { 0 },
-            },
-            new
-            {
-                name = "mcp",
-                summary = "Run as an MCP server over stdio. Tools: schemorph_diff, schemorph_inspect, schemorph_status (read-only) and schemorph_apply (gated: requires the reviewed plan's expectedPlanHash). Resources: schemorph://schema, schemorph://schema/{kind}/{name}, schemorph://plan (needs SCHEMORPH_SCHEMA_DIR). SCHEMORPH_URL must be set in the server's environment — credentials never flow through the conversation.",
-                options = Array.Empty<object>(),
-                exitCodes = new[] { 0 },
-            },
-            new
-            {
-                name = "version",
-                summary = "Print the tool version.",
-                options = Array.Empty<object>(),
-                exitCodes = new[] { 0 },
-            },
-        },
+        verbs = Verbs,
         docs = new
         {
             planFormat = "docs/plan-format.md",

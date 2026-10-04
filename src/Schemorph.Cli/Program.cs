@@ -37,6 +37,23 @@ if (format == "sql" && verb != "diff")
         "Use --format json or text here, or run diff --format sql to get the reviewable plan.");
 }
 
+// An option this verb does not take is refused before anything runs — ignoring it would run a different
+// command than the one typed. The verb's options come from the manifest (`schema`), the same list a caller
+// reads to discover them.
+if (verb is not null && CliManifest.UnknownOption(verb, args) is { } unknown)
+{
+    var suggestion = unknown.Known
+        .Select(k => (Flag: k, Distance: EditDistance(unknown.Unknown, k)))
+        .Where(k => k.Distance <= 3)
+        .OrderBy(k => k.Distance)
+        .Select(k => k.Flag)
+        .FirstOrDefault();
+    return Fail(format, "invalid_arguments",
+        $"Unknown option '{unknown.Unknown}' for {verb}.",
+        (suggestion is null ? "" : $"Did you mean {suggestion}? ") +
+        (unknown.Known.Count == 0 ? $"{verb} takes no options." : $"{verb} takes: {string.Join(", ", unknown.Known)}."));
+}
+
 switch (verb)
 {
     case "diff":
@@ -568,6 +585,17 @@ async Task<int> RunDiff(string[] args, string format)
     {
         return FailUnclassified(format, "compare_failed", ex);   // see apply's note
     }
+}
+
+static int EditDistance(string a, string b)
+{
+    var d = new int[a.Length + 1, b.Length + 1];
+    for (var i = 0; i <= a.Length; i++) d[i, 0] = i;
+    for (var j = 0; j <= b.Length; j++) d[0, j] = j;
+    for (var i = 1; i <= a.Length; i++)
+        for (var j = 1; j <= b.Length; j++)
+            d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1));
+    return d[a.Length, b.Length];
 }
 
 static string? ParseOption(string[] args, string name)

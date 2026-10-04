@@ -34,6 +34,11 @@ change **additively**: consumers must ignore properties they do not know.
 
 ### Changed
 
+- 🔴 **An option a verb does not take is refused** (`invalid_arguments`, exit `1`, nothing runs), naming the
+  nearest one it does take — `Unknown option '--migration' for diff. Did you mean --migrations?`. It used to
+  be ignored, so a misspelled flag, or a flag only a newer release knows, ran the command as if it had not
+  been given. A verb's options are exactly what `schemorph schema` lists for it.
+- `pre_dir_not_found` is a `usage` error, like `migrations_dir_not_found`.
 - 🔴 **`diff` exits `2` when an apply would run anything** — a pending migration (with `--migrations`) or
   pre-stage script included, not only a schema change. Before, a plan whose only work was a pending
   migration exited `0`, "no changes pending", for an apply that would execute it. `hasChanges` in the plan
