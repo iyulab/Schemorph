@@ -191,6 +191,35 @@ public sealed class CliContractTests : IDisposable
     }
 
     /// <summary>
+    /// `status --pre`: a pre-stage script waiting to run is pending work — exit 2, named in the output — and once
+    /// the apply has run it, status is 0 with the same directory passed.
+    /// </summary>
+    [SkippableFact]
+    public void Status_counts_a_waiting_pre_stage_script_as_pending_work()
+    {
+        using var db = new TestDatabase();
+        var schema = Directory.CreateDirectory(Path.Combine(_dir, "schema", "tables")).Parent!.FullName;
+        var pre = Directory.CreateDirectory(Path.Combine(_dir, "pre")).FullName;
+        db.Execute("CREATE TABLE dbo.T (Id INT NOT NULL PRIMARY KEY, Notes NVARCHAR(50) NULL)");
+        File.WriteAllText(Path.Combine(schema, "tables", "dbo.T.sql"),
+            "CREATE TABLE dbo.T (Id INT NOT NULL PRIMARY KEY, Remarks NVARCHAR(50) NULL);\nGO\n");
+        File.WriteAllText(Path.Combine(pre, "V1__rename.sql"), "EXEC sp_rename 'dbo.T.Notes', 'Remarks', 'COLUMN';");
+
+        var waiting = Run($"status --schema \"{schema}\" --pre \"{pre}\"", db.Url);
+        Assert.Equal(2, waiting.ExitCode);
+        Assert.Contains("V1__rename.sql", waiting.StdOut);
+
+        var diff = Run($"diff --schema \"{schema}\" --pre \"{pre}\"", db.Url);
+        var hash = JsonDocument.Parse(diff.StdOut).RootElement.GetProperty("planHash").GetString();
+        Assert.Equal(2, Run($"apply --schema \"{schema}\" --pre \"{pre}\" --expect-plan {hash}", db.Url).ExitCode);
+
+        var settled = Run($"status --schema \"{schema}\" --pre \"{pre}\"", db.Url);
+        Assert.Equal(0, settled.ExitCode);
+        Assert.DoesNotContain("V1__rename.sql", JsonDocument.Parse(settled.StdOut).RootElement
+            .GetProperty("plan").GetProperty("pre").ToString());
+    }
+
+    /// <summary>
     /// Manifest 1.6: `desiredStateFormatVersion` versions the `inspect`/`schemorph://schema`
     /// file-tree rendering contract (docs/desired-state-format.md), independently of
     /// `planFormatVersion` — this is what lets a consumer diffing its own copy of rendered

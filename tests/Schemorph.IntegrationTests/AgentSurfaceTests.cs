@@ -120,6 +120,52 @@ public sealed class AgentSurfaceTests : IDisposable
         Assert.False(status.GetProperty("plan").GetProperty("hasChanges").GetBoolean());
     }
 
+    /// <summary>
+    /// The pre-stage over MCP: every tool takes <c>preDir</c> the way the CLI takes <c>--pre</c>. diff lists the
+    /// pending script under the plan, status counts it as pending work, the gated apply runs only it (this provider
+    /// cannot plan past it) and says so, and the next round has nothing left. A pre-stage directory that does not
+    /// exist is named by each tool rather than read as "no scripts".
+    /// </summary>
+    [SkippableFact]
+    public async Task Pre_stage_scripts_ride_every_tool_over_mcp()
+    {
+        _db.Execute("CREATE TABLE dbo.T (Id INT NOT NULL PRIMARY KEY, Notes NVARCHAR(50) NULL)");
+        _db.Execute("INSERT INTO dbo.T VALUES (1, N'keep me')");
+        Write("schema/tables/dbo.T.sql", "CREATE TABLE dbo.T (Id INT NOT NULL PRIMARY KEY, Remarks NVARCHAR(50) NULL);\nGO\n");
+        Write("pre/V1__rename.sql", "EXEC sp_rename 'dbo.T.Notes', 'Remarks', 'COLUMN';");
+        var withPre = new Dictionary<string, object?> { ["schemaDir"] = SchemaDir, ["preDir"] = Path.Combine(_dir, "pre") };
+
+        await using var client = await ConnectAsync();
+
+        var plan = Parse(await client.CallToolAsync("schemorph_diff", withPre));
+        Assert.Equal("V1__rename.sql",
+            Assert.Single(plan.GetProperty("pre").EnumerateArray()).GetProperty("fileName").GetString());
+
+        // Pending work alone does not show the wiring — without the pre-stage the rename is drift, pending too. The
+        // script itself has to be on the status plan.
+        var pending = Parse(await client.CallToolAsync("schemorph_status", withPre));
+        Assert.True(pending.GetProperty("hasPendingWork").GetBoolean());
+        Assert.Equal("V1__rename.sql",
+            Assert.Single(pending.GetProperty("plan").GetProperty("pre").EnumerateArray()).GetProperty("fileName").GetString());
+
+        var applied = Parse(await client.CallToolAsync("schemorph_apply",
+            new Dictionary<string, object?>(withPre) { ["expectedPlanHash"] = plan.GetProperty("planHash").GetString() }));
+        Assert.True(applied.GetProperty("deferred").GetBoolean());
+        Assert.Equal("V1__rename.sql", applied.GetProperty("pre").GetProperty("applied")[0].GetString());
+
+        var settled = Parse(await client.CallToolAsync("schemorph_status", withPre));
+        Assert.False(settled.GetProperty("hasPendingWork").GetBoolean());
+        Assert.Equal("keep me", _db.Scalar<string>("SELECT Remarks FROM dbo.T"));
+
+        foreach (var tool in new[] { "schemorph_diff", "schemorph_status", "schemorph_apply" })
+        {
+            var missing = new Dictionary<string, object?> { ["schemaDir"] = SchemaDir, ["preDir"] = Path.Combine(_dir, "no-such-pre") };
+            if (tool == "schemorph_apply") missing["expectedPlanHash"] = new string('0', 64);
+            var error = Parse(await client.CallToolAsync(tool, missing));
+            Assert.Equal("pre_dir_not_found", error.GetProperty("error").GetProperty("code").GetString());
+        }
+    }
+
     [SkippableFact]
     public async Task Schema_and_plan_are_readable_as_mcp_resources()
     {
