@@ -94,9 +94,15 @@ public sealed class AgentErrorSurfaceTests : IDisposable
         // The MCP server takes its environment from the server entry, so this is
         // the shape a misconfigured server entry produces. It must name the
         // directory and the variable — never the internal .dacpac.
-        Skip.IfNot(OperatingSystem.IsWindows(), "Uses an unmapped Windows drive letter to make temp unusable.");
+        //
+        // Unusable is produced by pointing below a *file*, as the unit test of the
+        // workspace does: no directory can be created there on any platform. A drive
+        // letter assumed to be unmapped is a guess about the machine, and wrong on one
+        // that maps it.
+        var blocker = Path.Combine(_dir, "temp-is-a-file");
+        File.WriteAllText(blocker, "not a directory");
 
-        await using var client = await ConnectAsync(tempOverride: @"Z:\no\such\temp");
+        await using var client = await ConnectAsync(tempOverride: Path.Combine(blocker, "temp"));
 
         var error = Parse(await client.CallToolAsync("schemorph_inspect",
                 new Dictionary<string, object?> { ["outDir"] = Path.Combine(_dir, "out") }))
