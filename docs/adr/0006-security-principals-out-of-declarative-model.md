@@ -7,7 +7,7 @@
 
 [ADR-0002](./0002-hybrid-object-strategy-model.md) routes each object class to a mechanism and explicitly defers the classification of edge-case object types — "sequences, user-defined types, synonyms, **permissions**, ..." — to be "decided per-provider, and recorded as they are made." This ADR records the decision for **security principals** (database users, logins, database/application/server roles, role membership, permissions), forced by real consumer evidence.
 
-The second dogfooding round (a 41-table `m3l → mdd-booster → Schemorph` consumer, 2026-07-13) ran `diff` against a live database whose desired-state was a code-generator's output. DacFx reported, as part of an ordinary column edit's plan:
+The second dogfooding round (a 41-table consumer whose schema is generated from a model, 2026-07-13) ran `diff` against a live database whose desired-state was a code-generator's output. DacFx reported, as part of an ordinary column edit's plan:
 
 - `DROP USER [app-login]` — the application's own database login
 - `DROP USER [NT AUTHORITY\SYSTEM]` — the backup-operator account
@@ -31,7 +31,7 @@ This is consistent with the three-strategy model of ADR-0002: principals are not
 **Positive**
 
 - Design Principle §4 is honored where it mattered most: an application login can no longer be silently dropped by a routine schema change. The "DROP USER folded into a table rebuild" hazard disappears at the source.
-- The code-generator consumption path (m3l → mdd-booster → Schemorph), where principals are structurally out-of-model, works without false drops.
+- The code-generator consumption path (a model → a generator → Schemorph), where principals are structurally out-of-model, works without false drops.
 - No configuration surface is introduced — the safe behavior is the default, matching Design Principle §4 ("safe by default").
 
 **Negative / accepted risks**
