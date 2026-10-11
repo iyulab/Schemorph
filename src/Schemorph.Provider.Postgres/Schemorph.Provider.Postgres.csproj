@@ -9,7 +9,7 @@
     <!-- Exact pin, corpus-gated upgrades (the DacFx policy, reused) — the shadow
          harness's rewriter parses with the real PostgreSQL grammar through this
          binding (ADR-0007 addendum, spikes/pg-parser-rewrite). -->
-    <PackageReference Include="pgsqlparser" Version="[1.0.0]" />
+    <PackageReference Include="pgsqlparser" Version="[2.1.0]" />
   </ItemGroup>
 
   <PropertyGroup>

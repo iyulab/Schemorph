@@ -146,6 +146,12 @@ Risk posture: exact version pin with corpus-gated upgrades — the DacFx policy,
 If the binding goes unmaintained, the replacement surface is three functions over a
 pinned libpg_query (vendored P/Invoke), recorded in the spike README as the fallback.
 
+First gated upgrade (2026-10): 1.0.0 → **2.1.0** (libpg_query 18.1.0, PostgreSQL 18 grammar).
+The provider calls only `Parse` and `Deparse` and reads no statement offsets, so the 2.0
+changes to offsets (UTF-16 instead of UTF-8 bytes) and to fingerprints do not reach it; the
+gate was the live suites — the provider's own and the integration suite — green on the new
+version. The spike stays on 1.0.0: it records the measurement that chose the binding.
+
 ## Addendum (2026-07-30): non-transactional index builds refuse rather than mark
 
 The atomicity table above says non-transactional exceptions — `CREATE INDEX CONCURRENTLY`

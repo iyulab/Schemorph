@@ -5,6 +5,16 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Changed
+
+- **The PostgreSQL provider reads desired-state SQL with the PostgreSQL 18 grammar** (was 17): the
+  bundled parser (`pgsqlparser`) moves from 1.0.0 to 2.1.0, built on libpg_query 18. Syntax
+  PostgreSQL 18 added now parses; what parsed before parses the same, and the shadow rewrite still
+  keeps identifier quoting. The parser is still pinned to an exact version and moves only after the
+  live-database suites pass on the new one.
+
 ## 0.18.0 — 2026-10-04
 
 ### Added
