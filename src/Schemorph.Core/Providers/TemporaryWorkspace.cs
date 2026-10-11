@@ -73,16 +73,23 @@ public static class TemporaryWorkspace
 
 /// <summary>
 /// Schemorph could not create the directory it keeps its own intermediate files
-/// in. The fix is environmental (point TMP/TEMP somewhere writable), not a retry
-/// and not a change of arguments — so the message says which directory and which
-/// variable, and never mentions the artifact that was about to be written there.
+/// in. The fix is environmental (point the temp variable somewhere writable), not a
+/// retry and not a change of arguments — so the message says which directory and
+/// which variable, and never mentions the artifact that was about to be written there.
 /// </summary>
 public sealed class TemporaryWorkspaceException(string directory, Exception inner)
     : Exception(
         $"Schemorph could not create its temporary workspace at '{directory}'. " +
-        "It keeps intermediate files there; the location comes from the TMP/TEMP environment " +
-        "variables. Point them at a directory that exists and is writable.", inner)
+        $"It keeps intermediate files there; the location comes from the {EnvironmentVariables} " +
+        "environment variable. Point it at a directory that exists and is writable.", inner)
 {
     /// <summary>The directory that could not be created.</summary>
     public string Directory { get; } = directory;
+
+    /// <summary>
+    /// The variable <see cref="Path.GetTempPath"/> reads on this platform — <c>TMP</c> (then <c>TEMP</c>) on
+    /// Windows, <c>TMPDIR</c> elsewhere. Naming the Windows pair on Linux or macOS sends the reader to a variable
+    /// nothing there reads.
+    /// </summary>
+    public static string EnvironmentVariables => OperatingSystem.IsWindows() ? "TMP (or TEMP)" : "TMPDIR";
 }

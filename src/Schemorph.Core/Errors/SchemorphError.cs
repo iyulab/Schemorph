@@ -69,7 +69,7 @@ public sealed record SchemorphError(string Kind, string Code, string Message, st
     /// <summary>Single source of truth for the code → kind mapping.</summary>
     public static string KindOf(string code) => code switch
     {
-        // temp_workspace_unavailable: the fix is environmental (TMP/TEMP), like the
+        // temp_workspace_unavailable: the fix is environmental (the temp variable), like the
         // rest of this band — retrying unchanged fails identically.
         "invalid_arguments" or "schema_dir_not_found" or "migrations_dir_not_found" or "pre_dir_not_found"
             or "temp_workspace_unavailable"

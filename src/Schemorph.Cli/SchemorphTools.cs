@@ -379,7 +379,7 @@ internal sealed class SchemorphTools
     /// </summary>
     private static string TempWorkspaceError(TemporaryWorkspaceException ex) =>
         Error("temp_workspace_unavailable", ex.Message,
-            "Set TMP (or TEMP) in the MCP server's environment to a directory that exists and is writable.");
+            $"Set {TemporaryWorkspaceException.EnvironmentVariables} in the MCP server's environment to a directory that exists and is writable.");
 
     /// <summary>The CLI's error envelope, verbatim — agents see one error shape everywhere.</summary>
     private static string Error(

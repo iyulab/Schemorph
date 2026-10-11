@@ -15,6 +15,13 @@ change **additively**: consumers must ignore properties they do not know.
   keeps identifier quoting. The parser is still pinned to an exact version and moves only after the
   live-database suites pass on the new one.
 
+### Fixed
+
+- **A temporary workspace that cannot be created names the variable this platform reads.** The
+  `temp_workspace_unavailable` message and hint (CLI and MCP) said to set `TMP` (or `TEMP`) everywhere;
+  on Linux and macOS the temp location comes from `TMPDIR`, so the advice pointed at a variable nothing
+  there reads. They now name `TMPDIR` off Windows and `TMP` (or `TEMP`) on it. Code and kind are unchanged.
+
 ## 0.18.0 — 2026-10-04
 
 ### Added

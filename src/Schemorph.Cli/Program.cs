@@ -644,7 +644,7 @@ static string Detail(string format, IReadOnlyList<RawMessage> messages, string s
 /// </summary>
 static int FailTempWorkspace(string format, TemporaryWorkspaceException ex) =>
     Fail(format, "temp_workspace_unavailable", ex.Message,
-        "Set TMP (or TEMP) to a directory that exists and is writable, then re-run.");
+        $"Set {TemporaryWorkspaceException.EnvironmentVariables} to a directory that exists and is writable, then re-run.");
 
 /// <summary>"See messages above" is true only where there are messages above.</summary>
 static string? SeeMessages(string format) => format == "json" ? null : "See messages above.";

@@ -36,8 +36,10 @@ public sealed class AgentErrorSurfaceTests : IDisposable
         var env = new Dictionary<string, string?> { ["SCHEMORPH_URL"] = _db.Url };
         if (tempOverride is not null)
         {
+            // Every variable Path.GetTempPath reads on some platform: TMP then TEMP on Windows, TMPDIR elsewhere.
             env["TMP"] = tempOverride;
             env["TEMP"] = tempOverride;
+            env["TMPDIR"] = tempOverride;
         }
 
         var transport = new StdioClientTransport(new StdioClientTransportOptions
@@ -111,7 +113,7 @@ public sealed class AgentErrorSurfaceTests : IDisposable
         Assert.Equal("temp_workspace_unavailable", error.GetProperty("code").GetString());
         Assert.Equal("usage", error.GetProperty("kind").GetString());
         Assert.DoesNotContain(".dacpac", error.GetProperty("message").GetString()!);
-        Assert.Contains("TMP", error.GetProperty("hint").GetString()!);
+        Assert.Contains(OperatingSystem.IsWindows() ? "TMP (or TEMP)" : "TMPDIR", error.GetProperty("hint").GetString()!);
     }
 
     [SkippableFact]

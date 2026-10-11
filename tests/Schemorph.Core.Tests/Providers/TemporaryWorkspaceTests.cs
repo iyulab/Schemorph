@@ -57,7 +57,7 @@ public sealed class TemporaryWorkspaceTests
                 () => TemporaryWorkspace.NewFile("inspect", ".dacpac", blocker));
 
             Assert.Contains(blocker, ex.Message);          // names the location…
-            Assert.Contains("TMP", ex.Message);            // …and the lever that moves it
+            Assert.Contains(OperatingSystem.IsWindows() ? "TMP (or TEMP)" : "TMPDIR", ex.Message);  // …and the lever that moves it, on this platform
             Assert.DoesNotContain(".dacpac", ex.Message);  // never the internal artifact
         }
         finally
