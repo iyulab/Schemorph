@@ -5,6 +5,19 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Security
+
+- **The tool no longer carries a `System.Security.Cryptography.Pkcs` with a known denial-of-service
+  vulnerability** (CVE-2026-84008, published 2026-10-13). The SQL Server provider's DacFx brings it in through
+  `Microsoft.Data.SqlClient` at 9.0.11; it is now raised to 10.0.13, a fixed release, until DacFx carries one.
+  0.19.0 and earlier bundle the affected version. Nothing else changes.
+
+### Changed
+
+- Dependencies: `Microsoft.Extensions.Hosting` 10.0.13.
+
 ## 0.19.0 — 2026-10-11
 
 ### Changed
