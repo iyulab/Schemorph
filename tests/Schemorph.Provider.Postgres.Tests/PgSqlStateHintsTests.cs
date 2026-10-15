@@ -9,6 +9,7 @@ public class PgSqlStateHintsTests
 {
     [Theory]
     [InlineData("2BP01")] // dependent_objects_still_exist
+    [InlineData("22001")] // string_data_right_truncation
     [InlineData("23502")] // not_null_violation
     [InlineData("23503")] // foreign_key_violation
     [InlineData("23505")] // unique_violation

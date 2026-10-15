@@ -19,6 +19,8 @@ internal static class PgSqlStateHints
     {
         ["2BP01"] = "Another object — typically a view — still depends on what this statement drops. " +
                     "Drop or change the dependent object first, then re-run.",
+        ["22001"] = "A column was narrowed below the length of data it already holds — shorten or clean " +
+                    "the data first, or keep the wider type.",
         ["23502"] = "A NOT NULL constraint was added against a column that already has NULLs — " +
                     "backfill the column first, or add it nullable and tighten it once the data is clean.",
         ["23503"] = "A foreign key was added or is being enforced against rows that violate it — " +

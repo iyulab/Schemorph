@@ -18,7 +18,7 @@ change **additively**: consumers must ignore properties they do not know.
   (`1205`, `1222`, `3960`, the client timeout `-2`) — plus SQL Server's own refusals of a
   second cascade path (`1785`) and of narrowing a column below its data (`2628`, `8152`).
   `engine.translated` is `true` for these and the message carries the hint; any other number
-  is marked untranslated as before.
+  is marked untranslated as before. PostgreSQL gains the matching truncation hint (`22001`).
 - **A server error relayed by a failed publish reads as the server's own text.** The message
   no longer carries the publish's framing around it (the data provider's name and the
   severity, state and line of a script the reader never sees); `engine.code` was already the
