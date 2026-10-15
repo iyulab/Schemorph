@@ -116,7 +116,7 @@ public sealed class ApplyFailureEnvelopeTests : IDisposable
     }
 
     [SkippableFact]
-    public void A_migration_failure_names_the_server_error_and_marks_it_untranslated()
+    public void A_migration_failure_names_the_server_error_and_translates_a_curated_one()
     {
         SeedFailingMigration();
 
@@ -124,14 +124,34 @@ public sealed class ApplyFailureEnvelopeTests : IDisposable
                          $"--migrations \"{MigrationsDir}\" --format json");
 
         var error = JsonDocument.Parse(result.StdErr).RootElement.GetProperty("error");
-        // 208: invalid object name. SQL Server has no curated translations, so the
-        // envelope says whose words these are instead of passing them off as the tool's.
+        // 208: invalid object name — one of the curated numbers, so the server's words
+        // come with what to do next.
         var engine = error.GetProperty("engine");
         Assert.Equal("Msg 208", engine.GetProperty("code").GetString());
-        Assert.False(engine.GetProperty("translated").GetBoolean());
+        Assert.True(engine.GetProperty("translated").GetBoolean());
         var message = error.GetProperty("message").GetString()!;
         Assert.Contains("Msg 208: Invalid object name 'dbo.NoSuchTable'.", message);
-        Assert.Contains("untranslated engine error", message);
+        Assert.Contains("does not exist", message);
+        Assert.DoesNotContain("untranslated engine error", message);
+    }
+
+    [SkippableFact]
+    public void A_server_error_outside_the_curated_set_is_marked_untranslated()
+    {
+        SeedFailingMigration();
+        File.WriteAllText(Path.Combine(MigrationsDir, "V1__broken.sql"),
+            "THROW 50001, 'refused by the migration itself', 1;");
+
+        var result = Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\" " +
+                         $"--migrations \"{MigrationsDir}\" --format json");
+
+        var error = JsonDocument.Parse(result.StdErr).RootElement.GetProperty("error");
+        // A number Schemorph has no translation for: the envelope says whose words these
+        // are instead of passing them off as the tool's.
+        var engine = error.GetProperty("engine");
+        Assert.Equal("Msg 50001", engine.GetProperty("code").GetString());
+        Assert.False(engine.GetProperty("translated").GetBoolean());
+        Assert.Contains("untranslated engine error", error.GetProperty("message").GetString()!);
     }
 
     [SkippableFact]
@@ -151,10 +171,13 @@ public sealed class ApplyFailureEnvelopeTests : IDisposable
         Assert.Equal(1, result.ExitCode);
         var error = JsonDocument.Parse(result.StdErr).RootElement.GetProperty("error");
         Assert.Equal("apply_failed", error.GetProperty("code").GetString());
-        // The server's own error number, not the publish's framing around it.
+        // The server's own error number, not the publish's framing around it — and
+        // the server's own text without that framing, translated.
         Assert.Equal("Msg 1505", error.GetProperty("engine").GetProperty("code").GetString());
+        Assert.True(error.GetProperty("engine").GetProperty("translated").GetBoolean());
         var message = error.GetProperty("message").GetString()!;
-        Assert.Contains("untranslated engine error", message);
+        Assert.Contains("de-duplicate the data first", message);
+        Assert.DoesNotContain("Level 16, State", message);
         // The tool's own history table is bookkeeping, never part of what failed.
         Assert.DoesNotContain("__SchemorphHistory", message);
     }

@@ -5,6 +5,25 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Changed
+
+- **SQL Server engine errors are translated for the failures a schema change actually hits.**
+  They were all marked `untranslated engine error`. The curated numbers follow the same classes
+  as PostgreSQL's SQLSTATE hints — a constraint added against rows that violate it (`515`,
+  `547`, `1505`, `2601`, `2627`), a missing or duplicate object (`207`, `208`, `1913`, `2714`),
+  a dependent object (`3729`, `4922`, `5074`), authentication and a missing or read-only
+  database (`18456`, `4060`, `3906`), permissions (`229`, `262`), contention and timeouts
+  (`1205`, `1222`, `3960`, the client timeout `-2`) — plus SQL Server's own refusals of a
+  second cascade path (`1785`) and of narrowing a column below its data (`2628`, `8152`).
+  `engine.translated` is `true` for these and the message carries the hint; any other number
+  is marked untranslated as before.
+- **A server error relayed by a failed publish reads as the server's own text.** The message
+  no longer carries the publish's framing around it (the data provider's name and the
+  severity, state and line of a script the reader never sees); `engine.code` was already the
+  server's `Msg N`.
+
 ## 0.19.1 — 2026-10-15
 
 ### Security

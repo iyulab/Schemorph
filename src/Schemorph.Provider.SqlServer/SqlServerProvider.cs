@@ -131,22 +131,35 @@ public sealed class SqlServerProvider : IDatabaseProvider
     /// </summary>
     public EngineError? DescribeEngineError(Exception exception)
         => exception is SqlException { Number: not 0 } sql
-            ? new EngineError($"Msg {sql.Number}", sql.Message, Hint: null)
+            ? new EngineError($"Msg {sql.Number}", sql.Message, SqlServerErrorHints.TryGet(sql.Number))
             : null;
 
     /// <summary>DacFx's relay of a server error: <c>SQL72014</c> whose text names the server's <c>Msg N</c>.</summary>
     private static readonly System.Text.RegularExpressions.Regex RelayedMsgNumber =
-        new(@"\bMsg (\d+),", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        new(@"\bMsg (-?\d+),", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     /// <summary>
-    /// The server error a DacFx publish message relays, coded by the server's own number (the
-    /// same code <see cref="DescribeEngineError"/> gives a <see cref="SqlException"/>), or null for
-    /// DacFx's own messages.
+    /// The frame DacFx wraps a relayed server error in — <c>… Msg N, Level L, State S, Line X</c> — followed by
+    /// the server's own text.
     /// </summary>
-    private static EngineError? RelayedServerError(string code, string message)
-        => code == "SQL72014" && RelayedMsgNumber.Match(message) is { Success: true } match
-            ? new EngineError($"Msg {match.Groups[1].Value}", message, Hint: null)
-            : null;
+    private static readonly System.Text.RegularExpressions.Regex RelayFrame =
+        new(@"\bMsg -?\d+, Level \d+, State \d+, Line \d+\s+(?<text>.+)$",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.Singleline);
+
+    /// <summary>
+    /// The server error a DacFx publish message relays, coded and translated by the server's own
+    /// number (the same code and hint <see cref="DescribeEngineError"/> gives a
+    /// <see cref="SqlException"/>), or null for DacFx's own messages. The message is the server's
+    /// text without the relay's frame, which names the data provider and a severity, state and line
+    /// of a script the reader never sees; a frame this does not recognize is kept whole.
+    /// </summary>
+    internal static EngineError? RelayedServerError(string code, string message)
+    {
+        if (code != "SQL72014" || RelayedMsgNumber.Match(message) is not { Success: true } match) return null;
+        var number = int.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        var text = RelayFrame.Match(message) is { Success: true } frame ? frame.Groups["text"].Value.Trim() : message;
+        return new EngineError($"Msg {number}", text, SqlServerErrorHints.TryGet(number));
+    }
 
     public async Task ExecuteScriptAsync(
         string connectionString, string script,
@@ -320,9 +333,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
             // The publish failed against the engine. DacFx reports it among its own
             // messages — progress lines, "script execution error" framing — and relays the
             // server's error inside SQL72014 ("... Msg 1505, Level 16 ..."). Only that relay
-            // is the engine talking, so only it is marked; this provider has no curated
-            // translations (unlike PostgreSQL's SQLSTATE hints), so it is marked untranslated
-            // rather than given a guess.
+            // is the engine talking, so only it is marked — translated when the server's number
+            // is a curated one, marked untranslated otherwise rather than given a guess.
             EngineError? engine = null;
             foreach (var e in publish.Errors)
             {

@@ -70,11 +70,13 @@ verb and in any apply stage — the envelope says so:
   passed through unchanged, and no hint is guessed — the rule above applies to engine
   errors too.
 
-Translations are curated per provider for the codes a schema operation actually hits
-(PostgreSQL: constraint violations against existing rows, missing or duplicate objects,
-dependent objects, permissions, locks and timeouts). SQL Server has none yet, so its
-engine errors are always marked untranslated. `engine` is absent when the failure was
-not the engine's.
+Translations are curated per provider for the codes a schema operation actually hits —
+the same classes in both: constraint violations against existing rows, missing or
+duplicate objects, dependent objects, authentication, permissions, a read-only or missing
+database, locks, deadlocks and timeouts, plus SQL Server's refusal of a second cascade path
+and of narrowing a column below its data. A SQL Server error relayed by a failed publish is
+coded and translated by the server's own number, and its message is the server's text
+without the publish's framing. `engine` is absent when the failure was not the engine's.
 
 ### A failed `apply`: `stage` and `committed`
 
