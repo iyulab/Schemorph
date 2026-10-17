@@ -371,4 +371,32 @@ public sealed class RedefineRunnerTests
         Assert.Equal("Redefine", recorded.Operation);
         Assert.Equal(ContentChecksum.Compute("SELECT 1 AS One"), recorded.Checksum);
     }
+
+    // A view whose definition compiles can still fail on the rows already there. The provider reads it inside the
+    // re-definition (RedefineAsync), so the runner must re-define through that path — never the bare script.
+
+    [Fact]
+    public async Task Every_pending_object_is_re_defined_through_the_provider_s_redefinition()
+    {
+        var view = Obj("dbo.V", "View", "SELECT 1 AS One");
+        var procedure = Obj("dbo.P", "Procedure", "BODY");
+
+        await Runner.RunAsync(Analysis(view, procedure), "conn");
+
+        Assert.Equal(new[] { "dbo.P", "dbo.V" }, _provider.Redefined.Select(o => o.ObjectName).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_view_s_plan_action_says_it_is_read_before_it_commits_a_procedure_s_does_not()
+    {
+        var plan = await Runner.PlanAsync(
+            Analysis(Obj("dbo.V", "View", "SELECT 1 AS One"), Obj("dbo.P", "Procedure", "BODY")), "conn");
+
+        var view = plan.Pending.Single(p => p.Object.ObjectName == "dbo.V").ToPlanAction();
+        var procedure = plan.Pending.Single(p => p.Object.ObjectName == "dbo.P").ToPlanAction();
+        Assert.Contains("read once over the rows already there", view.Explanation);
+        Assert.DoesNotContain("read once", procedure.Explanation);
+        // The read changes nothing, so it is not in sql — sql is what the apply changes.
+        Assert.Equal("CREATE OR ALTER -- SELECT 1 AS One", view.Sql);
+    }
 }

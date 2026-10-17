@@ -116,7 +116,7 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
                 Succeeded: true, Detail: obj.ObjectType);
             try
             {
-                await provider.ExecuteScriptAsync(connectionString, obj.ApplyScript, new[] { entry }, session, cancellationToken);
+                await provider.RedefineAsync(connectionString, obj, new[] { entry }, session, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -336,7 +336,15 @@ public sealed record PendingRedefine(ProgrammableObjectInfo Object, RedefineReas
         Sql: Object.ApplyScript,
         StatementCount: Object.StatementCount,
         Explanation: (DroppedFirst ? DroppedFirstExplanation : BaseExplanation(Reason))
+                     + (IsView ? " " + ViewReadExplanation : "")
                      + (Object.RiskNote is { } note ? " " + note : ""));
+
+    private bool IsView => string.Equals(Object.ObjectType, "View", StringComparison.OrdinalIgnoreCase);
+
+    // The read is not in sql: it changes nothing, and sql is what the apply changes.
+    private const string ViewReadExplanation =
+        "Before the re-definition commits, the view is read once over the rows already there; a " +
+        "definition those rows break (an overflowing cast, a division by zero) fails here and keeps the previous one.";
 
     private const string DroppedFirstExplanation =
         "It is dropped earlier in this apply — it reads something the change removes or retypes, " +

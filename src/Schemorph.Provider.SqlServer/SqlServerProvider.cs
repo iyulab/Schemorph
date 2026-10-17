@@ -161,19 +161,40 @@ public sealed class SqlServerProvider : IDatabaseProvider
         return new EngineError($"Msg {number}", text, SqlServerErrorHints.TryGet(number));
     }
 
-    public async Task ExecuteScriptAsync(
+    public Task ExecuteScriptAsync(
         string connectionString, string script,
         IReadOnlyList<Schemorph.Core.Ledger.LedgerEntry> ledgerEntries, IApplySession? session = null, CancellationToken cancellationToken = default)
+        => ExecuteBatchesAsync(connectionString, SqlBatchSplitter.Split(script), ledgerEntries, cancellationToken);
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// A view's read is one more batch after its definition, in the definition's own transaction — this provider
+    /// declares Partial, so each re-definition commits on its own and a failed read rolls back that view alone.
+    /// </remarks>
+    public Task RedefineAsync(
+        string connectionString, ProgrammableObjectInfo obj,
+        IReadOnlyList<Schemorph.Core.Ledger.LedgerEntry> ledgerEntries, IApplySession? session = null, CancellationToken cancellationToken = default)
     {
-        // session is always null here — this provider declares Partial and
-        // never hands one out, so every stage keeps opening its own
-        // connection+transaction exactly as before this parameter existed.
+        var batches = SqlBatchSplitter.Split(obj.ApplyScript);
+        return ExecuteBatchesAsync(connectionString,
+            string.Equals(obj.ObjectType, "View", StringComparison.OrdinalIgnoreCase)
+                ? batches.Append(SqlServerViewRead.Script(obj.ObjectName))
+                : batches,
+            ledgerEntries, cancellationToken);
+    }
+
+    private static async Task ExecuteBatchesAsync(
+        string connectionString, IEnumerable<string> batches,
+        IReadOnlyList<Schemorph.Core.Ledger.LedgerEntry> ledgerEntries, CancellationToken cancellationToken)
+    {
+        // No session here — this provider declares Partial and never hands one
+        // out, so every stage keeps opening its own connection+transaction.
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction();
         try
         {
-            foreach (var batch in SqlBatchSplitter.Split(script))
+            foreach (var batch in batches)
             {
                 await using var command = new SqlCommand(batch, connection, transaction);
                 await command.ExecuteNonQueryAsync(cancellationToken);

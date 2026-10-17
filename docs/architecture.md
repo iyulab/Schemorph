@@ -41,6 +41,8 @@ The core consumes the provider's raw comparison and turns it into a Schemorph pl
 
 Procedures, functions, views, and triggers are stored one object per file and applied via `CREATE OR ALTER` (SQL Server 2016+) / `CREATE OR REPLACE` (PostgreSQL). Schemorph tracks a checksum per object file; on `apply`, changed objects are re-applied in dependency order — and so is an object whose file is unchanged but which no longer exists in the database (the checksum compares file and ledger; existence is asked of the live catalog separately).
 
+A view is read once — every column of every row — inside its re-definition's transaction, before it commits. A definition can be valid and still fail on the rows already there (a cast the values overflow, a division by zero); nothing about the text says so, and without the read the first to find out is every query after the apply. A failed read fails that re-definition, which rolls back and leaves the previous definition in place.
+
 Rationale: procedure bodies are semantically opaque text. Comparing them structurally is unreliable in every tool that attempts it. Re-definition is idempotent, deterministic, and uses a mechanism the database itself guarantees. The "diff" for these objects is simply *changed / unchanged / new / removed* at file granularity — which is also exactly what a reviewer wants to see, alongside the git diff of the body itself.
 
 ### 3. Versioned migrations — data changes

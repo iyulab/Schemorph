@@ -72,7 +72,7 @@ pre/                         ← pre-stage: run once BEFORE the diff is planned 
 ```
 
 - **Structural objects** (tables, indexes, constraints) are diffed: Schemorph compares your SQL files against the live database and generates the `CREATE` / `ALTER` / `DROP` plan.
-- **Programmable objects** (procedures, functions, views, triggers) are re-applied idempotently via `CREATE OR ALTER`. Text-based diffing of procedure bodies is unreliable by nature; re-definition is not. This sidesteps an entire class of bugs that diff-only tools struggle with.
+- **Programmable objects** (procedures, functions, views, triggers) are re-applied idempotently via `CREATE OR ALTER`. Text-based diffing of procedure bodies is unreliable by nature; re-definition is not. This sidesteps an entire class of bugs that diff-only tools struggle with. A re-defined view is read once over the rows already there before it commits, so a definition the data breaks (an overflowing cast, a division by zero) fails the apply instead of every query after it.
 - **Data changes** (seeds, backfills, one-off transformations) are versioned migrations tracked in a checksummed history ledger, Flyway-style. State diffing cannot express these; a ledger can.
 - **Renames** cannot be expressed as desired state either — the files carry no identity across a name change. A pre-stage script (`--pre`) states it with the engine's own statement, runs once before the declarative stage, and the plan is computed as of after it — so a renamed table keeps its rows instead of becoming a drop beside an empty create. See [limitations.md](./docs/limitations.md).
 

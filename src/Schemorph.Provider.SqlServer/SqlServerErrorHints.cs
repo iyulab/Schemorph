@@ -66,6 +66,9 @@ internal static class SqlServerErrorHints
         [4060] = "The database named in the connection string does not exist, or the login cannot open it.",
         [4922] = DependentObject,
         [5074] = DependentObject,
+        [8115] = "A value already in the data does not fit the numeric type it is converted to — a column narrowed " +
+                 "below the values it holds, or a re-defined view whose cast those values overflow. Widen the type or " +
+                 "fix the data first.",
         [8152] = Truncation,
         [18456] = Authentication,
     };

@@ -24,14 +24,15 @@ internal static class PgScriptExecutor
         string connectionString, string script,
         IReadOnlyList<LedgerEntry> ledgerEntries,
         PgApplySession? session = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? read = null)
         => session is null
-            ? ExecuteOwnConnectionAsync(connectionString, script, ledgerEntries, cancellationToken)
-            : ExecuteOnSessionAsync(session, script, ledgerEntries, cancellationToken);
+            ? ExecuteOwnConnectionAsync(connectionString, script, ledgerEntries, read, cancellationToken)
+            : ExecuteOnSessionAsync(session, script, ledgerEntries, read, cancellationToken);
 
     private static async Task ExecuteOwnConnectionAsync(
         string connectionString, string script,
-        IReadOnlyList<LedgerEntry> ledgerEntries, CancellationToken cancellationToken)
+        IReadOnlyList<LedgerEntry> ledgerEntries, string? read, CancellationToken cancellationToken)
     {
         var schema = PostgresProvider.TargetSchemaOf(connectionString);
         await using var connection = new NpgsqlConnection(connectionString);
@@ -42,6 +43,7 @@ internal static class PgScriptExecutor
         {
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
+        await ReadAsync(read, connection, transaction, cancellationToken);
 
         foreach (var entry in ledgerEntries)
         {
@@ -60,17 +62,30 @@ internal static class PgScriptExecutor
     /// </summary>
     private static async Task ExecuteOnSessionAsync(
         PgApplySession session, string script,
-        IReadOnlyList<LedgerEntry> ledgerEntries, CancellationToken cancellationToken)
+        IReadOnlyList<LedgerEntry> ledgerEntries, string? read, CancellationToken cancellationToken)
     {
         var schema = PostgresProvider.TargetSchemaOf(session.ConnectionString);
         await using (var command = new NpgsqlCommand(script, session.Connection, session.Transaction))
         {
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
+        await ReadAsync(read, session.Connection, session.Transaction, cancellationToken);
 
         foreach (var entry in ledgerEntries)
         {
             await PgLedgerSql.InsertAsync(session.Connection, session.Transaction, schema, entry, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// The read that follows a script inside its transaction, if any — a re-defined view read over the rows already
+    /// there (<see cref="PostgresProvider.RedefineAsync"/>); its failure rolls the transaction back like the script's own.
+    /// </summary>
+    private static async Task ReadAsync(
+        string? read, NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken cancellationToken)
+    {
+        if (read is null) return;
+        await using var command = new NpgsqlCommand(read, connection, transaction);
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 }

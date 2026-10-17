@@ -52,6 +52,15 @@ internal sealed class FakeProvider : IDatabaseProvider
         return Task.CompletedTask;
     }
 
+    /// <summary>The objects <see cref="RedefineAsync"/> was asked to re-define, in order.</summary>
+    public List<ProgrammableObjectInfo> Redefined { get; } = new();
+
+    public Task RedefineAsync(string connectionString, ProgrammableObjectInfo obj, IReadOnlyList<LedgerEntry> ledgerEntries, IApplySession? session = null, CancellationToken ct = default)
+    {
+        Redefined.Add(obj);
+        return ExecuteScriptAsync(connectionString, obj.ApplyScript, ledgerEntries, session, ct);
+    }
+
     /// <summary>Lint signals returned for every script (default: none).</summary>
     public List<MigrationLintSignal> LintSignals { get; } = new();
 

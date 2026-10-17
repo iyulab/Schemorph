@@ -106,6 +106,21 @@ public interface IDatabaseProvider
     Task ExecuteScriptAsync(string connectionString, string script, IReadOnlyList<LedgerEntry> ledgerEntries, IApplySession? session = null, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Re-define one programmable object (ADR-0002 strategy 2): its
+    /// <see cref="ProgrammableObjectInfo.ApplyScript"/> and the given ledger
+    /// entries in one transaction, as the atomic
+    /// <see cref="ExecuteScriptAsync(string, string, IReadOnlyList{LedgerEntry}, IApplySession?, CancellationToken)"/>
+    /// runs them. A view is then read once — every column of every row —
+    /// before that transaction ends: a definition that compiles but fails on
+    /// the rows already there (a cast the values overflow, a division by
+    /// zero, a conversion a value refuses) fails its own re-definition, which
+    /// rolls back and leaves the previous definition in place, instead of
+    /// every query that reads the view afterwards. Nothing else checks this:
+    /// the definition is valid, and only the data says otherwise.
+    /// </summary>
+    Task RedefineAsync(string connectionString, ProgrammableObjectInfo obj, IReadOnlyList<LedgerEntry> ledgerEntries, IApplySession? session = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Analyze the desired state's programmable objects (ADR-0002 strategy 2):
     /// which objects exist, which file defines each, an idempotent apply script
     /// (dialect knowledge: CREATE OR ALTER), and dependencies within the set.

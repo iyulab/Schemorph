@@ -5,6 +5,25 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Changed
+
+- **A re-defined view is read once before its new definition commits.** A view can compile
+  and still fail on the rows already there — a cast the values overflow, a division by zero,
+  a conversion a value refuses — and until now the apply reported success and every query
+  that read the view failed afterwards. The re-definition now reads every column of every
+  row inside its own transaction; when that fails, the apply fails at that view
+  (`redefine_execution_failed`, stage `redefine`) and the previous definition stays: on SQL
+  Server the view's own transaction rolls back (`partial` — earlier stages stay committed),
+  on PostgreSQL the whole apply does (`transactional`). The engine's error comes through as
+  it is; an overflowing conversion gains a hint (SQL Server `8115`, PostgreSQL `22003`), which
+  also covers a numeric column narrowed below its values. A division by zero stays the
+  database's own message, as before. Only views whose definition is re-applied are read — an unchanged
+  view is still skipped by its checksum — so the cost is one read of each changed view. The
+  plan's explanation for a view redefine says so; its `sql` is unchanged (the read changes
+  nothing).
+
 ## 0.20.0 — 2026-10-15
 
 ### Changed

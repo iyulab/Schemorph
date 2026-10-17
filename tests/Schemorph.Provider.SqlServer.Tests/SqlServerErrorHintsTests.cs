@@ -29,6 +29,7 @@ public class SqlServerErrorHintsTests
     [InlineData(4060)]  // cannot open database
     [InlineData(4922)]  // ALTER COLUMN failed: objects access this column
     [InlineData(5074)]  // object is dependent on column
+    [InlineData(8115)]  // arithmetic overflow converting to a numeric type
     [InlineData(8152)]  // string or binary data would be truncated
     [InlineData(18456)] // login failed
     public void Every_curated_number_has_a_non_empty_hint(int number)

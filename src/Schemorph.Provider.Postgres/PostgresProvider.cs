@@ -287,6 +287,26 @@ public sealed class PostgresProvider : IDatabaseProvider
             session is null ? null : PgApplySession.From(session),
             cancellationToken);
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The read is one statement after the definition, in the same transaction — the apply's one session when given,
+    /// so a failed read rolls the whole apply back (Transactional). Casting the row to text runs every column's output
+    /// function, so no column is left uncomputed; <c>max</c> makes it every row. The engine's SQLSTATE comes through
+    /// unchanged (<c>22003</c> for an overflowing cast, <c>22012</c> for a division by zero).
+    /// </remarks>
+    public Task RedefineAsync(
+        string connectionString, ProgrammableObjectInfo obj,
+        IReadOnlyList<LedgerEntry> ledgerEntries, IApplySession? session = null, CancellationToken cancellationToken = default)
+        => PgScriptExecutor.ExecuteAsync(
+            connectionString,
+            $"SET LOCAL search_path TO {DesiredStateRenderer.Quote(TargetSchemaOf(connectionString))};\n{obj.ApplyScript}",
+            ledgerEntries,
+            session is null ? null : PgApplySession.From(session),
+            cancellationToken,
+            read: obj.ObjectType == "View"
+                ? $"SELECT max(length(t::text)) FROM {DesiredStateRenderer.Quote(obj.ObjectName)} AS t"
+                : null);
+
     /// <summary>
     /// P3: views, functions, procedures and triggers, analyzed by
     /// <see cref="PgProgrammables"/> from the files <see cref="PgDesiredState"/>

@@ -21,6 +21,9 @@ internal static class PgSqlStateHints
                     "Drop or change the dependent object first, then re-run.",
         ["22001"] = "A column was narrowed below the length of data it already holds — shorten or clean " +
                     "the data first, or keep the wider type.",
+        ["22003"] = "A value already in the data does not fit the numeric type it is converted to — a column " +
+                    "narrowed below the values it holds, or a re-defined view whose cast those values overflow. " +
+                    "Widen the type or fix the data first.",
         ["23502"] = "A NOT NULL constraint was added against a column that already has NULLs — " +
                     "backfill the column first, or add it nullable and tighten it once the data is clean.",
         ["23503"] = "A foreign key was added or is being enforced against rows that violate it — " +
