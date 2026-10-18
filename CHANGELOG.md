@@ -17,8 +17,10 @@ change **additively**: consumers must ignore properties they do not know.
   history ledger all reported the drop as not executed while the column was gone. Now a change
   that depends on a withheld change is withheld with it, and says so — `SCHEMORPH015` names
   the change it waits for, and the object appears in `excluded[]` with that reason. Both run
-  once the withheld change is in the plan. Independently of the plan, the apply now checks the
-  engine's answer for every change it leaves out and publishes nothing if one would still run.
+  once the withheld change is in the plan. The dependency is found where the engine cannot report
+  it too (a table that an unchanged view also reads). Independently of the plan, the apply now checks
+  the engine's answer for every change it leaves out and publishes nothing if one would still run —
+  the apply fails (`apply_failed`, `SCHEMORPH016`) and the history ledger records the refused publish.
   A plan this affects hashes differently than under 0.20.0, so a `planHash` captured then
   fails closed.
 

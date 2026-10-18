@@ -184,6 +184,36 @@ public sealed class ColumnRemovalTests : IDisposable
         Assert.Equal(0, _db.Scalar<int>("SELECT COUNT(*) FROM sys.tables WHERE name = 'Parts'"));
     }
 
+    /// <summary>
+    /// The same coupling where the engine cannot say what depends on the table: a view that reads
+    /// it and does not change makes the engine's dependency query fail. The plan still has to know
+    /// the new foreign key depends on the table, so it reads that from the key's own definition.
+    /// </summary>
+    [SkippableFact]
+    public async Task The_coupling_is_found_when_an_unchanged_view_reads_the_table_too()
+    {
+        await Seed("Products");
+        _db.Execute("CREATE VIEW dbo.ProductNames AS SELECT p.Id, p.Name FROM dbo.Products AS p");
+        WriteWithoutNotes("Products");
+        var view = Path.Combine(SchemaDir, "views", "dbo.ProductNames.sql");
+        Directory.CreateDirectory(Path.GetDirectoryName(view)!);
+        File.WriteAllText(view, "CREATE VIEW dbo.ProductNames AS SELECT p.Id, p.Name FROM dbo.Products AS p\nGO\n");
+        Write("Parts", """
+                Id INT NOT NULL PRIMARY KEY,
+                ProductId INT NOT NULL CONSTRAINT FK_Parts_Products REFERENCES dbo.Products (Id)
+            """);
+
+        var diff = await DiffOperation.RunAsync(_provider, _ledger, SchemaDir, _db.Url, allowDestructive: false);
+        Assert.True(diff.Success, string.Join("; ", diff.Errors.Select(e => e.Text)));
+        Assert.DoesNotContain(diff.Plan!.Actions, a => a.ObjectName == "dbo.Parts");
+        Assert.Equal("dbo.Parts", Assert.Single(diff.Plan.Messages, m => m.Code == "SCHEMORPH015").ObjectName);
+
+        var outcome = await ApplyOperation.RunAsync(_provider, _ledger,
+            new ApplyOperation.Request(SchemaDir, _db.Url, ExpectedPlanHash: PlanFingerprint.Compute(diff.Plan)));
+        Assert.True(outcome.Success, string.Join("; ", outcome.Errors.Select(e => e.Text)));
+        Assert.Equal(1, Columns("Products", "Notes"));
+    }
+
     public void Dispose()
     {
         _db.Dispose();

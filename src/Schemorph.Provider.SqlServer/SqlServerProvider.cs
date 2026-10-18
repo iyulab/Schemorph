@@ -252,41 +252,78 @@ public sealed class SqlServerProvider : IDatabaseProvider
     /// </summary>
     private static IReadOnlyDictionary<string, IReadOnlyList<string>>? ExclusionDependencies(SchemaComparisonResult result)
     {
-        var owner = Owners(result);
+        var dependents = Dependents(result);
         var dependencies = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
         foreach (var difference in result.Differences)
         {
-            var name = FullName(difference);
-            var dependents = ExcludeDependenciesOf(result, difference)
-                .Select(owner)
-                .Where(n => !string.Equals(n, name, StringComparison.OrdinalIgnoreCase))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(n => n, StringComparer.Ordinal)
-                .ToList();
-            if (dependents.Count > 0) dependencies[name] = dependents;
+            var names = dependents(difference);
+            if (names.Count > 0) dependencies[FullName(difference)] = names;
         }
         return dependencies.Count == 0 ? null : dependencies;
     }
 
     /// <summary>
-    /// <c>GetExcludeDependencies</c>, or nothing where DacFx cannot answer: it builds a node for
-    /// each dependency it finds, and for some entries that construction throws
-    /// (<see cref="NotSupportedException"/> from <c>GetUpdateAction</c>, measured on ordinary
-    /// comparisons in the integration suite). No
-    /// answer means no dependents are known, not that there are none — which is why the apply
-    /// checks the engine's own verdict after excluding (<see cref="ExcludeAll"/>) rather than
-    /// trusting this map.
+    /// The other changes that depend on a difference, by object name — DacFx's own answer
+    /// (<c>GetExcludeDependencies</c>) where it gives one, otherwise the changes whose new
+    /// definitions reference it.
     /// </summary>
-    private static IReadOnlyList<SchemaDifference> ExcludeDependenciesOf(SchemaComparisonResult result, SchemaDifference difference)
+    /// <remarks>
+    /// DacFx builds a node for each dependency it finds, and when the dependent is an object the
+    /// comparison did not report — an unchanged view reading the table — that construction throws
+    /// (<see cref="NotSupportedException"/> from <c>GetUpdateAction</c>; measured with a table read
+    /// by an unchanged view). The question still has an answer the comparison holds: a change
+    /// depends on the difference when something in its new definition references that object (a
+    /// foreign key added beneath a new table references the table). That is what the engine's own
+    /// answer reports where it does answer, but it is a reading of the model, not the engine's
+    /// verdict — the apply still checks that verdict after excluding (<see cref="ExcludeAll"/>).
+    /// </remarks>
+    private static Func<SchemaDifference, IReadOnlyList<string>> Dependents(SchemaComparisonResult result)
     {
-        try
+        var owner = Owners(result);
+        var referencedBy = result.Differences.ToDictionary(FullName, ReferencedFrom, StringComparer.OrdinalIgnoreCase);
+        return difference =>
         {
-            return result.GetExcludeDependencies(difference).ToList();
-        }
-        catch (Exception e) when (e is NotSupportedException or ArgumentException)
+            var name = FullName(difference);
+            IEnumerable<string> found;
+            try
+            {
+                found = result.GetExcludeDependencies(difference).Select(owner).ToList();
+            }
+            catch (Exception e) when (e is NotSupportedException or ArgumentException)
+            {
+                found = referencedBy.Where(r => r.Value.Contains(name)).Select(r => r.Key);
+            }
+            return found
+                .Where(n => !string.Equals(n, name, StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(n => n, StringComparer.Ordinal)
+                .ToList();
+        };
+    }
+
+    /// <summary>
+    /// The objects a difference's new definition references — anything beneath it included, and a
+    /// referenced column counted as its table. Empty for a removal: what is dropped depends on nothing.
+    /// </summary>
+    private static HashSet<string> ReferencedFrom(SchemaDifference difference)
+    {
+        var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var stack = new Stack<SchemaDifference>([difference]);
+        while (stack.Count > 0)
         {
-            return Array.Empty<SchemaDifference>();
+            var node = stack.Pop();
+            foreach (var child in node.Children) stack.Push(child);
+            // A changed table's own definition names every key it has kept; only what changed beneath it is new.
+            if (node.SourceObject is not { } source
+                || (ReferenceEquals(node, difference) && source.ObjectType == Table.TypeClass)) continue;
+            foreach (var target in source.GetReferenced(DacQueryScopes.UserDefined))
+            {
+                referenced.Add(FullName(target));
+                if (target.ObjectType == Column.TypeClass && target.Name.Parts.Count > 2)
+                    referenced.Add(string.Join(".", target.Name.Parts.Take(2)));
+            }
         }
+        return referenced;
     }
 
     /// <summary>
@@ -429,7 +466,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
                 toExclude.Add((difference, !PlanBuilder.RoutesToRedefine(change)));
             }
         }
-        ExcludeAll(result, toExclude);
+        var refusal = ExcludeAll(result, toExclude);
 
         onChangesComputed?.Invoke(new CompareResult(all, Array.Empty<RawMessage>(), script,
             changeScripts, tablesWithColumnChanges, ExclusionDependencies: dependencies));
@@ -437,6 +474,11 @@ public sealed class SqlServerProvider : IDatabaseProvider
         if (applied.Count == 0)
         {
             return new ApplyResult(true, applied, excluded, messages);
+        }
+        if (refusal is not null)
+        {
+            // Nothing published: what the run would carry out is not what the plan said.
+            return new ApplyResult(false, Array.Empty<RawChange>(), excluded, [.. messages, refusal]);
         }
 
         var publish = result.PublishChangesToDatabase(cancellationToken);
@@ -466,7 +508,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
     }
 
     /// <summary>
-    /// Leaves every given difference out of the publish, and refuses to go on if one stays in.
+    /// Leaves every given difference out of the publish, and answers the error that refuses the
+    /// publish when one that must hold stays in (<c>SCHEMORPH016</c>) — null when all held.
     /// </summary>
     /// <remarks>
     /// DacFx's <c>Exclude</c> is a request: it declines while an included change depends on the
@@ -477,7 +520,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
     /// must hold and is still included then is a change the plan said would not run — nothing is
     /// published.
     /// </remarks>
-    private static void ExcludeAll(SchemaComparisonResult result, IReadOnlyList<(SchemaDifference Difference, bool MustHold)> differences)
+    private static RawMessage? ExcludeAll(SchemaComparisonResult result, IReadOnlyList<(SchemaDifference Difference, bool MustHold)> differences)
     {
         var pending = differences.ToList();
         while (pending.Count > 0)
@@ -487,18 +530,16 @@ public sealed class SqlServerProvider : IDatabaseProvider
             pending = declined;
         }
         var stillIncluded = pending.Where(d => d.MustHold).Select(d => d.Difference).ToList();
-        if (stillIncluded.Count == 0) return;
+        if (stillIncluded.Count == 0) return null;
 
-        var owner = Owners(result);
-        var described = stillIncluded.Select(d =>
-        {
-            var blockers = ExcludeDependenciesOf(result, d).Select(owner)
-                .Distinct(StringComparer.OrdinalIgnoreCase);
-            return $"{FullName(d)} (still needed by {string.Join(", ", blockers)})";
-        });
-        throw new InvalidOperationException(
-            "The engine would carry out changes this plan withholds, so nothing was published: " +
-            string.Join("; ", described) + ".");
+        var dependents = Dependents(result);
+        var described = stillIncluded.Select(d => dependents(d) is { Count: > 0 } blockers
+            ? $"{FullName(d)} (another change depends on it: {string.Join(", ", blockers)})"
+            : FullName(d));
+        return new RawMessage("Error", "SCHEMORPH016",
+            "The engine would carry out a change this plan withholds, so nothing was published: " +
+            string.Join("; ", described) + ". The plan could not tell in advance that another change depends on it. " +
+            "Enable destructive changes to apply them together, or change the desired state so nothing in this plan depends on the withheld change.");
     }
 
     // ------------------------------------------------------------------ programmables
