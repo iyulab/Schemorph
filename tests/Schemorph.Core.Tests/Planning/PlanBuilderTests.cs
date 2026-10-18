@@ -291,6 +291,64 @@ public class PlanBuilderTests
     }
 
     /// <summary>
+    /// A provider whose engine leaves a change out only together with what depends on it
+    /// says so (<see cref="CompareResult.ExclusionDependencies"/>); a gated change then
+    /// withholds its dependents, down the chain, each naming the change that started it.
+    /// Allowed, nothing is withheld and the map changes nothing.
+    /// </summary>
+    [Fact]
+    public void What_depends_on_a_gated_change_is_withheld_with_it()
+    {
+        var script = new ChangeScript("dbo.Data", "ALTER TABLE dbo.Data DROP COLUMN Gone;",
+            Rebuild: false, DropsColumn: true);
+        var compare = new CompareResult(
+            [
+                new RawChange("Change", "Table", "dbo.Data"),
+                new RawChange("Add", "Table", "dbo.Part"),
+                new RawChange("Add", "Table", "dbo.PartNote"),
+                new RawChange("Add", "Table", "dbo.Unrelated"),
+            ], [],
+            "-- engine script", [script],
+            ExclusionDependencies: new Dictionary<string, IReadOnlyList<string>>
+            {
+                ["dbo.Data"] = ["dbo.Part"],
+                ["dbo.Part"] = ["dbo.PartNote"],
+            });
+
+        var gated = PlanBuilder.Build(compare, allowDestructive: false);
+
+        Assert.Equal("dbo.Unrelated", Assert.Single(gated.Actions).ObjectName);
+        Assert.Equal(["dbo.Data", "dbo.Part", "dbo.PartNote"], gated.Excluded.Select(e => e.ObjectName));
+        Assert.All(gated.Excluded.Skip(1), e => Assert.Contains("dbo.Data", e.Reason));
+        Assert.Equal(["dbo.Part", "dbo.PartNote"],
+            gated.Messages.Where(m => m.Code == "SCHEMORPH015").Select(m => m.ObjectName));
+
+        var allowed = PlanBuilder.Build(compare, allowDestructive: true);
+        Assert.Equal(4, allowed.Actions.Count);
+        Assert.Empty(allowed.Excluded);
+        Assert.DoesNotContain(allowed.Messages, m => m.Code == "SCHEMORPH015");
+    }
+
+    /// <summary>
+    /// A programmable object's change is left out of the declarative publish only because
+    /// re-definition carries it out next — the engine running it too breaks no promise, so
+    /// it does not hold back the table changes that depend on it.
+    /// </summary>
+    [Fact]
+    public void A_change_routed_to_re_definition_withholds_nothing()
+    {
+        var compare = new CompareResult(
+            [new RawChange("Change", "ScalarFunction", "dbo.f"), new RawChange("Change", "Table", "dbo.UsesF")], [],
+            "-- engine script",
+            ExclusionDependencies: new Dictionary<string, IReadOnlyList<string>> { ["dbo.f"] = ["dbo.UsesF"] });
+
+        var plan = PlanBuilder.Build(compare, allowDestructive: false);
+
+        Assert.Equal("dbo.UsesF", Assert.Single(plan.Actions).ObjectName);
+        Assert.Empty(plan.Excluded);
+    }
+
+    /// <summary>
     /// The boundary the criterion draws: recoverability, not whether the old bytes
     /// survive. A re-created column's values are the new definition's output, so
     /// gating it would refuse a change nobody loses anything to — SCHEMORPH107

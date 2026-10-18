@@ -348,13 +348,21 @@ public sealed record CompareRequest(IDesiredState DesiredState, string Connectio
 /// declarative script itself drops before its other statements, because the engine refuses
 /// those statements while the object exists (PostgreSQL: a view reading a column being
 /// dropped). Strategy 2 must re-create each of them, whatever its checksum says.
+/// <paramref name="ExclusionDependencies"/>: for a change the engine can withhold only
+/// together with others, those others by object name — the changes that depend on it while
+/// they run (SQL Server: a foreign key added to another table depends on the table it
+/// references, so the engine will not leave that table's change out while the key is in).
+/// Withholding the change means withholding them too (<see cref="Planning.PlanBuilder.Withheld"/>);
+/// a change absent from the map is withheld by itself. Null when the provider withholds every
+/// change independently.
 public sealed record CompareResult(
     IReadOnlyList<RawChange> Changes,
     IReadOnlyList<RawMessage> Messages,
     string? UpdateScript,
     IReadOnlyList<ChangeScript>? ChangeScripts = null,
     IReadOnlyList<string>? TablesWithColumnChanges = null,
-    IReadOnlyList<string>? ProgrammablesDroppedFirst = null);
+    IReadOnlyList<string>? ProgrammablesDroppedFirst = null,
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? ExclusionDependencies = null);
 
 /// <summary>
 /// The slice of the update script attributable to one change (plan explanations):

@@ -140,6 +140,50 @@ public sealed class ColumnRemovalTests : IDisposable
         Assert.Equal("keep me", _db.Scalar<string>("SELECT TOP 1 Notes FROM dbo.[Order]"));
     }
 
+    /// <summary>
+    /// The engine withholds a change only together with everything that depends on it. A
+    /// foreign key added in the same plan depends on the table it references, so while it
+    /// runs the engine cannot leave that table's change out — the column drop gated out of
+    /// the plan would run anyway, with the plan, the apply result and the ledger all saying
+    /// it did not. The dependent change is withheld with it instead, and says why.
+    /// </summary>
+    [SkippableFact]
+    public async Task A_gated_removal_stays_withheld_when_a_new_foreign_key_references_its_table()
+    {
+        await Seed("Products");
+        WriteWithoutNotes("Products");
+        Write("Parts", """
+                Id INT NOT NULL PRIMARY KEY,
+                ProductId INT NOT NULL CONSTRAINT FK_Parts_Products REFERENCES dbo.Products (Id)
+            """);
+        // A second table whose own removal nothing depends on: withheld exactly as before.
+        Write("Notes", """
+                Id INT NOT NULL PRIMARY KEY
+            """);
+        _db.Execute("CREATE TABLE dbo.Notes (Id INT NOT NULL PRIMARY KEY, Body NVARCHAR(20) NULL);");
+
+        var diff = await DiffOperation.RunAsync(_provider, _ledger, SchemaDir, _db.Url, allowDestructive: false);
+        Assert.True(diff.Success, string.Join("; ", diff.Errors.Select(e => e.Text)));
+
+        Assert.Empty(diff.Plan!.Actions);
+        Assert.Contains(diff.Plan.Excluded, e => e.ObjectName == "dbo.Products");
+        Assert.Contains(diff.Plan.Excluded, e => e.ObjectName == "dbo.Notes");
+        var parts = Assert.Single(diff.Plan.Excluded, e => e.ObjectName == "dbo.Parts");
+        Assert.Contains("dbo.Products", parts.Reason);
+        var withheld = Assert.Single(diff.Plan.Messages, m => m.Code == "SCHEMORPH015");
+        Assert.Equal("dbo.Parts", withheld.ObjectName);
+
+        var outcome = await ApplyOperation.RunAsync(_provider, _ledger,
+            new ApplyOperation.Request(SchemaDir, _db.Url, ExpectedPlanHash: PlanFingerprint.Compute(diff.Plan)));
+        Assert.True(outcome.Success, string.Join("; ", outcome.Errors.Select(e => e.Text)));
+        Assert.Empty(outcome.Applied);
+
+        Assert.Equal(1, Columns("Products", "Notes"));
+        Assert.Equal("keep me", _db.Scalar<string>("SELECT TOP 1 Notes FROM dbo.Products"));
+        Assert.Equal(1, Columns("Notes", "Body"));
+        Assert.Equal(0, _db.Scalar<int>("SELECT COUNT(*) FROM sys.tables WHERE name = 'Parts'"));
+    }
+
     public void Dispose()
     {
         _db.Dispose();

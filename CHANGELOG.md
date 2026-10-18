@@ -7,6 +7,21 @@ change **additively**: consumers must ignore properties they do not know.
 
 ## Unreleased
 
+### Fixed
+
+- **SQL Server: a destructive change withheld from the plan could still run.** When a
+  foreign key added in the same plan referenced a table whose column drop was gated out
+  (no `--allow-destructive`), the drop ran anyway: the engine leaves a change out only
+  together with what depends on it, declined to leave the table's change out while the new
+  key was in, and that refusal went unread. The plan, the apply result (`excluded[]`) and the
+  history ledger all reported the drop as not executed while the column was gone. Now a change
+  that depends on a withheld change is withheld with it, and says so — `SCHEMORPH015` names
+  the change it waits for, and the object appears in `excluded[]` with that reason. Both run
+  once the withheld change is in the plan. Independently of the plan, the apply now checks the
+  engine's answer for every change it leaves out and publishes nothing if one would still run.
+  A plan this affects hashes differently than under 0.20.0, so a `planHash` captured then
+  fails closed.
+
 ### Changed
 
 - **A re-defined view is read once before its new definition commits.** A view can compile

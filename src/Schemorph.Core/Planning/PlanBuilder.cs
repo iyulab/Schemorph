@@ -28,6 +28,9 @@ public static class PlanBuilder
             .ToList();
         var scripts = (compareResult.ChangeScripts ?? Array.Empty<ChangeScript>())
             .ToDictionary(s => s.ObjectName, StringComparer.OrdinalIgnoreCase);
+        var withheld = Withheld(
+            compareResult.Changes.Select(c => (c, Gate(c, scripts.GetValueOrDefault(c.ObjectName), allowDestructive))),
+            compareResult.ExclusionDependencies);
 
         foreach (var change in compareResult.Changes)
         {
@@ -48,6 +51,26 @@ public static class PlanBuilder
             if (RoutesToRedefine(change))
             {
                 continue;   // Represented by checksum-driven Redefine actions instead.
+            }
+            if (withheld.TryGetValue(change.ObjectName, out var cause))
+            {
+                // Not gated on its own account: it is in the way of a change that is. The
+                // engine leaves a change out only with what depends on it, so running this
+                // one would carry the withheld change out with it — reported here as
+                // excluded and then executed, which is the one outcome the gate exists to
+                // rule out.
+                messages.Add(new PlanMessage(
+                    "Warning",
+                    "SCHEMORPH015",
+                    $"{change.ObjectName} is withheld with {cause}: it depends on {cause}, whose change is " +
+                    "withheld from this plan, and the engine leaves a change out only together with what depends " +
+                    $"on it. Both run once {cause}'s change is in the plan (enable destructive changes), or once " +
+                    "the desired state no longer asks for that change.",
+                    change.ObjectName));
+                excluded.Add(new PlanExclusion(change.ObjectName,
+                    $"Withheld with {cause}: this change depends on {cause}, whose change is withheld from this " +
+                    $"plan, and the engine cannot leave {cause}'s change out while this one runs."));
+                continue;
             }
 
             var script = scripts.GetValueOrDefault(change.ObjectName);
@@ -237,6 +260,52 @@ public static class PlanBuilder
             && script is { DestructiveSql: not null, RemainderSql: not null }
             ? ChangeInclusion.IncludeWithoutDestructive
             : ChangeInclusion.Exclude;
+    }
+
+    /// <summary>
+    /// The changes withheld not on their own account but because a change they depend on is:
+    /// each mapped to the change that put it there (the first one excluded on its own
+    /// account, when the chain is longer). Shared by the plan and the apply for the same
+    /// reason <see cref="Gate"/> is — the plan's account of what is left out and the apply's
+    /// execution of it must come from one judgment.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="dependencies"/> is the provider's map (<see cref="CompareResult.ExclusionDependencies"/>):
+    /// withholding a change withholds the changes listed under it, and theirs in turn. A change
+    /// listed there that is not part of the comparison is ignored — only changes can be withheld.
+    /// </remarks>
+    public static IReadOnlyDictionary<string, string> Withheld(
+        IEnumerable<(RawChange Change, ChangeInclusion Verdict)> verdicts,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? dependencies)
+    {
+        var withheld = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (dependencies is null || dependencies.Count == 0) return withheld;
+
+        var all = verdicts.ToList();
+        // A change routed to re-definition is left out of the declarative publish only because
+        // strategy 2 carries it out next; the engine running it as well changes nothing the plan
+        // promised. So it neither withholds what depends on it nor is withheld itself.
+        var names = all.Where(v => !RoutesToRedefine(v.Change))
+            .Select(v => v.Change.ObjectName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var roots = all.Where(v => v.Verdict == ChangeInclusion.Exclude && names.Contains(v.Change.ObjectName))
+            .Select(v => v.Change.ObjectName)
+            .ToList();
+        var excluded = roots.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var pending = new Queue<string>(roots);
+        while (pending.Count > 0)
+        {
+            var name = pending.Dequeue();
+            if (!dependencies.TryGetValue(name, out var dependents)) continue;
+            var cause = withheld.GetValueOrDefault(name, name);
+            foreach (var dependent in dependents)
+            {
+                if (!names.Contains(dependent) || !excluded.Add(dependent)) continue;
+                withheld[dependent] = cause;
+                pending.Enqueue(dependent);
+            }
+        }
+        return withheld;
     }
 
     /// <summary>
