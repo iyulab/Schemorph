@@ -52,12 +52,15 @@ Postgres half of the integration suite:
 
 ```bash
 docker run -d --name schemorph-postgres -e POSTGRES_PASSWORD='<password>' \
-  -p 55432:5432 postgres:16-alpine
+  -p 15432:5432 postgres:16-alpine
 docker exec schemorph-postgres psql -U postgres \
   -c "CREATE ROLE schemorph_local LOGIN PASSWORD '<password>' NOSUPERUSER NOCREATEDB NOCREATEROLE;" \
   -c "CREATE DATABASE schemorph_local OWNER schemorph_local;"
-# SCHEMORPH_PG_TEST_URL=Host=localhost;Port=55432;Username=schemorph_local;Password=<password>;Database=schemorph_local
+# SCHEMORPH_PG_TEST_URL=Host=localhost;Port=15432;Username=schemorph_local;Password=<password>;Database=schemorph_local
 ```
+
+The host port is below 49152 on purpose: Windows reserves blocks of the dynamic range (49152–65535) for
+Hyper-V, and a container published inside a reserved block fails to start with «access permissions».
 
 Point it at the **restricted role**, not the superuser. The provider's requirement is a
 managed, non-superuser database with no extension dependency, and CI runs the suite as
