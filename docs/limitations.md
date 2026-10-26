@@ -105,12 +105,16 @@ held back, and the old column is untouched. Renaming costs you a refusal you hav
 to read — which is the intended price, since a rename is the easiest way to reach a
 column removal by accident. It does not look like removing anything.
 
-What the gate holds back differs by engine. **PostgreSQL** withholds only the
-`DROP COLUMN`: the added column loses nothing, so it applies, and what is left is a
-new empty column beside the old one that still holds the values — the first step of
-an expand/contract migration. `SCHEMORPH012` says so. **SQL Server** withholds the
-whole table's change, the addition with it, because its engine publishes a
-difference whole; the plan comes back with no action for that table.
+Both engines withhold only the `DROP COLUMN`: the added column loses nothing, so it
+applies, and what is left is a new empty column beside the old one that still holds
+the values — the first step of an expand/contract migration. `SCHEMORPH012` says so.
+They get there differently. PostgreSQL separates the drop statement from the rest of
+the table's change. **SQL Server** publishes a difference whole, so it compares
+against the desired state with the column put back — the live definition of the
+column, and the defaults, checks and indexes that hang on it — and the engine never
+writes the drop; the plan names the withheld statement in `excluded[]`. When the
+column cannot be put back faithfully, `SCHEMORPH017` says why and the table's whole
+change is withheld, with everything that depends on the table (`SCHEMORPH015`).
 
 At table granularity both engines behave like PostgreSQL does for columns: the
 create is safe on its own and applies while the drop is withheld. What is left is

@@ -61,25 +61,29 @@ public sealed class RenameTests : IDisposable
         var diff = await DiffOperation.RunAsync(_provider, _ledger, SchemaDir, _db.Url, allowDestructive: false);
         Assert.True(diff.Success, string.Join("; ", diff.Errors.Select(e => e.Text)));
 
-        // Two independent statements. The tool never had a rename to emit.
-        Assert.Contains("DROP COLUMN", diff.UpdateScript!, StringComparison.OrdinalIgnoreCase);
+        // Two independent statements. The tool never had a rename to emit - and with the drop
+        // withheld, the comparison is the one with the column kept: only the add is in the script.
         Assert.Contains("ADD", diff.UpdateScript!, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("DROP COLUMN", diff.UpdateScript!, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("sp_rename", diff.UpdateScript!, StringComparison.OrdinalIgnoreCase);
 
-        // Which the gate now sees on this engine too: the losing half is withheld
-        // and the plan says so, rather than an ordinary alter carrying it out.
-        Assert.Empty(diff.Plan!.Actions);
+        // The losing half is withheld on this engine as on the other: the add runs by itself,
+        // the plan says what does not run, and warns that a rename would not move the values.
+        Assert.Equal("dbo.Workspaces", Assert.Single(diff.Plan!.Actions).ObjectName);
         Assert.Contains(diff.Plan.Messages, m => m.Code == "SCHEMORPH001");
-        Assert.Contains(diff.Plan.Excluded, e => e.ObjectName == "dbo.Workspaces");
+        Assert.Contains(diff.Plan.Messages, m => m.Code == "SCHEMORPH012");
+        var withheld = Assert.Single(diff.Plan.Excluded, e => e.ObjectName == "dbo.Workspaces");
+        Assert.Equal("ALTER TABLE [dbo].[Workspaces] DROP COLUMN [Notes];", withheld.Statements);
 
         var outcome = await ApplyOperation.RunAsync(_provider, _ledger,
-            new ApplyOperation.Request(SchemaDir, _db.Url));
+            new ApplyOperation.Request(SchemaDir, _db.Url, ExpectedPlanHash: PlanFingerprint.Compute(diff.Plan)));
         Assert.True(outcome.Success, string.Join("; ", outcome.Errors.Select(e => e.Text)));
-        Assert.Empty(outcome.Applied);
+        Assert.Equal("dbo.Workspaces", Assert.Single(outcome.Applied).ObjectName);
 
         Assert.Equal(1, Columns("Notes"));
-        Assert.Equal(0, Columns("Remarks"));
+        Assert.Equal(1, Columns("Remarks"));
         Assert.Equal("keep me", _db.Scalar<string>("SELECT TOP 1 Notes FROM dbo.Workspaces"));
+        Assert.Equal(1, _db.Scalar<int>("SELECT COUNT(*) FROM dbo.Workspaces WHERE Remarks IS NULL"));
     }
 
     /// <summary>

@@ -5,6 +5,23 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Changed
+
+- **SQL Server: a column drop that the destructive gate withholds no longer withholds the rest.**
+  Without `--allow-destructive`, a column the desired state no longer declares used to hold back
+  the whole change to its table - a column added beside it, and (`SCHEMORPH015`) any new table
+  whose foreign key references the table - because the engine publishes a difference whole. The
+  comparison is now made against the desired state with that column put back, together with what
+  hangs on it (its default, checks and indexes): the engine never writes the drop, the table's other
+  changes and what depends on the table run, and the plan says what was held back - `SCHEMORPH001`,
+  the statement in `excluded[]`, and `SCHEMORPH012` beside an added column, as on PostgreSQL. When the
+  column cannot be put back faithfully the old behaviour stands and `SCHEMORPH017` says why.
+  Enabling destructive changes drops the column and what hangs on it in the same apply, as before.
+  A plan this changes hashes differently than under 0.21.0: its update script no longer carries the
+  drop, so a `planHash` captured then fails closed.
+
 ## 0.21.0 — 2026-10-18
 
 ### Fixed

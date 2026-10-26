@@ -98,7 +98,7 @@ Current version: **`1.11`**.
 | `pre` | array | Pending pre-stage scripts the apply would run before the declarative stage, in run order (since 1.11). Same shape as `migrations[]`. Empty when no pre-stage directory was given or nothing is pending. **Bound by `planHash`** |
 | `excluded[].objectName` | string | Fully qualified object name (`schema.object`) |
 | `excluded[].reason` | string | Why it does not execute, in the reviewer's terms — what the tool does with the object, not which branch dropped it |
-| `excluded[].statements` | string? | The withheld statements, when only part of the object's change is withheld (since 1.9). The object is then also in `changes`, so its name alone no longer says which of its statements do not run. `null` when the whole object is excluded |
+| `excluded[].statements` | string? | The withheld statements, when only part of the object's change is withheld (since 1.9). The object is then usually also in `changes`, so its name alone no longer says which of its statements do not run. A provider that keeps a dropped column out of the comparison (SQL Server) reports the drop here too: the update script is that of the comparison with the column kept, so the statement is in no other field, and the object is in `changes` only if something else in it changes. `null` when the whole object is excluded |
 
 ## Action verbs
 

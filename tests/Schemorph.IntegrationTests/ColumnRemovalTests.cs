@@ -68,12 +68,13 @@ public sealed class ColumnRemovalTests : IDisposable
         var diff = await DiffOperation.RunAsync(_provider, _ledger, SchemaDir, _db.Url, allowDestructive: false);
         Assert.True(diff.Success, string.Join("; ", diff.Errors.Select(e => e.Text)));
 
-        // The generator words it as an alter that drops a column, and the criterion
-        // is the loss rather than the syntax — so the gate has to see it.
-        Assert.Contains("DROP COLUMN", diff.UpdateScript!, StringComparison.OrdinalIgnoreCase);
+        // The comparison is made with the column kept, so the script that runs has no drop in it
+        // - and the plan still says there is one, and what it would run.
+        Assert.DoesNotContain("DROP COLUMN", diff.UpdateScript ?? "", StringComparison.OrdinalIgnoreCase);
         Assert.Empty(diff.Plan!.Actions);
         Assert.Contains(diff.Plan.Messages, m => m.Code == "SCHEMORPH001");
-        Assert.Contains(diff.Plan.Excluded, e => e.ObjectName == "dbo.Workspaces");
+        var withheld = Assert.Single(diff.Plan.Excluded, e => e.ObjectName == "dbo.Workspaces");
+        Assert.Equal("ALTER TABLE [dbo].[Workspaces] DROP COLUMN [Notes];", withheld.Statements);
 
         // And the flag reads false here, because withholding the change is what
         // emptied the list it counts. Pinned rather than assumed: a caller that
@@ -126,10 +127,11 @@ public sealed class ColumnRemovalTests : IDisposable
         var diff = await DiffOperation.RunAsync(_provider, _ledger, SchemaDir, _db.Url, allowDestructive: false);
         Assert.True(diff.Success, string.Join("; ", diff.Errors.Select(e => e.Text)));
 
-        Assert.Contains("DROP COLUMN", diff.UpdateScript!, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("DROP COLUMN", diff.UpdateScript ?? "", StringComparison.OrdinalIgnoreCase);
         Assert.Empty(diff.Plan!.Actions);
         Assert.Contains(diff.Plan.Messages, m => m.Code == "SCHEMORPH001");
-        Assert.Contains(diff.Plan.Excluded, e => e.ObjectName == "dbo.Order");
+        var withheld = Assert.Single(diff.Plan.Excluded, e => e.ObjectName == "dbo.Order");
+        Assert.Equal("ALTER TABLE [dbo].[Order] DROP COLUMN [Notes];", withheld.Statements);
 
         var outcome = await ApplyOperation.RunAsync(_provider, _ledger,
             new ApplyOperation.Request(SchemaDir, _db.Url));
@@ -141,14 +143,15 @@ public sealed class ColumnRemovalTests : IDisposable
     }
 
     /// <summary>
-    /// The engine withholds a change only together with everything that depends on it. A
-    /// foreign key added in the same plan depends on the table it references, so while it
-    /// runs the engine cannot leave that table's change out — the column drop gated out of
-    /// the plan would run anyway, with the plan, the apply result and the ledger all saying
-    /// it did not. The dependent change is withheld with it instead, and says why.
+    /// The engine withholds a change only together with everything that depends on it, and a
+    /// foreign key added in the same plan depends on the table it references. A column drop
+    /// gated out of the plan therefore cannot be left out of the publish by excluding the table's
+    /// change - but it need not be: the comparison is made with the column kept, so the engine
+    /// never writes the drop and the new table runs. The withheld drop is said in the plan; the
+    /// column and its values stay.
     /// </summary>
     [SkippableFact]
-    public async Task A_gated_removal_stays_withheld_when_a_new_foreign_key_references_its_table()
+    public async Task A_withheld_removal_does_not_hold_back_a_new_foreign_key_that_references_its_table()
     {
         await Seed("Products");
         WriteWithoutNotes("Products");
@@ -165,32 +168,31 @@ public sealed class ColumnRemovalTests : IDisposable
         var diff = await DiffOperation.RunAsync(_provider, _ledger, SchemaDir, _db.Url, allowDestructive: false);
         Assert.True(diff.Success, string.Join("; ", diff.Errors.Select(e => e.Text)));
 
-        Assert.Empty(diff.Plan!.Actions);
-        Assert.Contains(diff.Plan.Excluded, e => e.ObjectName == "dbo.Products");
-        Assert.Contains(diff.Plan.Excluded, e => e.ObjectName == "dbo.Notes");
-        var parts = Assert.Single(diff.Plan.Excluded, e => e.ObjectName == "dbo.Parts");
-        Assert.Contains("dbo.Products", parts.Reason);
-        var withheld = Assert.Single(diff.Plan.Messages, m => m.Code == "SCHEMORPH015");
-        Assert.Equal("dbo.Parts", withheld.ObjectName);
+        Assert.Equal("dbo.Parts", Assert.Single(diff.Plan!.Actions).ObjectName);
+        var withheld = diff.Plan.Excluded.Where(e => e.Statements is not null).ToList();
+        Assert.Equal(["dbo.Notes", "dbo.Products"], withheld.Select(e => e.ObjectName).Order());
+        Assert.All(withheld, e => Assert.Contains("DROP COLUMN", e.Statements));
+        Assert.DoesNotContain(diff.Plan.Messages, m => m.Code is "SCHEMORPH015" or "SCHEMORPH017");
+        Assert.DoesNotContain("DROP COLUMN", diff.UpdateScript!, StringComparison.OrdinalIgnoreCase);
 
         var outcome = await ApplyOperation.RunAsync(_provider, _ledger,
             new ApplyOperation.Request(SchemaDir, _db.Url, ExpectedPlanHash: PlanFingerprint.Compute(diff.Plan)));
         Assert.True(outcome.Success, string.Join("; ", outcome.Errors.Select(e => e.Text)));
-        Assert.Empty(outcome.Applied);
+        Assert.Equal("dbo.Parts", Assert.Single(outcome.Applied).ObjectName);
 
         Assert.Equal(1, Columns("Products", "Notes"));
         Assert.Equal("keep me", _db.Scalar<string>("SELECT TOP 1 Notes FROM dbo.Products"));
         Assert.Equal(1, Columns("Notes", "Body"));
-        Assert.Equal(0, _db.Scalar<int>("SELECT COUNT(*) FROM sys.tables WHERE name = 'Parts'"));
+        Assert.Equal(1, _db.Scalar<int>("SELECT COUNT(*) FROM sys.foreign_keys WHERE name = 'FK_Parts_Products'"));
     }
 
     /// <summary>
-    /// The same coupling where the engine cannot say what depends on the table: a view that reads
-    /// it and does not change makes the engine's dependency query fail. The plan still has to know
-    /// the new foreign key depends on the table, so it reads that from the key's own definition.
+    /// A view that reads the table and does not change makes the engine's dependency query fail, which
+    /// is what the withholding by dependents had to work around. Keeping the column out of the
+    /// comparison needs no such answer: the new foreign key runs, the view is untouched.
     /// </summary>
     [SkippableFact]
-    public async Task The_coupling_is_found_when_an_unchanged_view_reads_the_table_too()
+    public async Task An_unchanged_view_reading_the_table_does_not_matter_either()
     {
         await Seed("Products");
         _db.Execute("CREATE VIEW dbo.ProductNames AS SELECT p.Id, p.Name FROM dbo.Products AS p");
@@ -205,13 +207,14 @@ public sealed class ColumnRemovalTests : IDisposable
 
         var diff = await DiffOperation.RunAsync(_provider, _ledger, SchemaDir, _db.Url, allowDestructive: false);
         Assert.True(diff.Success, string.Join("; ", diff.Errors.Select(e => e.Text)));
-        Assert.DoesNotContain(diff.Plan!.Actions, a => a.ObjectName == "dbo.Parts");
-        Assert.Equal("dbo.Parts", Assert.Single(diff.Plan.Messages, m => m.Code == "SCHEMORPH015").ObjectName);
+        Assert.Contains(diff.Plan!.Actions, a => a.ObjectName == "dbo.Parts");
+        Assert.DoesNotContain(diff.Plan.Messages, m => m.Code == "SCHEMORPH015");
 
         var outcome = await ApplyOperation.RunAsync(_provider, _ledger,
             new ApplyOperation.Request(SchemaDir, _db.Url, ExpectedPlanHash: PlanFingerprint.Compute(diff.Plan)));
         Assert.True(outcome.Success, string.Join("; ", outcome.Errors.Select(e => e.Text)));
         Assert.Equal(1, Columns("Products", "Notes"));
+        Assert.Equal(1, _db.Scalar<int>("SELECT COUNT(*) FROM sys.tables WHERE name = 'Parts'"));
     }
 
     public void Dispose()

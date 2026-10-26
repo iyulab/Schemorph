@@ -219,7 +219,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
     private static CompareResult Compare(CompareRequest request, CancellationToken cancellationToken)
     {
         var state = SqlServerDesiredState.From(request.DesiredState);
-        using var session = ComparisonSession.Open(state, request.ConnectionString, cancellationToken);
+        using var comparison = KeptComparison.Open(state, request.ConnectionString, request.WithholdColumnDrops, cancellationToken);
+        var session = comparison.Session;
         if (session.ModelErrors.Count > 0)
         {
             return new CompareResult(Array.Empty<RawChange>(), session.ModelErrors, UpdateScript: null);
@@ -234,13 +235,80 @@ public sealed class SqlServerProvider : IDatabaseProvider
             // ApplyOperation) — an unreadable target never becomes a plan.
             return new CompareResult(Array.Empty<RawChange>(), messages, UpdateScript: null);
         }
+        messages.AddRange(comparison.Notes);
 
         var changes = result.Differences.Select(ToRawChange).ToList();
         var (script, changeScripts) = GenerateUpdateScript(result, request.ConnectionString, changes, messages);
 
         return new CompareResult(changes, messages, script, changeScripts,
             TablesWithColumnChanges(result.Differences),
-            ExclusionDependencies: ExclusionDependencies(result));
+            ExclusionDependencies: ExclusionDependencies(result),
+            WithheldColumnDrops: comparison.Withheld);
+    }
+
+    /// <summary>
+    /// A comparison that, when asked to, keeps the columns the desired state no longer declares
+    /// (<see cref="CompareRequest.WithholdColumnDrops"/>): it compares against the desired state with those
+    /// columns put back (<see cref="ColumnKeeper"/>) and reports what it kept. When keeping them is not
+    /// possible it is the comparison against the desired state as written, with a note saying why — the
+    /// drop is then withheld with the rest of its table's change, which is what the plan reports.
+    /// </summary>
+    private sealed class KeptComparison : IDisposable
+    {
+        private readonly ComparisonSession _used;
+        private readonly ComparisonSession? _discarded;
+
+        public ComparisonSession Session => _used;
+        public IReadOnlyList<WithheldColumnDrop>? Withheld { get; }
+        public List<RawMessage> Notes { get; } = new();
+
+        private KeptComparison(ComparisonSession used, ComparisonSession? discarded, IReadOnlyList<WithheldColumnDrop>? withheld)
+        {
+            _used = used;
+            _discarded = discarded;
+            Withheld = withheld;
+        }
+
+        public static KeptComparison Open(
+            SqlServerDesiredState state, string connectionString, bool withholdColumnDrops, CancellationToken cancellationToken)
+        {
+            var batches = state.ModelFiles.SelectMany(f => f.Batches).ToList();
+            var first = ComparisonSession.Open(batches, connectionString, cancellationToken);
+            if (!withholdColumnDrops || first.ModelErrors.Count > 0 || first.Result is null
+                || CollectMessages(first.Result).Any(m => m.Severity == nameof(DacMessageType.Error))
+                || ColumnsDropped(first.Result.Differences).Count == 0)
+            {
+                return new KeptComparison(first, null, null);
+            }
+
+            var (kept, why) = ColumnKeeper.TryKeep(batches, connectionString, first.Result, cancellationToken);
+            ComparisonSession? second = null;
+            if (kept is not null)
+            {
+                second = ComparisonSession.Open(kept.Batches, connectionString, cancellationToken);
+                why = second.ModelErrors.Count > 0
+                    ? "the desired state with the column put back does not validate: " + string.Join(" ", second.ModelErrors.Select(e => e.Text))
+                    : CollectMessages(second.Result!).FirstOrDefault(m => m.Severity == nameof(DacMessageType.Error))?.Text
+                      ?? (ColumnsDropped(second.Result!.Differences).Count > 0
+                          ? "the engine still drops a column that was put back"
+                          : null);
+                if (why is null) return new KeptComparison(second, first, kept.Withheld);
+                second.Dispose();
+            }
+
+            var note = new RawMessage("Warning", "SCHEMORPH017",
+                "A column the desired state no longer declares could not be kept out of the comparison, so the " +
+                "change to its table is withheld whole, together with what depends on the table: " + why);
+            var fallback = new KeptComparison(first, null, null);
+            fallback.Notes.Add(note);
+            return fallback;
+        }
+
+        public void Dispose()
+        {
+            _used.Dispose();
+            _discarded?.Dispose();
+        }
     }
 
     /// <summary>
@@ -380,9 +448,15 @@ public sealed class SqlServerProvider : IDatabaseProvider
             // change, not about how the generator chose to word it.
             var dropping = TablesDroppingColumns(result.Differences)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var adding = TablesAddingColumns(result.Differences)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             var attributed = UpdateScriptAttributor.Attribute(scriptResult.Script, changes)
-                .Select(s => s with { DropsColumn = dropping.Contains(s.ObjectName) })
+                .Select(s => s with
+                {
+                    DropsColumn = dropping.Contains(s.ObjectName),
+                    AddsColumn = adding.Contains(s.ObjectName),
+                })
                 .ToList();
 
             return (scriptResult.Script, attributed);
@@ -398,7 +472,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
     private static ApplyResult Apply(ApplyRequest request, Func<RawChange, ChangeScript?, ChangeInclusion> includeChange, Action<CompareResult>? onChangesComputed, CancellationToken cancellationToken)
     {
         var state = SqlServerDesiredState.From(request.DesiredState);
-        using var session = ComparisonSession.Open(state, request.ConnectionString, cancellationToken);
+        using var comparison = KeptComparison.Open(state, request.ConnectionString, request.WithholdColumnDrops, cancellationToken);
+        var session = comparison.Session;
         if (session.ModelErrors.Count > 0)
         {
             return new ApplyResult(false, Array.Empty<RawChange>(), Array.Empty<RawChange>(), session.ModelErrors);
@@ -410,6 +485,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
         {
             return new ApplyResult(false, Array.Empty<RawChange>(), Array.Empty<RawChange>(), messages);
         }
+        messages.AddRange(comparison.Notes);
 
         // Generate the script and its attribution over the whole comparison —
         // matching diff, which does the same — so the plan the gate recomputes here
@@ -468,8 +544,9 @@ public sealed class SqlServerProvider : IDatabaseProvider
         }
         var refusal = ExcludeAll(result, toExclude);
 
-        onChangesComputed?.Invoke(new CompareResult(all, Array.Empty<RawMessage>(), script,
-            changeScripts, tablesWithColumnChanges, ExclusionDependencies: dependencies));
+        onChangesComputed?.Invoke(new CompareResult(all, comparison.Notes, script,
+            changeScripts, tablesWithColumnChanges, ExclusionDependencies: dependencies,
+            WithheldColumnDrops: comparison.Withheld));
 
         if (applied.Count == 0)
         {
@@ -660,7 +737,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
         return suffix < 0 ? sourceName : sourceName[..suffix];
     }
 
-    private static string FullName(TSqlObject obj) => string.Join(".", obj.Name.Parts);
+    internal static string FullName(TSqlObject obj) => string.Join(".", obj.Name.Parts);
 
     // ------------------------------------------------------------------ inspect
 
@@ -808,15 +885,12 @@ public sealed class SqlServerProvider : IDatabaseProvider
         public SchemaComparisonResult? Result { get; private init; }
         private string? _dacpacPath;
 
-        public static ComparisonSession Open(SqlServerDesiredState state, string connectionString, CancellationToken cancellationToken)
+        public static ComparisonSession Open(IEnumerable<string> batches, string connectionString, CancellationToken cancellationToken)
         {
             using var model = new TSqlModel(ModelVersion, new TSqlModelOptions());
-            foreach (var file in state.ModelFiles)
+            foreach (var batch in batches)
             {
-                foreach (var batch in file.Batches)
-                {
-                    model.AddObjects(NormalizeToCreate(batch));
-                }
+                model.AddObjects(NormalizeToCreate(batch));
             }
 
             var errors = model.Validate()
@@ -949,6 +1023,60 @@ public sealed class SqlServerProvider : IDatabaseProvider
             .Select(FullName)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    /// <summary>
+    /// Tables that gain a column the live table does not have: an added column that is not the
+    /// re-creation of a dropped one of the same name. Beside a column the desired state no longer
+    /// declares, that is the shape a column rename takes (<c>SCHEMORPH012</c>).
+    /// </summary>
+    private static IReadOnlyList<string> TablesAddingColumns(IEnumerable<SchemaDifference> differences) =>
+        differences
+            .Where(d => d.UpdateAction == SchemaUpdateAction.Change
+                        && (d.SourceObject ?? d.TargetObject)?.ObjectType == Table.TypeClass)
+            .Where(d =>
+            {
+                var columns = d.Children
+                    .Where(c => (c.SourceObject ?? c.TargetObject)?.ObjectType == Column.TypeClass)
+                    .ToList();
+                var deleted = columns.Where(c => c.UpdateAction == SchemaUpdateAction.Delete)
+                    .Select(ColumnName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                return columns.Any(c => c.UpdateAction == SchemaUpdateAction.Add && !deleted.Contains(ColumnName(c)));
+            })
+            .Select(FullName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    /// <summary>A table's columns that the comparison drops without putting back (see <see cref="TablesDroppingColumns"/>).</summary>
+    internal sealed record DroppedColumns(string Schema, string Table, IReadOnlyList<string> Columns);
+
+    /// <summary>
+    /// The columns each table loses, by the table's name — what a comparison asked to keep them
+    /// (<see cref="KeptComparison"/>) has to put back. A column dropped and re-added under the same name is
+    /// not among them, as in <see cref="TablesDroppingColumns"/>.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, DroppedColumns> ColumnsDropped(IEnumerable<SchemaDifference> differences)
+    {
+        var dropped = new Dictionary<string, DroppedColumns>(StringComparer.OrdinalIgnoreCase);
+        foreach (var difference in differences)
+        {
+            if (difference.UpdateAction != SchemaUpdateAction.Change
+                || (difference.SourceObject ?? difference.TargetObject) is not { } table
+                || table.ObjectType != Table.TypeClass
+                || table.Name.Parts.Count < 2) continue;
+
+            var columns = difference.Children
+                .Where(c => (c.SourceObject ?? c.TargetObject)?.ObjectType == Column.TypeClass)
+                .ToList();
+            var readded = columns.Where(c => c.UpdateAction == SchemaUpdateAction.Add)
+                .Select(ColumnName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var lost = columns.Where(c => c.UpdateAction == SchemaUpdateAction.Delete && !readded.Contains(ColumnName(c)))
+                .Select(ColumnName).Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(n => n, StringComparer.Ordinal).ToList();
+            if (lost.Count > 0)
+                dropped[FullName(difference)] = new DroppedColumns(table.Name.Parts[0], table.Name.Parts[1], lost);
+        }
+        return dropped;
+    }
 
     private static bool DropsAColumn(IEnumerable<SchemaDifference> children)
     {
