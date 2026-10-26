@@ -632,4 +632,70 @@ public class PlanBuilderTests
 
         Assert.DoesNotContain(plan.Messages, m => m.Code == "SCHEMORPH011");
     }
+
+    // ---- a column drop the provider kept out of the comparison itself (SM-EX2) ----
+
+    private static CompareResult KeptOut(
+        IReadOnlyList<RawChange> changes, IReadOnlyList<ChangeScript>? scripts = null) =>
+        new(changes, Array.Empty<RawMessage>(), "CREATE TABLE ...;", scripts,
+            WithheldColumnDrops: [new WithheldColumnDrop("dbo.Products", ["Notes"],
+                "ALTER TABLE [dbo].[Products] DROP COLUMN [Notes];")]);
+
+    [Fact]
+    public void A_withheld_column_drop_is_said_without_holding_back_what_depends_on_the_table()
+    {
+        // The comparison already is the one without the drop: the new table that references Products
+        // is an ordinary change, and Products has none of its own.
+        var plan = PlanBuilder.Build(KeptOut([new RawChange("Add", "Table", "dbo.Parts")]), allowDestructive: false);
+
+        var action = Assert.Single(plan.Actions);
+        Assert.Equal("dbo.Parts", action.ObjectName);
+        var message = Assert.Single(plan.Messages, m => m.Code == "SCHEMORPH001");
+        Assert.Equal("dbo.Products", message.ObjectName);
+        Assert.Contains("Only the column drop is withheld; nothing else in this table changes", message.Text);
+        var exclusion = Assert.Single(plan.Excluded);
+        Assert.Equal("dbo.Products", exclusion.ObjectName);
+        Assert.Equal("ALTER TABLE [dbo].[Products] DROP COLUMN [Notes];", exclusion.Statements);
+        Assert.Contains("Nothing else in this table changes", exclusion.Reason);
+        Assert.DoesNotContain(plan.Messages, m => m.Code == "SCHEMORPH015");
+    }
+
+    [Fact]
+    public void A_withheld_column_drop_beside_other_changes_to_the_table_says_they_run()
+    {
+        var plan = PlanBuilder.Build(
+            KeptOut([new RawChange("Change", "Table", "dbo.Products"), new RawChange("Add", "Table", "dbo.Parts")]),
+            allowDestructive: false);
+
+        Assert.Equal(["dbo.Parts", "dbo.Products"], plan.Actions.Select(a => a.ObjectName).Order());
+        var message = Assert.Single(plan.Messages, m => m.Code == "SCHEMORPH001");
+        Assert.Contains("the rest of this table's change is in the plan", message.Text);
+        Assert.Contains("The rest of this table's change runs", Assert.Single(plan.Excluded).Reason);
+    }
+
+    [Fact]
+    public void A_column_added_beside_a_withheld_drop_carries_the_rename_warning()
+    {
+        var added = new ChangeScript("dbo.Products", "ALTER TABLE [dbo].[Products] ADD [Remarks] NVARCHAR (100);",
+            Rebuild: false, AddsColumn: true);
+
+        var plan = PlanBuilder.Build(
+            KeptOut([new RawChange("Change", "Table", "dbo.Products")], [added]), allowDestructive: false);
+
+        var warning = Assert.Single(plan.Messages, m => m.Code == "SCHEMORPH012");
+        Assert.Equal("dbo.Products", warning.ObjectName);
+    }
+
+    [Fact]
+    public void A_withheld_column_drop_does_not_move_the_plans_hash()
+    {
+        // Nothing the plan executes differs: the withheld drop is not in the script that runs. Telling the
+        // reviewer about it must not change what the apply gate binds.
+        var changes = new[] { new RawChange("Add", "Table", "dbo.Parts") };
+        var without = new CompareResult(changes, Array.Empty<RawMessage>(), "CREATE TABLE ...;");
+
+        Assert.Equal(
+            PlanFingerprint.Compute(PlanBuilder.Build(without, allowDestructive: false)),
+            PlanFingerprint.Compute(PlanBuilder.Build(KeptOut(changes), allowDestructive: false)));
+    }
 }

@@ -212,7 +212,7 @@ public static class ApplyOperation
         try
         {
             result = await provider.ApplyAsync(
-                new ApplyRequest(state, request.ConnectionString),
+                new ApplyRequest(state, request.ConnectionString, WithholdColumnDrops: !request.AllowDestructive),
                 (change, script) => PlanBuilder.Gate(change, script, request.AllowDestructive),
                 computed =>
                 {

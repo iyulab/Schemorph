@@ -90,12 +90,25 @@ internal sealed class FakeProvider : IDatabaseProvider
     public Task<IDesiredState> LoadDesiredStateAsync(string desiredStateDirectory, CancellationToken ct = default)
         => DesiredState is null ? throw new NotSupportedException() : Task.FromResult(DesiredState);
 
+    /// <summary>Returned by <see cref="CompareAsync"/> when set.</summary>
+    public CompareResult? CompareOutcome { get; init; }
+
+    /// <summary>Every request a compare was made with, in call order.</summary>
+    public List<CompareRequest> CompareRequests { get; } = new();
+
+    /// <summary>Every request an apply was made with, in call order.</summary>
+    public List<ApplyRequest> ApplyRequests { get; } = new();
+
     public Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken ct = default)
-        => throw new NotSupportedException();
+    {
+        CompareRequests.Add(request);
+        return CompareOutcome is null ? throw new NotSupportedException() : Task.FromResult(CompareOutcome);
+    }
 
     public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, ChangeScript?, ChangeInclusion> include, Action<CompareResult>? onChangesComputed = null, IApplySession? session = null, CancellationToken ct = default)
     {
         SessionsSeen.Add(session);
+        ApplyRequests.Add(request);
         if (ApplyOutcome is null) throw new NotSupportedException();
         if (Computed is not null) onChangesComputed?.Invoke(Computed);
         return Task.FromResult(ApplyOutcome);

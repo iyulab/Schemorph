@@ -87,7 +87,7 @@ public static class DiffOperation
             }
         }
 
-        var compared = await provider.CompareAsync(new CompareRequest(state, connectionString, simulation), cancellationToken);
+        var compared = await provider.CompareAsync(new CompareRequest(state, connectionString, simulation, WithholdColumnDrops: !allowDestructive), cancellationToken);
         // Classification skip warnings (deploy scripts, seed DML) surface once
         // per operation, riding the compare messages into the plan.
         var messages = state.Warnings.Concat(compared.Messages).ToList();

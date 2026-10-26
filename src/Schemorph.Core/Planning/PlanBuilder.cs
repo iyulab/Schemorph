@@ -97,20 +97,7 @@ public static class PlanBuilder
                     script!.DestructiveSql));
                 if (script.AddsColumn)
                 {
-                    // The column analogue of SCHEMORPH011. A rename arrives as an added
-                    // column beside a dropped one, and with the drop withheld the addition
-                    // runs alone: a new, empty column next to the old one that still holds
-                    // the values. That is the first half of expand/contract, which is fine
-                    // if it is what the reader meant — and a surprise if they meant a rename
-                    // and planned to issue it by hand after the apply.
-                    messages.Add(new PlanMessage(
-                        "Warning",
-                        "SCHEMORPH012",
-                        $"{change.ObjectName}: a column is added while a column the desired state no longer " +
-                        "declares is kept. If the added column is the kept one renamed, applying this plan adds " +
-                        "it empty and leaves the values where they are: rename the column in the database first, " +
-                        "then diff again — or, after this apply, copy the values across before enabling the drop.",
-                        change.ObjectName));
+                    messages.Add(RenameWarning(change.ObjectName));
                 }
                 actions.Add(new PlanAction(change.ObjectName, change.ObjectType, operation, RiskLevel.Warning,
                     Sql: script.RemainderSql,
@@ -157,6 +144,8 @@ public static class PlanBuilder
                 StatementCount: script?.StatementCount));
         }
 
+        AddWithheldColumnDrops(compareResult, scripts, actions, messages, excluded);
+
         messages.AddRange(PossibleRenames(compareResult.Changes, scripts));
 
         // Redefines execute after the declarative publish; the plan mirrors that
@@ -170,6 +159,61 @@ public static class PlanBuilder
         return new Plan(Plan.CurrentFormatVersion, actions, messages, atomicity, compareResult.UpdateScript,
             excluded);
     }
+
+    /// <summary>
+    /// The column drops the provider kept out of the comparison itself
+    /// (<see cref="CompareResult.WithheldColumnDrops"/>), said the way a column drop the gate separates is
+    /// said: <c>SCHEMORPH001</c>, an exclusion carrying the statements that do not run, and — beside a
+    /// column added to the same table — <c>SCHEMORPH012</c>. What differs is where the rest of the table's
+    /// change is read from: the comparison already is the one without the drop, so a table that appears
+    /// among its changes has an action of its own and one that does not has nothing else to do.
+    /// </summary>
+    private static void AddWithheldColumnDrops(
+        CompareResult compareResult, IReadOnlyDictionary<string, ChangeScript> scripts,
+        List<PlanAction> actions, List<PlanMessage> messages, List<PlanExclusion> excluded)
+    {
+        foreach (var drop in (compareResult.WithheldColumnDrops ?? Array.Empty<WithheldColumnDrop>())
+                     .OrderBy(d => d.ObjectName, StringComparer.Ordinal))
+        {
+            var rest = actions.Any(a => string.Equals(a.ObjectName, drop.ObjectName, StringComparison.OrdinalIgnoreCase))
+                ? "the rest of this table's change is in the plan"
+                : "nothing else in this table changes";
+            messages.Add(new PlanMessage(
+                "Warning",
+                "SCHEMORPH001",
+                "Destructive change excluded from plan (enable explicitly to include): " +
+                $"Alter Table {drop.ObjectName} — a column the desired state no longer declares is dropped, " +
+                $"and its rows do not survive. Only the column drop is withheld; {rest}.",
+                drop.ObjectName));
+            excluded.Add(new PlanExclusion(drop.ObjectName,
+                "Column drop gated out of this plan — its rows would not survive. " +
+                (rest.StartsWith("the rest", StringComparison.Ordinal)
+                    ? "The rest of this table's change runs. "
+                    : "Nothing else in this table changes. ") +
+                "Enable destructive changes explicitly to include the drop.",
+                drop.Statements));
+            if (scripts.GetValueOrDefault(drop.ObjectName) is { AddsColumn: true })
+            {
+                messages.Add(RenameWarning(drop.ObjectName));
+            }
+        }
+    }
+
+    /// <summary>
+    /// <c>SCHEMORPH012</c>: the column analogue of <c>SCHEMORPH011</c>. A rename arrives as an added
+    /// column beside a dropped one, and with the drop withheld the addition runs alone: a new, empty
+    /// column next to the old one that still holds the values. That is the first half of
+    /// expand/contract, which is fine if it is what the reader meant — and a surprise if they meant a
+    /// rename and planned to issue it by hand after the apply.
+    /// </summary>
+    private static PlanMessage RenameWarning(string objectName) => new(
+        "Warning",
+        "SCHEMORPH012",
+        $"{objectName}: a column is added while a column the desired state no longer " +
+        "declares is kept. If the added column is the kept one renamed, applying this plan adds " +
+        "it empty and leaves the values where they are: rename the column in the database first, " +
+        "then diff again — or, after this apply, copy the values across before enabling the drop.",
+        objectName);
 
     /// <summary>
     /// <c>SCHEMORPH011</c>: the plan creates a table while dropping one that holds data — the shape

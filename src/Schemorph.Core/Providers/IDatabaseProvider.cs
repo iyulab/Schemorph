@@ -334,7 +334,18 @@ public static class DesiredStateFormat
 /// A provider that cannot read through a session never receives one: it returns no simulation and
 /// does not support an apply session that runs anything before the comparison.
 /// </param>
-public sealed record CompareRequest(IDesiredState DesiredState, string ConnectionString, IApplySession? Session = null);
+/// <param name="WithholdColumnDrops">
+/// Compare as the plan of a run that does not enable destructive changes would: a column the desired
+/// state no longer declares is not dropped, and the rest of the comparison — the table's other changes,
+/// and everything that depends on the table — is reported as if the column were still declared. A
+/// provider that can only publish a table's change whole, so that withholding the drop would withhold
+/// everything beside it, answers this by keeping the column in the comparison and reporting what it kept
+/// (<see cref="CompareResult.WithheldColumnDrops"/>); a provider that can already separate the drop
+/// (<see cref="ChangeScript.DestructiveSql"/>) ignores the flag. False reports every drop.
+/// </param>
+public sealed record CompareRequest(
+    IDesiredState DesiredState, string ConnectionString, IApplySession? Session = null,
+    bool WithholdColumnDrops = false);
 
 /// <summary>
 /// Provider-raw comparison output, in Schemorph terms (no engine types).
@@ -355,6 +366,10 @@ public sealed record CompareRequest(IDesiredState DesiredState, string Connectio
 /// Withholding the change means withholding them too (<see cref="Planning.PlanBuilder.Withheld"/>);
 /// a change absent from the map is withheld by itself. Null when the provider withholds every
 /// change independently.
+/// <paramref name="WithheldColumnDrops"/>: the column drops this comparison does not contain because
+/// it was asked to keep them out (<see cref="CompareRequest.WithholdColumnDrops"/>). The update
+/// script and the changes are those of the comparison with the columns kept, so none of them mentions
+/// the drop; this is what lets the plan still say it was withheld, and what it would have run.
 public sealed record CompareResult(
     IReadOnlyList<RawChange> Changes,
     IReadOnlyList<RawMessage> Messages,
@@ -362,7 +377,15 @@ public sealed record CompareResult(
     IReadOnlyList<ChangeScript>? ChangeScripts = null,
     IReadOnlyList<string>? TablesWithColumnChanges = null,
     IReadOnlyList<string>? ProgrammablesDroppedFirst = null,
-    IReadOnlyDictionary<string, IReadOnlyList<string>>? ExclusionDependencies = null);
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? ExclusionDependencies = null,
+    IReadOnlyList<WithheldColumnDrop>? WithheldColumnDrops = null);
+
+/// <summary>
+/// The columns of one table that the comparison kept instead of dropping.
+/// <paramref name="Statements"/> is the dialect's own text for the drop, as the plan shows it to the
+/// reviewer — what enabling destructive changes would run.
+/// </summary>
+public sealed record WithheldColumnDrop(string ObjectName, IReadOnlyList<string> Columns, string Statements);
 
 /// <summary>
 /// The slice of the update script attributable to one change (plan explanations):
@@ -500,7 +523,8 @@ public sealed record ProgrammableAnalysis(
     public IReadOnlyList<string>? DroppedByRedefine { get; init; }
 }
 
-public sealed record ApplyRequest(IDesiredState DesiredState, string ConnectionString);
+/// <param name="WithholdColumnDrops">See <see cref="CompareRequest.WithholdColumnDrops"/>.</param>
+public sealed record ApplyRequest(IDesiredState DesiredState, string ConnectionString, bool WithholdColumnDrops = false);
 
 public sealed record ApplyResult(
     bool Success,
