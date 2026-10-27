@@ -237,7 +237,11 @@ That column is visible to any principal with `VIEW DEFINITION` — or `CONTROL` 
 so a `db_owner` login reads every body through its `CONTROL`. A programmable object
 that is *absent* from the plan was reconciled — its live body matched the file —
 never "skipped for lack of permission": an unreadable body makes the object
-**appear** as a redefine, not vanish.
+**appear** as a redefine, not vanish. The same check runs again just before an
+object in the plan is redefined: when the declarative step had to create it first
+(a function that a table's computed column, default or check calls) and the live body
+now matches the file, the apply records it as reconciled instead of running it a
+second time.
 
 ### Safety lint (`SCHEMORPH1xx`)
 
