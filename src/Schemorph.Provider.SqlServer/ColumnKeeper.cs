@@ -23,7 +23,9 @@ namespace Schemorph.Provider.SqlServer;
 /// <para>
 /// What hangs on the column stays with it for the same reason the column does. Without its default, a
 /// NOT NULL column would start failing every insert from code that no longer knows about it — a change
-/// the plan never mentioned. Anything that cannot be carried over faithfully (a definition the engine
+/// the plan never mentioned. The same goes for what the column's definition reads and the desired state
+/// no longer declares (its alias type, the sequence a default draws from, the function a computed column
+/// calls): the engine refuses to drop those while the column uses them. Anything that cannot be carried over faithfully (a definition the engine
 /// will not read back, an object whose script is unavailable, a model that no longer validates) is a
 /// reason not to keep the column at all: the caller then withholds the table's change whole, as before.
 /// </para>
@@ -85,13 +87,19 @@ internal static class ColumnKeeper
             }
 
             var hanging = new List<string>();
+            var hangingObjects = new List<TSqlObject>();
             foreach (var obj in live.GetObjects(DacQueryScopes.UserDefined, HangingTypes()))
             {
                 if (!deleted.Contains(SqlServerProvider.FullName(obj)) || !References(obj, drops)) continue;
                 if (!obj.TryGetScript(out var script))
                     return (null, $"the definition of {SqlServerProvider.FullName(obj)} could not be read back");
                 hanging.Add(script);
+                hangingObjects.Add(obj);
             }
+
+            var (supporting, supportWhy) = SupportingObjects(live, deleted, drops, hangingObjects);
+            if (supporting is null) return (null, supportWhy);
+            hanging.AddRange(supporting.Select(s => s.Script));
 
             var batches = new List<string>(desiredBatches.Count + hanging.Count);
             var restored = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -107,7 +115,10 @@ internal static class ColumnKeeper
             var withheld = drops
                 .OrderBy(d => d.Key, StringComparer.Ordinal)
                 .Select(d => new WithheldColumnDrop(
-                    d.Key, d.Value.Columns, DropStatement(d.Value.Schema, d.Value.Table, d.Value.Columns)))
+                    d.Key, d.Value.Columns,
+                    string.Join("\n", supporting.Where(s => string.Equals(s.Table, d.Key, StringComparison.OrdinalIgnoreCase))
+                        .Select(s => s.Drop)
+                        .Prepend(DropStatement(d.Value.Schema, d.Value.Table, d.Value.Columns)))))
                 .ToList();
             return (new Kept(batches, withheld), null);
         }
@@ -115,6 +126,85 @@ internal static class ColumnKeeper
         {
             TemporaryWorkspace.TryDelete(dacpacPath);
         }
+    }
+
+    /// <summary>What a kept column's definition can read that is a separate element in the DacFx model.</summary>
+    private static ModelTypeClass[] SupportingTypes() =>
+    [
+        DataType.TypeClass, UserDefinedType.TypeClass, XmlSchemaCollection.TypeClass,
+        Sequence.TypeClass, ScalarFunction.TypeClass,
+    ];
+
+    /// <summary>An object the desired state no longer declares and a kept column still needs.</summary>
+    /// <param name="Table">The table whose kept column (or what hangs on it) needs the object.</param>
+    internal sealed record Support(string Table, string Script, string Drop);
+
+    /// <summary>
+    /// The objects the comparison would remove that a kept column's definition, or what hangs on it, reads:
+    /// its alias type, the sequence a default draws from, the function a computed column calls. The column
+    /// cannot stay while they go - the engine refuses to drop a type a column still uses - and a model that
+    /// puts the column back without them does not validate. Dropping them stays with the column's drop, so
+    /// the plan reports them there. Null with the reason when one cannot be read back.
+    /// </summary>
+    internal static (List<Support>? Found, string? Why) SupportingObjects(
+        TSqlModel live, HashSet<string> deleted, IReadOnlyDictionary<string, SqlServerProvider.DroppedColumns> drops,
+        IReadOnlyList<TSqlObject> hangingObjects)
+    {
+        var found = new List<Support>();
+        var candidates = live.GetObjects(DacQueryScopes.UserDefined, SupportingTypes())
+            .Where(o => deleted.Contains(SqlServerProvider.FullName(o)))
+            .ToDictionary(o => SqlServerProvider.FullName(o), StringComparer.OrdinalIgnoreCase);
+        if (candidates.Count == 0) return (found, null);
+
+        var queue = new Queue<(TSqlObject Obj, string Table)>();
+        // A column is not a top-level element, so the model cannot list it: it is a child of its table.
+        foreach (var owner in live.GetObjects(DacQueryScopes.UserDefined, Table.TypeClass))
+        {
+            if (!drops.ContainsKey(SqlServerProvider.FullName(owner))) continue;
+            foreach (var column in owner.GetChildren(DacQueryScopes.All))
+            {
+                if (KeptColumnTable(column, drops) is { } table) queue.Enqueue((column, table));
+            }
+        }
+        foreach (var obj in hangingObjects)
+        {
+            var table = obj.GetReferenced(DacQueryScopes.UserDefined).Select(r => KeptColumnTable(r, drops)).FirstOrDefault(t => t is not null);
+            if (table is not null) queue.Enqueue((obj, table));
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (queue.Count > 0)
+        {
+            var (obj, table) = queue.Dequeue();
+            foreach (var referenced in obj.GetReferenced(DacQueryScopes.UserDefined))
+            {
+                var name = SqlServerProvider.FullName(referenced);
+                if (!candidates.TryGetValue(name, out var needed) || !seen.Add(name)) continue;
+                if (!needed.TryGetScript(out var script))
+                    return (null, $"the definition of {name} could not be read back");
+                found.Add(new Support(table, script, SupportDropStatement(needed)));
+                queue.Enqueue((needed, table));
+            }
+        }
+        return (found, null);
+    }
+
+    /// <summary>The table of the object when it is one of the columns being kept, else null.</summary>
+    private static string? KeptColumnTable(TSqlObject obj, IReadOnlyDictionary<string, SqlServerProvider.DroppedColumns> drops) =>
+        obj.ObjectType == Column.TypeClass
+        && obj.Name.Parts.Count > 2
+        && drops.TryGetValue(string.Join(".", obj.Name.Parts.Take(2)), out var dropped)
+        && dropped.Columns.Contains(obj.Name.Parts[^1], StringComparer.OrdinalIgnoreCase)
+            ? string.Join(".", obj.Name.Parts.Take(2))
+            : null;
+
+    private static string SupportDropStatement(TSqlObject obj)
+    {
+        var kind = obj.ObjectType == Sequence.TypeClass ? "SEQUENCE"
+            : obj.ObjectType == ScalarFunction.TypeClass ? "FUNCTION"
+            : obj.ObjectType == XmlSchemaCollection.TypeClass ? "XML SCHEMA COLLECTION"
+            : "TYPE";
+        return $"DROP {kind} {string.Join(".", obj.Name.Parts.Select(Quote))};";
     }
 
     private static string DropStatement(string schema, string table, IReadOnlyList<string> columns) =>

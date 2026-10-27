@@ -14,7 +14,10 @@ change **additively**: consumers must ignore properties they do not know.
   the whole change to its table - a column added beside it, and (`SCHEMORPH015`) any new table
   whose foreign key references the table - because the engine publishes a difference whole. The
   comparison is now made against the desired state with that column put back, together with what
-  hangs on it (its default, checks and indexes): the engine never writes the drop, the table's other
+  hangs on it (its default, checks and indexes) and what its definition reads that the desired state
+  no longer declares (an alias type, a sequence a default draws from, a function a computed column
+  calls - the engine will not drop those while the column uses them, so their drops are held back
+  with the column's and listed beside it in `excluded[]`): the engine never writes the drop, the table's other
   changes and what depends on the table run, and the plan says what was held back - `SCHEMORPH001`,
   the statement in `excluded[]`, and `SCHEMORPH012` beside an added column, as on PostgreSQL. When the
   column cannot be put back faithfully the old behaviour stands and `SCHEMORPH017` says why.

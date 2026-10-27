@@ -247,6 +247,205 @@ public sealed class WithheldColumnKeepEdgeTests : IDisposable
             """));
     }
 
+    private void WriteFile(string relative, string content)
+    {
+        var path = Path.Combine(SchemaDir, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
+    }
+
+    [SkippableFact]
+    public async Task A_filtered_index_that_reads_the_withheld_column_stays_with_it()
+    {
+        Write("Items", """
+                Id INT NOT NULL PRIMARY KEY,
+                Name NVARCHAR(50) NOT NULL,
+                Tag NVARCHAR(10) NULL
+            """, "CREATE INDEX IX_Items_Tagged ON dbo.Items (Name) WHERE Tag IS NOT NULL;\nGO\n");
+        await Create();
+        _db.Execute("INSERT INTO dbo.Items (Id, Name, Tag) VALUES (1, N'alpha', N'one');");
+
+        Write("Items", """
+                Id INT NOT NULL PRIMARY KEY,
+                Name NVARCHAR(50) NOT NULL
+            """);
+        Write("Parts", PartsOfItems);
+
+        var plan = await DiffKeeping();
+        AssertKeptAndDependentRan(plan);
+        await ApplyKeeping(plan);
+
+        Assert.Equal(1, ColumnCount("Items", "Tag"));
+        Assert.Equal(1, Count("SELECT COUNT(*) FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.Items') AND name = 'IX_Items_Tagged'"));
+    }
+
+    [SkippableFact]
+    public async Task A_schema_bound_view_dropped_with_the_withheld_column_goes_while_the_column_stays()
+    {
+        Write("Items", """
+                Id INT NOT NULL PRIMARY KEY,
+                Name NVARCHAR(50) NOT NULL,
+                Tag NVARCHAR(10) NULL
+            """);
+        WriteFile("views/dbo.TaggedItems.sql",
+            "CREATE VIEW dbo.TaggedItems WITH SCHEMABINDING AS SELECT i.Id, i.Tag FROM dbo.Items AS i;\nGO\n");
+        await Create();
+        _db.Execute("INSERT INTO dbo.Items (Id, Name, Tag) VALUES (1, N'alpha', N'one');");
+
+        Write("Items", """
+                Id INT NOT NULL PRIMARY KEY,
+                Name NVARCHAR(50) NOT NULL
+            """);
+        File.Delete(Path.Combine(SchemaDir, "views", "dbo.TaggedItems.sql"));
+        Write("Parts", PartsOfItems);
+
+        // The view is gone from the desired state, so its drop runs - it does not depend on the column's.
+        var plan = await DiffKeeping();
+        Assert.Contains(plan.Actions, a => a.ObjectName == "dbo.TaggedItems");
+        Assert.Contains(plan.Actions, a => a.ObjectName == "dbo.Parts");
+        Assert.DoesNotContain(plan.Messages, m => m.Code is "SCHEMORPH015" or "SCHEMORPH017");
+        await ApplyKeeping(plan);
+
+        Assert.Equal(1, ColumnCount("Items", "Tag"));
+        Assert.Equal(0, Count("SELECT COUNT(*) FROM sys.views WHERE name = 'TaggedItems'"));
+    }
+
+    [SkippableTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task An_alias_type_column_is_kept_and_so_is_a_type_the_desired_state_no_longer_declares(bool typeStaysDeclared)
+    {
+        const string type = "CREATE TYPE dbo.TagType FROM NVARCHAR(10) NOT NULL;\nGO\n";
+        WriteFile("types/dbo.TagType.sql", type);
+        Write("Items", """
+                Id INT NOT NULL PRIMARY KEY,
+                Name NVARCHAR(50) NOT NULL,
+                Tag dbo.TagType
+            """);
+        await Create();
+        _db.Execute("INSERT INTO dbo.Items (Id, Name, Tag) VALUES (1, N'alpha', N'one');");
+
+        Write("Items", """
+                Id INT NOT NULL PRIMARY KEY,
+                Name NVARCHAR(50) NOT NULL
+            """);
+        if (!typeStaysDeclared) File.Delete(Path.Combine(SchemaDir, "types", "dbo.TagType.sql"));
+        Write("Parts", PartsOfItems);
+
+        // A type the column still uses cannot be dropped while the column stays, so the plan keeps it too and
+        // reports its drop with the column's.
+        var plan = await DiffKeeping();
+        AssertKeptAndDependentRan(plan);
+        var held = Assert.Single(plan.Excluded, e => e.ObjectName == "dbo.Items" && e.Statements is not null);
+        Assert.Contains("DROP COLUMN [Tag]", held.Statements);
+        Assert.Equal(!typeStaysDeclared, (held.Statements ?? string.Empty).Contains("DROP TYPE [dbo].[TagType]", StringComparison.Ordinal));
+        await ApplyKeeping(plan);
+
+        Assert.Equal("one", _db.Scalar<string>("SELECT CONVERT(NVARCHAR(10), Tag) FROM dbo.Items WHERE Id = 1"));
+        Assert.Equal(1, Count("SELECT COUNT(*) FROM sys.types WHERE name = 'TagType'"));
+    }
+
+    [SkippableFact]
+    public async Task A_sequence_the_withheld_columns_default_draws_from_is_kept_with_it()
+    {
+        WriteFile("sequences/dbo.TagSeq.sql", "CREATE SEQUENCE dbo.TagSeq AS INT START WITH 100;\nGO\n");
+        Write("Items", """
+                Id INT NOT NULL PRIMARY KEY,
+                Name NVARCHAR(50) NOT NULL,
+                Tag INT NOT NULL CONSTRAINT DF_Items_Tag DEFAULT (NEXT VALUE FOR dbo.TagSeq)
+            """);
+        await Create();
+        _db.Execute("INSERT INTO dbo.Items (Id, Name) VALUES (1, N'alpha');");
+
+        Write("Items", """
+                Id INT NOT NULL PRIMARY KEY,
+                Name NVARCHAR(50) NOT NULL
+            """);
+        File.Delete(Path.Combine(SchemaDir, "sequences", "dbo.TagSeq.sql"));
+        Write("Parts", PartsOfItems);
+
+        var plan = await DiffKeeping();
+        AssertKeptAndDependentRan(plan);
+        var held = Assert.Single(plan.Excluded, e => e.ObjectName == "dbo.Items" && e.Statements is not null);
+        Assert.Contains("DROP SEQUENCE [dbo].[TagSeq]", held.Statements);
+        await ApplyKeeping(plan);
+
+        // The default still draws from the sequence, so inserts that do not name the column keep working.
+        _db.Execute("INSERT INTO dbo.Items (Id, Name) VALUES (2, N'beta');");
+        Assert.Equal(1, Count("SELECT COUNT(*) FROM sys.sequences WHERE name = 'TagSeq'"));
+        Assert.Equal(2, Count("SELECT COUNT(*) FROM dbo.Items WHERE Tag >= 100"));
+    }
+
+    [SkippableFact]
+    public async Task A_function_the_withheld_computed_column_calls_is_kept_with_it()
+    {
+        // Built outside the tool: a function a computed column calls cannot be redefined in place, which is
+        // a separate matter from keeping the column.
+        _db.Execute("CREATE FUNCTION dbo.Shout(@text NVARCHAR(50)) RETURNS NVARCHAR(50) AS BEGIN RETURN UPPER(@text); END");
+        _db.Execute("CREATE TABLE dbo.Items (Id INT NOT NULL PRIMARY KEY, Name NVARCHAR(50) NOT NULL, Loud AS dbo.Shout(Name));");
+        _db.Execute("INSERT INTO dbo.Items (Id, Name) VALUES (1, N'alpha');");
+
+        Write("Items", """
+                Id INT NOT NULL PRIMARY KEY,
+                Name NVARCHAR(50) NOT NULL
+            """);
+        Write("Parts", PartsOfItems);
+
+        var plan = await DiffKeeping();
+        AssertKeptAndDependentRan(plan);
+        var held = Assert.Single(plan.Excluded, e => e.ObjectName == "dbo.Items" && e.Statements is not null);
+        Assert.Contains("DROP FUNCTION [dbo].[Shout]", held.Statements);
+        await ApplyKeeping(plan);
+
+        Assert.Equal("ALPHA", _db.Scalar<string>("SELECT Loud FROM dbo.Items WHERE Id = 1"));
+        Assert.Equal(1, Count("SELECT COUNT(*) FROM sys.objects WHERE name = 'Shout'"));
+    }
+
+    [SkippableFact]
+    public async Task A_column_of_a_system_versioned_table_is_not_kept_so_the_table_is_withheld_whole_and_the_plan_says_why()
+    {
+        WriteFile("tables/dbo.Items.sql", """
+            CREATE TABLE dbo.Items (
+                Id INT NOT NULL PRIMARY KEY CLUSTERED,
+                Name NVARCHAR(50) NOT NULL,
+                Tag NVARCHAR(10) NULL,
+                ValidFrom DATETIME2 GENERATED ALWAYS AS ROW START HIDDEN NOT NULL,
+                ValidTo DATETIME2 GENERATED ALWAYS AS ROW END HIDDEN NOT NULL,
+                PERIOD FOR SYSTEM_TIME (ValidFrom, ValidTo)
+            ) WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.ItemsHistory));
+            GO
+
+            """);
+        await Create();
+        _db.Execute("INSERT INTO dbo.Items (Id, Name, Tag) VALUES (1, N'alpha', N'one');");
+
+        WriteFile("tables/dbo.Items.sql", """
+            CREATE TABLE dbo.Items (
+                Id INT NOT NULL PRIMARY KEY CLUSTERED,
+                Name NVARCHAR(50) NOT NULL,
+                ValidFrom DATETIME2 GENERATED ALWAYS AS ROW START HIDDEN NOT NULL,
+                ValidTo DATETIME2 GENERATED ALWAYS AS ROW END HIDDEN NOT NULL,
+                PERIOD FOR SYSTEM_TIME (ValidFrom, ValidTo)
+            ) WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.ItemsHistory));
+            GO
+
+            """);
+        Write("Parts", PartsOfItems);
+
+        // The history table is not a declared table the comparison can add a column to, so the column is not
+        // put back; the change to both tables is withheld whole, nothing runs, and the plan names the reason.
+        var plan = await DiffKeeping();
+        Assert.Empty(plan.Actions);
+        Assert.Contains(plan.Messages, m => m.Code == "SCHEMORPH017");
+        Assert.Contains(plan.Excluded, e => e.ObjectName == "dbo.Items");
+        Assert.Contains(plan.Excluded, e => e.ObjectName == "dbo.Parts");
+        await ApplyKeeping(plan);
+
+        Assert.Equal(1, ColumnCount("Items", "Tag"));
+        Assert.Equal(1, ColumnCount("ItemsHistory", "Tag"));
+        Assert.Equal(0, Count("SELECT COUNT(*) FROM sys.tables WHERE name = 'Parts'"));
+    }
+
     public void Dispose()
     {
         _db.Dispose();

@@ -111,10 +111,13 @@ the values — the first step of an expand/contract migration. `SCHEMORPH012` sa
 They get there differently. PostgreSQL separates the drop statement from the rest of
 the table's change. **SQL Server** publishes a difference whole, so it compares
 against the desired state with the column put back — the live definition of the
-column, and the defaults, checks and indexes that hang on it — and the engine never
-writes the drop; the plan names the withheld statement in `excluded[]`. When the
+column, the defaults, checks and indexes that hang on it, and the type, sequence or
+function its definition reads that the desired state dropped — and the engine never
+writes the drop; the plan names the withheld statements in `excluded[]`. When the
 column cannot be put back faithfully, `SCHEMORPH017` says why and the table's whole
-change is withheld, with everything that depends on the table (`SCHEMORPH015`).
+change is withheld, with everything that depends on the table (`SCHEMORPH015`). One
+case that way by design: a column of a system-versioned table, whose history table is
+not a table the desired state declares and so cannot be given the column back.
 
 At table granularity both engines behave like PostgreSQL does for columns: the
 create is safe on its own and applies while the drop is withheld. What is left is
