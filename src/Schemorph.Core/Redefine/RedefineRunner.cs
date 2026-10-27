@@ -107,6 +107,7 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
         }
 
         var redefined = new List<string>();
+        var settled = new List<string>();
         foreach (var obj in plan.Pending.Select(p => p.Object))
         {
             // Ledger row commits in the same transaction as the script
@@ -114,6 +115,21 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
             // own otherwise.
             var entry = new LedgerEntry(LedgerKind, obj.ObjectName, "Redefine", ChecksumOf(obj),
                 Succeeded: true, Detail: obj.ObjectType);
+
+            // The plan was made before the declarative step ran, and that step can create an object on
+            // its own: a table that calls a function in a computed column, a default or a check cannot be
+            // created without the function, so the function exists by the time it is its turn. Running its
+            // definition again would change nothing - and the engine refuses to alter an object something
+            // is built on. When the database already holds exactly what the file says, record that and
+            // leave the object alone.
+            if ((await provider.FilterMatchingLiveDefinitionsAsync(connectionString, new[] { obj }, cancellationToken, session)).Count > 0)
+            {
+                await ledger.AppendAsync(connectionString,
+                    new[] { entry with { Operation = "Reconcile" } }, session, cancellationToken);
+                settled.Add(obj.ObjectName);
+                continue;
+            }
+
             try
             {
                 await provider.RedefineAsync(connectionString, obj, new[] { entry }, session, cancellationToken);
@@ -131,7 +147,7 @@ public sealed class RedefineRunner(IDatabaseProvider provider, ILedgerStore ledg
             redefined.Add(obj.ObjectName);
         }
 
-        var reconciled = plan.Reconcilable.Select(o => o.ObjectName).ToList();
+        var reconciled = plan.Reconcilable.Select(o => o.ObjectName).Concat(settled).ToList();
         return new RedefineRunResult(redefined, analysis.Objects.Count - redefined.Count - reconciled.Count, reconciled);
     }
 

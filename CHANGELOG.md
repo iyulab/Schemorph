@@ -25,6 +25,16 @@ change **additively**: consumers must ignore properties they do not know.
   A plan this changes hashes differently than under 0.21.0: its update script no longer carries the
   drop, so a `planHash` captured then fails closed.
 
+### Fixed
+
+- **SQL Server: a function a table calls could stop the first apply.** A computed column, a
+  default or a check that calls a function needs the function to exist when the table is
+  created, so the function is created on the way to the table. The re-definition pass that
+  follows then ran the function's definition again, and the engine refuses to alter a function
+  something is built on (`Msg 3729`) - so applying such a state to an empty database failed. The
+  pass now leaves an object alone when the database already holds exactly what its file says,
+  and records that instead; the apply settles and a second pass has nothing to do.
+
 ## 0.21.0 — 2026-10-18
 
 ### Fixed
