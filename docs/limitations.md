@@ -296,6 +296,24 @@ one-time redefinition changes nothing beyond what the file already says; the
 ledger records it and every apply after that is a real no-op, same as SQL
 Server.
 
+## SQL Server: a function a computed column, default or check calls is not changed in place
+
+The engine refuses `ALTER FUNCTION` on a function that a computed column, a default
+constraint or a check constraint calls (`Msg 3729`). `diff` plans a change to such a
+function's body as a re-definition like any other, and `apply` stops at the
+re-definition stage with `redefine_execution_failed`; the apply rolls back, so the
+function and everything else stay as they were. Dropping and re-adding the dependents
+around the change is not implemented: re-adding a check re-validates the table's rows,
+and re-creating a computed column moves it in the column order, so it is a decision
+with costs rather than a mechanical step.
+
+To change such a function, take the three steps yourself: take the dependents out of
+the desired state and apply, change the function and apply, declare the dependents
+again and apply. A default or check constraint comes out alone - the column and its
+values stay; a computed column holds no data but its removal is a column drop, so that
+step needs the destructive switch. Creating the function together with the tables that
+call it on an empty database works - the function is created first and is not re-run.
+
 ## A connection lost right at commit acknowledgement is not reproduced live
 
 `FailureStage.Commit` covers the moment the provider's session has sent the
