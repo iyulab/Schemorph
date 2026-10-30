@@ -9,7 +9,7 @@
     <!-- Raises a transitive dependency past a security advisory: DacFx 170.5.96 brings Microsoft.Data.SqlClient 6.1.5,
          which brings System.Security.Cryptography.Pkcs 9.0.11 (CVE-2026-84008, fixed in 9.0.21 and 10.0.13).
          Remove once DacFx carries a patched one. -->
-    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.14" />
   </ItemGroup>
 
   <PropertyGroup>
