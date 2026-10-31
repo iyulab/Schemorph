@@ -106,6 +106,9 @@ without tool calls: `schemorph://schema` (live schema as desired-state SQL),
 `schemorph://schema/{kind}/{name}` (one object), `schemorph://plan` (current
 plan incl. `planHash`; needs `SCHEMORPH_SCHEMA_DIR` in the server env).
 
+A failed tool call returns the same `{error: {kind, code, message, hint}}` envelope as its text with `isError: true` —
+branch on `isError` first, then on `kind`. A call that leaves out a required argument gets `invalid_arguments` naming it.
+
 ## Adopting an existing database (brownfield)
 
 `schemorph inspect --out ./schema` writes the live database as desired-state
