@@ -21,7 +21,7 @@ This document describes the shape of Schemorph at the level that should remain t
                 ┌────────▼─────────┐   ┌─────────▼─────────┐
                 │  SQL Server      │   │  PostgreSQL       │
                 │  provider        │   │  provider         │
-                │  (DacFx-based)   │   │  (planned)        │
+                │  (DacFx-based)   │   │  (Npgsql-based)   │
                 └──────────────────┘   └───────────────────┘
 ```
 

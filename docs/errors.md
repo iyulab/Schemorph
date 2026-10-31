@@ -137,7 +137,7 @@ only points at the variable.
 | `usage` | The invocation is wrong (missing/invalid arguments or paths) | Fix the command line |
 | `invalid_state` | The desired-state files — or their relationship to recorded history — are wrong | Edit the files; retrying unchanged will fail identically |
 | `execution` | The operation failed against the database (connectivity, engine errors) | Inspect the message; retrying can help (apply is safe to re-run, see ADR-0004) |
-| `unsupported` | The verb/feature is not implemented | Consult the roadmap |
+| `unsupported` | The verb/feature is not implemented | See [limitations](limitations.md) for what Schemorph does not do |
 | `internal` | A code not yet classified — a Schemorph bug if ever observed | Report it |
 
 ## Codes
