@@ -117,6 +117,19 @@ depends on where it stopped. A failed apply says so:
 Re-running is the resume path — apply converges. Never finish a failed apply by
 hand: the ledger is what makes the run-once and redefine contracts hold.
 
+## Over MCP
+
+A failed tool call returns this envelope as its text content **with `isError: true`**, the MCP signal a client
+branches on — a model reads it to correct the call and retry. A successful call has no `isError`. A tool call that
+leaves out a required argument is answered the same way (`invalid_arguments`, naming the argument or arguments)
+rather than with a generic invocation failure; what is required is what `tools/list` advertises in the tool's input
+schema. Resources have no envelope channel: a failed read is a protocol error whose message carries the same text.
+
+When the SQL Server provider (the default) rejects a keyword of the connection string — typically a PostgreSQL
+string such as `Host=…`, used without `SCHEMORPH_PROVIDER=postgres` — the error's `hint` says so and names the
+variable, over MCP and on the command line alike. The provider is never chosen from the connection string; the hint
+only points at the variable.
+
 ## Kinds
 
 | Kind | Meaning | Sensible reaction |
@@ -131,7 +144,7 @@ hand: the ledger is what makes the run-once and redefine contracts hold.
 
 | Code | Kind | Emitted when |
 |---|---|---|
-| `invalid_arguments` | `usage` | Required options missing |
+| `invalid_arguments` | `usage` | Required options missing — over MCP, a tool call that leaves out a required argument (the message names each one) |
 | `schema_dir_not_found` | `usage` | `--schema` directory does not exist |
 | `migrations_dir_not_found` | `usage` | `--migrations` directory does not exist |
 | `pre_dir_not_found` | `usage` | `--pre` directory does not exist |

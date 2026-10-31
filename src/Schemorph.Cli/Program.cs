@@ -167,6 +167,7 @@ async Task<int> RunMcp()
             Version = InformationalVersion(),   // one version string everywhere (CLI --version parity)
         })
         .WithStdioServerTransport()
+        .WithRequestFilters(filters => filters.AddCallToolFilter(RequiredArguments.Guard))
         .WithTools<SchemorphTools>()
         .WithResources<SchemorphResources>();
     await builder.Build().RunAsync();
@@ -754,6 +755,7 @@ static string DescribeRan(CommittedWork c) =>
 
 static int Emit(string format, SchemorphError error)
 {
+    error = ProviderSelection.WithConnectionHint(error);
     if (format == "json")
     {
         Console.Error.WriteLine(JsonSerializer.Serialize(new { error },

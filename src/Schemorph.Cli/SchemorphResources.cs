@@ -87,8 +87,8 @@ internal sealed class SchemorphResources
             allowDestructive: false, cancellationToken);
         if (!result.Success)
         {
-            throw new McpException(Redaction.Redact(
-                string.Join("; ", result.Errors.Select(m => $"{m.Code}: {m.Text}"))));
+            throw new McpException(WithConnectionHint(Redaction.Redact(
+                string.Join("; ", result.Errors.Select(m => $"{m.Code}: {m.Text}")))));
         }
 
         return PlanRenderer.ToJson(result.Plan!);
@@ -104,9 +104,13 @@ internal sealed class SchemorphResources
         }
         catch (Exception ex) when (ex is not McpException and not OperationCanceledException)
         {
-            throw new McpException(Redaction.Redact($"Reading the live schema failed: {ex.Message}"));
+            throw new McpException(WithConnectionHint(Redaction.Redact($"Reading the live schema failed: {ex.Message}")));
         }
     }
+
+    /// <summary>A resource has no envelope, so the connection hint (if the failure calls for one) rides in the message.</summary>
+    private static string WithConnectionHint(string message) =>
+        ProviderSelection.HintForUnsupportedKeyword(message) is { } hint ? $"{message} ({hint})" : message;
 
     private static string RequireEnv(string name) =>
         Environment.GetEnvironmentVariable(name)

@@ -1,3 +1,4 @@
+using Schemorph.Core.Errors;
 using Schemorph.Core.Ledger;
 using Schemorph.Core.Providers;
 using Schemorph.Provider.Postgres;
@@ -35,6 +36,24 @@ internal readonly record struct ProviderSelection(IDatabaseProvider Provider, IL
                 $"Unknown {EnvironmentVariable} value '{other}'. " +
                 $"Valid values: {SqlServerProvider.ProviderName} (default), {PostgresProvider.ProviderName}."),
         };
+
+    /// <summary>
+    /// The one wording for a connection string the selected SQL Server provider cannot read. SQL Server is the
+    /// default, so the first failure of a PostgreSQL user who has not set <see cref="EnvironmentVariable"/> is the
+    /// driver's own "Keyword not supported: 'host'" — true, and silent about the way out. The cause is established
+    /// (the provider in effect is SQL Server and the driver rejected a keyword), so the hint states it as fact and
+    /// offers the PostgreSQL remedy conditionally. The provider is still never chosen from the connection string
+    /// (see the class remarks): this names the variable, it does not set it.
+    /// </summary>
+    public static string? HintForUnsupportedKeyword(string message) =>
+        message.Contains("Keyword not supported", StringComparison.Ordinal) && CurrentProviderOrNull is SqlServerProvider
+            ? $"The SQL Server provider is in effect (the default) and does not recognize a keyword in this connection string. " +
+              $"If it is a PostgreSQL connection string, set {EnvironmentVariable}={PostgresProvider.ProviderName}."
+            : null;
+
+    /// <summary>The envelope with that hint filled in when it has none of its own.</summary>
+    public static SchemorphError WithConnectionHint(SchemorphError error) =>
+        error.Hint is null && HintForUnsupportedKeyword(error.Message) is { } hint ? error with { Hint = hint } : error;
 
     /// <summary>
     /// The selected provider, or null when the selection itself is invalid, for the

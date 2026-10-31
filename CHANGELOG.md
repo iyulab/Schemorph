@@ -9,6 +9,16 @@ change **additively**: consumers must ignore properties they do not know.
 
 ### Changed
 
+- **MCP: a failed tool call is marked `isError`, and the SDK's generic failure is gone.** Every error envelope
+  (`schema_dir_not_found`, `plan_mismatch`, `compare_failed`, …) used to come back as an ordinary result whose body
+  happened to hold `{"error": …}`; it now carries `isError: true` with the same body, so a client that parses the
+  body for `error` should branch on `isError` first. A tool call that leaves out a required argument used to fail with
+  the SDK's "An error occurred invoking
+  '<tool>'." and nothing else; it now returns the `invalid_arguments` envelope naming the missing arguments.
+- **A PostgreSQL connection string under the default provider now says what to do.** The first failure of a
+  PostgreSQL user who has not set `SCHEMORPH_PROVIDER` was the SQL Server driver's own `Keyword not supported:
+  'host'.`. The error now carries a hint naming `SCHEMORPH_PROVIDER=postgres` (CLI, MCP tools and MCP resources).
+  The provider is still chosen only by the variable, never from the connection string.
 - **Dependencies:** `Microsoft.Extensions.Hosting` and `System.Security.Cryptography.Pkcs` 10.0.13 → 10.0.14,
   `ModelContextProtocol` 2.2.0 → 2.3.0 (the `mcp` verb's server library; the tool and resource listing now follows
   registration order). No change in the CLI's verbs, options, exit codes or plan format.

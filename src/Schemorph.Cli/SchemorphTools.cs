@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel;
 using System.Text.Json;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Schemorph.Core;
 using Schemorph.Core.Errors;
@@ -35,7 +36,7 @@ internal sealed class SchemorphTools
                  "Never applies anything. Returns the versioned plan JSON (docs/plan-format.md): " +
                  "changes[{objectName, objectType, actions[], risk, sql, explanation}], messages[], planHash. " +
                  "The target database comes from SCHEMORPH_URL in the server environment.")]
-    public static async Task<string> Diff(
+    public static async Task<CallToolResult> Diff(
         [Description("Directory holding desired-state .sql files (non-model files are skipped with a warning)")] string schemaDir,
         [Description("Include destructive changes (data-holding DROPs) in the plan")] bool allowDestructive = false,
         [Description("Optional directory of versioned migration scripts — pending ones join the plan and its planHash; pass the same directory to schemorph_apply")] string? migrationsDir = null,
@@ -76,7 +77,7 @@ internal sealed class SchemorphTools
                     engine: EngineErrors.FirstIn(result.Errors));
             }
 
-            return PlanRenderer.ToJson(result.Plan!);
+            return Ok(PlanRenderer.ToJson(result.Plan!));
         }
         catch (MigrationException ex)
         {
@@ -101,7 +102,7 @@ internal sealed class SchemorphTools
                  "grouped by kind: tables/, views/, procedures/, functions/, triggers/). " +
                  "Read-only against the database; writes files to the given directory. " +
                  "The source database comes from SCHEMORPH_URL in the server environment.")]
-    public static async Task<string> Inspect(
+    public static async Task<CallToolResult> Inspect(
         [Description("Output directory for the desired-state files")] string outDir,
         CancellationToken cancellationToken = default)
     {
@@ -113,7 +114,7 @@ internal sealed class SchemorphTools
         try
         {
             var result = await InspectOperation.RunAsync(ProviderSelection.Current.Provider, url, outDir, cancellationToken);
-            return JsonSerializer.Serialize(new { files = result.WrittenFiles }, ErrorJson);
+            return Ok(JsonSerializer.Serialize(new { files = result.WrittenFiles }, ErrorJson));
         }
         catch (TemporaryWorkspaceException ex)
         {
@@ -130,7 +131,7 @@ internal sealed class SchemorphTools
                  "a history-ledger summary (entries by kind, failures, last activity), and — when " +
                  "migrationsDir is given — pending migration scripts. Read-only. " +
                  "The target database comes from SCHEMORPH_URL in the server environment.")]
-    public static async Task<string> Status(
+    public static async Task<CallToolResult> Status(
         [Description("Directory holding desired-state .sql files")] string schemaDir,
         [Description("Optional directory of versioned migration scripts to report pending ones")] string? migrationsDir = null,
         [Description("Optional directory of pre-stage scripts (V####__description.sql) that run once before the declarative stage — a rename the desired state cannot express; the plan is computed as of after the pending ones. Pass the same directory to every verb")] string? preDir = null,
@@ -171,7 +172,7 @@ internal sealed class SchemorphTools
             }
 
             var status = result.Status!;
-            return JsonSerializer.Serialize(new
+            return Ok(JsonSerializer.Serialize(new
             {
                 hasPendingWork = status.HasPendingWork,
                 plan = PlanRenderer.ToJsonModel(status.Plan),
@@ -189,7 +190,7 @@ internal sealed class SchemorphTools
                     ignoredFiles = status.Migrations.IgnoredFiles,
                     warnings = status.Migrations.Warnings,
                 },
-            }, ResultJson);
+            }, ResultJson));
         }
         catch (TemporaryWorkspaceException ex)
         {
@@ -216,7 +217,7 @@ internal sealed class SchemorphTools
                  "past pending pre-stage scripts (SQL Server), the apply runs only them and returns " +
                  "deferred: true — diff and apply again for the rest. " +
                  "The target database comes from SCHEMORPH_URL in the server environment.")]
-    public static async Task<string> Apply(
+    public static async Task<CallToolResult> Apply(
         [Description("Directory holding desired-state .sql files")] string schemaDir,
         [Description("The planHash from schemorph_diff — the reviewed plan this apply is allowed to execute")] string expectedPlanHash,
         [Description("Apply destructive changes (data-holding DROPs) too")] bool allowDestructive = false,
@@ -310,7 +311,7 @@ internal sealed class SchemorphTools
                     engine: outcome.Engine ?? EngineErrors.FirstIn(outcome.Errors));
             }
 
-            return JsonSerializer.Serialize(new
+            return Ok(JsonSerializer.Serialize(new
             {
                 plan = outcome.Plan is null ? null : PlanRenderer.ToJsonModel(outcome.Plan),
                 applied = outcome.Applied,
@@ -337,7 +338,7 @@ internal sealed class SchemorphTools
                     warnings = outcome.PreScripts.Warnings,
                 },
                 deferred = outcome.Deferred,
-            }, ResultJson);
+            }, ResultJson));
         }
         catch (TemporaryWorkspaceException ex)
         {
@@ -367,7 +368,7 @@ internal sealed class SchemorphTools
 
     private static string? ResolveUrl() => Environment.GetEnvironmentVariable("SCHEMORPH_URL");
 
-    private static string MissingUrl() => Error("invalid_arguments",
+    private static CallToolResult MissingUrl() => Error("invalid_arguments",
         "SCHEMORPH_URL is not set in the MCP server's environment.",
         "Configure the connection string as an environment variable on the server entry " +
         "(e.g. \"env\": {\"SCHEMORPH_URL\": \"...\"}); it is never passed through the conversation.");
@@ -377,26 +378,39 @@ internal sealed class SchemorphTools
     /// every tool, naming the directory and the variable that moves it. Here the
     /// variable lives in the MCP server entry, not the caller's shell.
     /// </summary>
-    private static string TempWorkspaceError(TemporaryWorkspaceException ex) =>
+    private static CallToolResult TempWorkspaceError(TemporaryWorkspaceException ex) =>
         Error("temp_workspace_unavailable", ex.Message,
             $"Set {TemporaryWorkspaceException.EnvironmentVariables} in the MCP server's environment to a directory that exists and is writable.");
 
+    /// <summary>A tool's successful result: the JSON document as text content.</summary>
+    private static CallToolResult Ok(string json) =>
+        new() { Content = [new TextContentBlock { Text = json }] };
+
+    /// <summary>
+    /// A tool's failed result: the error envelope as text content with <c>isError</c> set, which is how MCP
+    /// tells a client that a call failed — the signal a model reads to correct itself and retry, so the envelope
+    /// (code, hint) that says how to correct it must not travel as a success.
+    /// </summary>
+    private static CallToolResult Failed(string json) =>
+        new() { IsError = true, Content = [new TextContentBlock { Text = json }] };
+
     /// <summary>The CLI's error envelope, verbatim — agents see one error shape everywhere.</summary>
-    private static string Error(
+    internal static CallToolResult Error(
         string code, string message, string? hint, string? stage = null, CommittedWork? committed = null,
         EngineErrorInfo? engine = null) =>
-        JsonSerializer.Serialize(
-            new { error = SchemorphError.Create(code, Redaction.Redact(message), hint) with
-                { Stage = stage, Committed = committed, Engine = engine } },
-            ErrorJson);
+        Failed(JsonSerializer.Serialize(
+            new { error = ProviderSelection.WithConnectionHint(
+                SchemorphError.Create(code, Redaction.Redact(message), hint) with
+                    { Stage = stage, Committed = committed, Engine = engine }) },
+            ErrorJson));
 
     /// <summary>A failure no stage classified: the CLI's <c>FailUnclassified</c>, verbatim.</summary>
-    private static string Unclassified(string code, Exception ex)
+    private static CallToolResult Unclassified(string code, Exception ex)
     {
         var error = SchemorphError.ForUnclassified(code, ex, ProviderSelection.CurrentProviderOrNull);
-        return JsonSerializer.Serialize(
-            new { error = error with
-                { Message = Redaction.Redact(error.Message), Hint = Redaction.RedactOrNull(error.Hint) } },
-            ErrorJson);
+        return Failed(JsonSerializer.Serialize(
+            new { error = ProviderSelection.WithConnectionHint(error with
+                { Message = Redaction.Redact(error.Message), Hint = Redaction.RedactOrNull(error.Hint) }) },
+            ErrorJson));
     }
 }
