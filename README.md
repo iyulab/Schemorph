@@ -35,22 +35,23 @@ schemorph mcp
 
 ## Why Schemorph
 
-On SQL Server, one combination of properties does not exist today as free, offline, login-free tooling: a **declarative diff engine** that treats **procedures and functions as first-class**, plus a **versioned data-migration ledger**, plus **a plan you can review and then apply exactly**. Every existing tool gives you some of these; none gives you all of them:
+On SQL Server, one combination of properties does not exist today as free, offline, login-free tooling: a **declarative diff engine** that treats **procedures and functions as first-class**, plus a **versioned data-migration ledger**, plus **a plan you can review and then apply exactly**. Every existing tool gives you some of these; in the documentation we checked, none gives you all of them:
 
-| | Declarative diff | Procedures / functions as first-class | Versioned data migrations | CLI-first, no login | Reviewable plan contract + gated apply |
-|---|---|---|---|---|---|
-| SSDT / SqlPackage | ✅ | ✅ | ⚠️ pre/post scripts | ⚠️ CLI exists, project system is VS-bound | ⚠️ deploy script + report, no plan identity to gate on |
-| EF Migrations | ❌ (code-first) | ❌ | ⚠️ | ✅ | ⚠️ `migrations script` output only |
-| Flyway / Liquibase | ⚠️ Flyway schema model, commercial editions only | ⚠️ repeatable scripts | ✅ | ✅ | ⚠️ dry-run SQL / status; no fingerprint gate |
-| Atlas | ✅ | ⚠️ limited on SQL Server | ✅ | ❌ SQL Server driver is paid (Pro) and requires login | ⚠️ plan files with a from-state check — Pro, requires login |
-| Bytebase | ⚠️ PostgreSQL only | ❌ | ✅ | ⚠️ self-hosted server, GUI-first | ⚠️ server-side approval flow |
-| sqldef | ✅ | ⚠️ views/triggers only — no procedures/functions | ❌ | ✅ | ⚠️ `--dry-run` DDL only |
-| **Schemorph** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| On SQL Server | Declarative diff | Procedures / functions as first-class | Versioned data migrations | CLI-first, no login | Reviewable plan contract + gated apply | Official agent surface (MCP / skill) |
+|---|---|---|---|---|---|---|
+| SSDT / SqlPackage | ✅ | ✅ | ⚠️ pre/post-deployment scripts that run on every deploy | ✅ SqlPackage; SDK-style projects build with `dotnet build` (the original project format is Visual Studio-bound) | ⚠️ deploy script + XML deploy report | none found |
+| EF Core Migrations | ❌ migration-based | ⚠️ raw SQL inside a migration | ✅ `__EFMigrationsHistory` | ✅ | ⚠️ `migrations script` / `migrations bundle` output | none found |
+| Flyway | ⚠️ schema model and state-based deployments are in the paid editions | ⚠️ repeatable scripts | ✅ | — | ⚠️ dry-run script, paid editions | ⚠️ MCP server (Enterprise, preview) |
+| Liquibase | ❌ changelog-driven (`diff` compares two databases) | ⚠️ procedure / function / trigger diff is in Liquibase Secure | ✅ `DATABASECHANGELOG` | — | ⚠️ `update-sql` / `status` | ✅ MCP server (AI Changelog Generator) |
+| Atlas | ✅ SQL Server: Pro | ⚠️ SQL Server: Pro | ⚠️ versioned migration files; SQL Server: Pro | ❌ the SQL Server driver is Pro and needs a login for every command | ⚠️ `atlas schema plan` with from/to state fingerprints — Pro, login | ✅ agent skills (no MCP server found) |
+| Bytebase | ❌ state-based mode covers PostgreSQL and MySQL, not SQL Server | ❌ | ✅ DDL + DML | ⚠️ a server product (self-hosted or cloud) | ⚠️ approval workflow (Enterprise) | ✅ MCP endpoint |
+| sqldef | ✅ | ⚠️ views and triggers — no procedures or functions in `mssqldef` | ❌ none documented | ✅ | ⚠️ `--dry-run` | none found |
+| **Schemorph** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ MCP server + agent skill |
 
-<sup>Competitive claims as of 2026-07; re-verified periodically as these tools evolve.</sup>
+<sup>Competitive claims as of 2026-11-01, checked against each vendor's own documentation; "—" means we could not confirm the cell from that documentation, and "none found" means we searched the vendor's documentation and found none. Re-verified periodically as these tools evolve.</sup>
 
-- Atlas gates its SQL Server driver behind a paid plan; Bytebase's declarative workflow is PostgreSQL-only; Flyway's schema model requires commercial editions; sqldef cannot manage procedures or functions; SSDT is bound to the Visual Studio project system.
-- The last column is a narrow, checkable bar, not a slogan: the plan is a **versioned machine contract** ([plan-format.md](./docs/plan-format.md)) that also renders as a review document, and `apply` executes **only** a reviewed plan fingerprint or refuses. Printing a dry-run script is common; binding the apply to the *identity* of the reviewed plan is rare — Atlas does it (plan files with a from-state check), behind a login and a paid plan, on a SQL Server driver that is itself Pro-gated.
+- Atlas's SQL Server driver is Pro-only and needs a login for every command, and its reviewable-plan feature (`atlas schema plan`) is Pro-only too; Bytebase's state-based mode does not cover SQL Server; Flyway's schema model and dry-run script are in the paid editions; sqldef's SQL Server variant cannot manage procedures or functions; SSDT's pre/post-deployment scripts run on every deploy, so a run-once data change needs a guard you write yourself.
+- The last two columns are narrow, checkable bars, not slogans. The plan is a **versioned machine contract** ([plan-format.md](./docs/plan-format.md)) that also renders as a review document, and `apply` executes **only** a reviewed plan fingerprint or refuses. Printing a dry-run script is common; binding the apply to the *identity* of the reviewed plan is rare — in the documentation we read, Atlas does it (plan files with a from-state check), behind a login and a paid plan, on a SQL Server driver that is itself Pro-gated. Several of the others now ship an agent surface too; what Schemorph adds is that it is the same plan and the same gate on every surface (CLI, MCP, skill).
 
 Schemorph is that combination: the **declarative diff model** (SSDT, Atlas, sqldef) and the **versioned migration ledger** (Flyway, Liquibase) in one coherent tool, where every change passes through a plan that a person can read and a program can parse — the same plan, not two renderings that can drift apart.
 
