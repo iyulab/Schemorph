@@ -18,6 +18,13 @@ public sealed class SchemorphErrorTests
     [InlineData("compare_failed", "execution")]
     [InlineData("apply_failed", "execution")]
     [InlineData("inspect_failed", "execution")]
+    [InlineData("redefine_execution_failed", "execution")]
+    [InlineData("migration_execution_failed", "execution")]
+    [InlineData("pre_stage_execution_failed", "execution")]
+    [InlineData("commit_failed", "execution")]
+    [InlineData("plan_mismatch", "invalid_state")]
+    [InlineData("review_script_unavailable", "execution")]
+    [InlineData("temp_workspace_unavailable", "usage")]
     public void Known_codes_map_to_documented_kinds(string code, string expectedKind)
     {
         Assert.Equal(expectedKind, SchemorphError.KindOf(code));

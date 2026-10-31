@@ -40,6 +40,10 @@ change **additively**: consumers must ignore properties they do not know.
 
 ### Fixed
 
+- **A commit that does not confirm is reported as an `execution` error.** An `apply` whose stages all ran and only the
+  session's own commit failed to confirm came back with `commit_failed` and kind `internal` — the kind for "a code not
+  yet classified" — although `docs/errors.md` lists it as `execution`, and a client that branches on `kind` treated it as
+  a Schemorph bug instead of a failure to inspect and retry. `commit_failed` now maps to `execution`.
 - **SQL Server: a function a table calls could stop the first apply.** A computed column, a
   default or a check that calls a function needs the function to exist when the table is
   created, so the function is created on the way to the table. The re-definition pass that

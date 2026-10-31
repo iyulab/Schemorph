@@ -90,9 +90,11 @@ public sealed record SchemorphError(string Kind, string Code, string Message, st
         // review_script_unavailable: the comparison succeeded but the engine could
         // not generate the script the review document is made of, so no document
         // is produced rather than a partial one.
+        // commit_failed: every stage ran and only the session's own commit did not
+        // confirm — the database engine's answer, like the other stage failures.
         "compare_failed" or "apply_failed" or "inspect_failed"
             or "redefine_execution_failed" or "migration_execution_failed" or "pre_stage_execution_failed"
-            or "review_script_unavailable"
+            or "commit_failed" or "review_script_unavailable"
             => "execution",
         _ => "internal",
     };
