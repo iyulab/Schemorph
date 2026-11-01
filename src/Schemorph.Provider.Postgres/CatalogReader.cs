@@ -114,12 +114,16 @@ internal static class CatalogReader
         ORDER BY c.relname, i.relname
         """;
 
-    private const string ConstraintsSql = """
+    // Not-null constraints are left out: a column's NOT NULL is read from attnotnull, which is what
+    // PgColumn carries. Before PostgreSQL 18 a table's NOT NULL had no pg_constraint row; since 18 it
+    // has one (contype 'n', conrelid set) next to the flag, so reading every row would hand each NOT NULL
+    // column back twice — once on the column and once as a table constraint of its own.
+    internal const string ConstraintsSql = """
         SELECT c.relname, con.conname, pg_get_constraintdef(con.oid)
         FROM pg_constraint con
         JOIN pg_class c ON c.oid = con.conrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = @schema AND c.relkind = 'r'
+        WHERE n.nspname = @schema AND c.relkind = 'r' AND con.contype <> 'n'
         ORDER BY c.relname, con.conname
         """;
 
