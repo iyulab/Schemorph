@@ -136,15 +136,16 @@ internal static class CatalogReader
                 'd' => PgIdentity.ByDefault,
                 _ => PgIdentity.None,
             };
-            var generated = row.GetChar(6) == 's';
+            var (defaultExpression, generationExpression, generatedKind) = RouteExpression(row.GetChar(6), expression);
 
             Bucket(result, row.GetString(0)).Add(new PgColumn(
                 row.GetString(1),
                 row.GetString(2),
                 row.GetBoolean(3),
-                Default: generated ? null : expression,
+                Default: defaultExpression,
                 identity,
-                GeneratedAs: generated ? expression : null,
+                GeneratedAs: generationExpression,
+                GeneratedKind: generatedKind,
                 IdentityOptions: identity == PgIdentity.None || row.IsDBNull(7)
                     ? null
                     : IdentityOptions(
@@ -155,6 +156,24 @@ internal static class CatalogReader
         }
         return result;
     }
+
+    /// <summary>
+    /// Decides what the one stored expression of a column is. The catalog keeps a
+    /// column's DEFAULT and its generation expression in the same slot
+    /// (<c>pg_attrdef</c>); <c>attgenerated</c> says which it is: <c>'s'</c> a stored
+    /// generated column, <c>'v'</c> a virtual one (PostgreSQL 18, where virtual is
+    /// what an unmarked <c>GENERATED ALWAYS AS</c> means), anything else — the empty
+    /// character — a plain column, whose expression is a DEFAULT. Reading only
+    /// <c>'s'</c> turned every virtual column's expression into a DEFAULT, and
+    /// <c>DEFAULT (a * 2)</c> over another column is not SQL the engine accepts.
+    /// </summary>
+    internal static (string? Default, string? GeneratedAs, PgGeneratedKind Kind) RouteExpression(
+        char attgenerated, string? expression) => attgenerated switch
+    {
+        's' => (null, expression, PgGeneratedKind.Stored),
+        'v' => (null, expression, PgGeneratedKind.Virtual),
+        _ => (expression, null, PgGeneratedKind.Stored),
+    };
 
     /// <summary>
     /// Renders only the options that differ from what the engine would choose on

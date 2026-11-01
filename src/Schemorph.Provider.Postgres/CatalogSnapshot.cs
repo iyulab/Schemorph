@@ -27,12 +27,19 @@ public enum PgIdentity
 /// <paramref name="GeneratedAs"/> instead.
 /// </param>
 /// <param name="GeneratedAs">
-/// The generation expression of a <c>GENERATED ALWAYS AS (…) STORED</c> column.
+/// The generation expression of a <c>GENERATED ALWAYS AS (…)</c> column —
+/// stored or, on PostgreSQL 18 and later, virtual (<paramref name="GeneratedKind"/>).
 /// </param>
 /// <param name="IdentityOptions">
 /// Sequence options of an identity column, already rendered (e.g.
 /// <c>START WITH 100 INCREMENT BY 5</c>) — null when every option is the
 /// engine default, so the common case renders clean.
+/// </param>
+/// <param name="GeneratedKind">
+/// Whether a generated column's value is stored on disk or computed when read.
+/// Meaningful only when <paramref name="GeneratedAs"/> is set. A column of the
+/// other kind is a different column — there is no in-place conversion — so the
+/// kind takes part in equality like the expression does.
 /// </param>
 public sealed record PgColumn(
     string Name,
@@ -41,7 +48,17 @@ public sealed record PgColumn(
     string? Default,
     PgIdentity Identity = PgIdentity.None,
     string? GeneratedAs = null,
-    string? IdentityOptions = null);
+    string? IdentityOptions = null,
+    PgGeneratedKind GeneratedKind = PgGeneratedKind.Stored);
+
+/// <summary>How a generated column keeps its value.</summary>
+public enum PgGeneratedKind
+{
+    /// <summary><c>STORED</c> — computed on write and kept in the row (PostgreSQL 12 and later).</summary>
+    Stored,
+    /// <summary><c>VIRTUAL</c> — computed when read, nothing kept (PostgreSQL 18 and later, where it is the default).</summary>
+    Virtual,
+}
 
 /// <param name="Definition">
 /// From <c>pg_get_constraintdef</c> — the engine's canonical form, e.g.

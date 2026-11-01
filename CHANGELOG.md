@@ -40,6 +40,13 @@ change **additively**: consumers must ignore properties they do not know.
 
 ### Fixed
 
+- **PostgreSQL 18 virtual generated columns are read as generated columns, not as a `DEFAULT`.** PostgreSQL 18 made
+  `GENERATED ALWAYS AS (expr)` virtual unless it says `STORED`, and marks such a column `attgenerated = 'v'`. The catalog
+  reader recognised only `'s'`, so a virtual column's expression came out as `DEFAULT (expr)` — SQL the engine rejects
+  when the expression names another column — in `inspect` output and in any `CREATE TABLE` / `ADD COLUMN` the plan
+  renders from it. The column now keeps its kind (stored or virtual), the rendered form always spells it out, and a
+  column whose only change is the kind is dropped and added back like one whose expression changed (there is no in-place
+  conversion). Not reproduced against a PostgreSQL 18 server; covered by tests of the routing, rendering and synthesis.
 - **A commit that does not confirm is reported as an `execution` error.** An `apply` whose stages all ran and only the
   session's own commit failed to confirm came back with `commit_failed` and kind `internal` — the kind for "a code not
   yet classified" — although `docs/errors.md` lists it as `execution`, and a client that branches on `kind` treated it as

@@ -128,8 +128,11 @@ internal static class DdlSynthesizer
             // Gaining or changing an expression has no in-place form on the
             // supported baseline (no SET EXPRESSION before PostgreSQL 17), so the
             // column is dropped and added. That is honest: the new values are the
-            // expression's output by definition.
-            if (column.GeneratedAs != existing.GeneratedAs)
+            // expression's output by definition. The same goes for the same
+            // expression kept the other way (stored <-> virtual): there is no
+            // in-place conversion, and the values are derivable either way.
+            if (column.GeneratedAs != existing.GeneratedAs
+                || column.GeneratedAs is not null && column.GeneratedKind != existing.GeneratedKind)
             {
                 if (column.GeneratedAs is null)
                 {

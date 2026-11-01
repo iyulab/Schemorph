@@ -42,7 +42,11 @@ internal static class DesiredStateRenderer
         if (column.Default is not null) sql.Append(" DEFAULT ").Append(column.Default);
         if (column.GeneratedAs is not null)
         {
-            sql.Append(" GENERATED ALWAYS AS (").Append(column.GeneratedAs).Append(") STORED");
+            // Always spelled out: PostgreSQL 18 changed what the unmarked form means
+            // (virtual instead of stored), so a column written without the keyword
+            // would be a different column on two server versions.
+            sql.Append(" GENERATED ALWAYS AS (").Append(column.GeneratedAs).Append(") ")
+                .Append(column.GeneratedKind == PgGeneratedKind.Virtual ? "VIRTUAL" : "STORED");
         }
         if (column.Identity != PgIdentity.None)
         {

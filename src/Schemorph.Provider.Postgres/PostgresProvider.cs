@@ -458,7 +458,8 @@ public sealed class PostgresProvider : IDatabaseProvider
             var haveColumn = have.Columns.FirstOrDefault(c => c.Name == read.Column);
             return wantColumn is null
                 || haveColumn is not null
-                   && (wantColumn.DataType != haveColumn.DataType || wantColumn.GeneratedAs != haveColumn.GeneratedAs);
+                   && (wantColumn.DataType != haveColumn.DataType || wantColumn.GeneratedAs != haveColumn.GeneratedAs
+                       || wantColumn.GeneratedAs is not null && wantColumn.GeneratedKind != haveColumn.GeneratedKind);
         }
 
         var dropped = reads.Where(r => declaredViews.Contains(r.View) && Removed(r))
@@ -663,8 +664,8 @@ public sealed class PostgresProvider : IDatabaseProvider
 
         return want.Columns.Any(c =>
             live.TryGetValue(c.Name, out var existing)
-            && c.GeneratedAs != existing.GeneratedAs
-            && c.GeneratedAs is not null);
+            && c.GeneratedAs is not null
+            && (c.GeneratedAs != existing.GeneratedAs || c.GeneratedKind != existing.GeneratedKind));
     }
 
     /// <summary>
