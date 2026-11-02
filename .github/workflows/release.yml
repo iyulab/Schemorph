@@ -43,6 +43,19 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
+      # The engine the provider targets. The tests that need an 18 server skip on 16, so release gating runs the
+      # Postgres suite against both, as ci.yml's `postgres-18` job does.
+      postgres18:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: Schemorph_CI_2026
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v5
 
@@ -67,6 +80,14 @@ jobs:
           docker exec ${{ job.services.postgres.id }} psql -U postgres
           -c "CREATE ROLE schemorph_ci LOGIN PASSWORD 'ci' NOSUPERUSER NOCREATEDB NOCREATEROLE;"
           -c "CREATE DATABASE schemorph_ci OWNER schemorph_ci;"
+          && docker exec ${{ job.services.postgres18.id }} psql -U postgres
+          -c "CREATE ROLE schemorph_ci LOGIN PASSWORD 'ci' NOSUPERUSER NOCREATEDB NOCREATEROLE;"
+          -c "CREATE DATABASE schemorph_ci OWNER schemorph_ci;"
+
+      - name: Postgres provider tests against 18
+        env:
+          SCHEMORPH_PG_TEST_URL: Host=localhost;Port=5433;Username=schemorph_ci;Password=ci;Database=schemorph_ci
+        run: dotnet test tests/Schemorph.Provider.Postgres.Tests -c Release
 
       - name: Test
         env:

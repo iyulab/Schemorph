@@ -103,3 +103,52 @@ jobs:
           SCHEMORPH_TEST_URL: Server=localhost,1433;User ID=sa;Password=Schemorph_CI_2026!;Encrypt=False;TrustServerCertificate=True
           SCHEMORPH_PG_TEST_URL: Host=localhost;Port=5432;Username=schemorph_ci;Password=ci;Database=schemorph_ci
         run: dotnet test tests/Schemorph.IntegrationTests -c Release --logger "console;verbosity=normal"
+
+  # PostgreSQL 18 is the engine the provider targets, while `integration` above runs the oldest supported, 16. The
+  # tests that need an 18 server (they skip below 18) only run here, so this job is what stands behind the 18-specific
+  # catalog reads. Postgres-only: nothing in it touches SQL Server, so it stays a parallel job and adds no wall time.
+  postgres-18:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: Schemorph_CI_2026
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      # Same R1-baseline restricted role as `integration`: a DB owner without CREATEDB.
+      - name: Create the restricted Postgres role
+        run: >-
+          docker exec ${{ job.services.postgres.id }} psql -U postgres
+          -c "CREATE ROLE schemorph_ci LOGIN PASSWORD 'ci' NOSUPERUSER NOCREATEDB NOCREATEROLE;"
+          -c "CREATE DATABASE schemorph_ci OWNER schemorph_ci;"
+
+      - name: Postgres provider tests (live, 18)
+        env:
+          SCHEMORPH_PG_TEST_URL: Host=localhost;Port=5432;Username=schemorph_ci;Password=ci;Database=schemorph_ci
+        run: dotnet test tests/Schemorph.Provider.Postgres.Tests -c Release --logger "console;verbosity=normal"
+
+      - name: Postgres CLI tests (live, 18)
+        env:
+          SCHEMORPH_PG_TEST_URL: Host=localhost;Port=5432;Username=schemorph_ci;Password=ci;Database=schemorph_ci
+        run: dotnet test tests/Schemorph.IntegrationTests -c Release --filter "FullyQualifiedName~PostgresCliTests" --logger "console;verbosity=normal"
