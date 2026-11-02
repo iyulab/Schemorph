@@ -46,12 +46,16 @@ change **additively**: consumers must ignore properties they do not know.
   when the expression names another column — in `inspect` output and in any `CREATE TABLE` / `ADD COLUMN` the plan
   renders from it. The column now keeps its kind (stored or virtual), the rendered form always spells it out, and a
   column whose only change is the kind is dropped and added back like one whose expression changed (there is no in-place
-  conversion). Not reproduced against a PostgreSQL 18 server; covered by tests of the routing, rendering and synthesis.
+  conversion). Checked against a PostgreSQL 18.0 server: before the change `inspect` wrote `DEFAULT (a * 2)` and applying
+  that output failed with `0A000 cannot use column reference in DEFAULT expression`; now the output spells the column
+  `VIRTUAL`, applies, and reads back identically. Also covered by tests of the routing, rendering and synthesis.
 - **PostgreSQL 18 NOT NULL constraints are not read back as table constraints.** PostgreSQL 18 stores a column's NOT NULL
   in `pg_constraint` as well as in `attnotnull`. The constraint query read every row, so on 18 each NOT NULL column would
   have come back twice — flagged on the column and as a constraint of its own. The query now leaves not-null constraints
   out; the column's flag is what the schema model carries. A no-op before 18, where a table's NOT NULL has no
-  `pg_constraint` row. Not run against a PostgreSQL 18 server; a test pins the query text.
+  `pg_constraint` row. Checked against a PostgreSQL 18.0 server: before the change `inspect` listed each NOT NULL column
+  twice, once on the column and once as an `ADD CONSTRAINT … NOT NULL` of its own; now once. Two limits remain: the name
+  of a named NOT NULL constraint is not kept, and a NOT NULL declared `NOT VALID` reads back as a plain NOT NULL.
 - **A commit that does not confirm is reported as an `execution` error.** An `apply` whose stages all ran and only the
   session's own commit failed to confirm came back with `commit_failed` and kind `internal` — the kind for "a code not
   yet classified" — although `docs/errors.md` lists it as `execution`, and a client that branches on `kind` treated it as
