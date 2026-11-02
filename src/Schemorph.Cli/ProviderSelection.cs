@@ -46,7 +46,8 @@ internal readonly record struct ProviderSelection(IDatabaseProvider Provider, IL
     /// (see the class remarks): this names the variable, it does not set it.
     /// </summary>
     public static string? HintForUnsupportedKeyword(string message) =>
-        message.Contains("Keyword not supported", StringComparison.Ordinal) && CurrentProviderOrNull is SqlServerProvider
+        (message.Contains("Keyword not supported", StringComparison.Ordinal) || SqlServerCannotReadConnectionString())
+            && CurrentProviderOrNull is SqlServerProvider
             ? $"The SQL Server provider is in effect (the default) and does not recognize a keyword in this connection string. " +
               $"If it is a PostgreSQL connection string, set {EnvironmentVariable}={PostgresProvider.ProviderName}."
             : null;
@@ -54,6 +55,34 @@ internal readonly record struct ProviderSelection(IDatabaseProvider Provider, IL
     /// <summary>The envelope with that hint filled in when it has none of its own.</summary>
     public static SchemorphError WithConnectionHint(SchemorphError error) =>
         error.Hint is null && HintForUnsupportedKeyword(error.Message) is { } hint ? error with { Hint = hint } : error;
+
+    /// <summary>
+    /// The connection string the running CLI verb resolved (<c>--url</c> or <c>SCHEMORPH_URL</c>). A failure can come
+    /// before the connection is ever opened — the desired-state files are checked first, and PostgreSQL syntax read by
+    /// the SQL Server provider is refused with an error that says nothing about the connection — so the message alone
+    /// cannot tell the user why. The MCP surfaces read <c>SCHEMORPH_URL</c> from their own environment instead.
+    /// </summary>
+    internal static string? ConnectionStringInUse { get; set; }
+
+    /// <summary>
+    /// True when the SQL Server driver's own parser rejects a keyword of the connection string in use. That is a fact
+    /// about the string, not a guess about the user's intent: whatever the provider, this string cannot open a SQL
+    /// Server connection. It is used only to word a hint — the provider is still never chosen from the string.
+    /// </summary>
+    private static bool SqlServerCannotReadConnectionString()
+    {
+        var connectionString = ConnectionStringInUse ?? Environment.GetEnvironmentVariable("SCHEMORPH_URL");
+        if (string.IsNullOrWhiteSpace(connectionString)) return false;
+        try
+        {
+            _ = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(connectionString);
+            return false;
+        }
+        catch (ArgumentException ex)
+        {
+            return ex.Message.Contains("Keyword not supported", StringComparison.Ordinal);
+        }
+    }
 
     /// <summary>
     /// The selected provider, or null when the selection itself is invalid, for the

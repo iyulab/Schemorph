@@ -618,7 +618,11 @@ static string InformationalVersion()
 // Environment variable preferred over --url so the connection string (and its
 // credential) stays out of shell history and process listings.
 static string? ResolveUrl(string[] args)
-    => ParseOption(args, "--url") ?? Environment.GetEnvironmentVariable("SCHEMORPH_URL");
+{
+    var url = ParseOption(args, "--url") ?? Environment.GetEnvironmentVariable("SCHEMORPH_URL");
+    ProviderSelection.ConnectionStringInUse = url;
+    return url;
+}
 
 /// <summary>
 /// Renders the provider messages behind a failure, and returns the text the
