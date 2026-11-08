@@ -1,6 +1,7 @@
 # Release: tag-triggered (v*). Binaries are attached straight to the GitHub
-# Release with gh — no workflow artifacts are ever uploaded (storage policy).
-# NuGet publish runs only when the NUGET_API_KEY secret exists.
+# Release with gh. The one workflow artifact is the packed NuGet package, kept for a
+# day: the organization's central publish workflow pushes it (this repository holds no
+# NuGet credential).
 name: Release
 
 on:
@@ -13,8 +14,6 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    env:
-      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
     # Same live-DB service containers as ci.yml's `integration` job — release
     # gating must be at least as strong as CI, or a contract regression that
     # only a live-DB test catches can slip through a green release (see the
@@ -119,8 +118,18 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* packages/*.nupkg \
             --title "schemorph $VERSION" --generate-notes
 
-      - name: Push to NuGet
-        if: env.NUGET_API_KEY != ''
-        run: |
-          dotnet nuget push packages/*.nupkg \
-            --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+      - name: Upload packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuget-packages
+          path: |
+            packages/*.nupkg
+            packages/*.snupkg
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: release
+    uses: iyulab/nuget-publish/.github/workflows/request.yml@de1e58c8bcefaf88f497fcb58899a1c6e84f4e29 # main
+    permissions: {}
+    secrets: inherit
