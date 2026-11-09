@@ -23,7 +23,7 @@ change **additively**: consumers must ignore properties they do not know.
   before it opens a connection, with an error that never mentions the connection string — by checking whether the SQL
   Server driver can read the connection string in use.
 - **Dependencies:** `Microsoft.Extensions.Hosting` and `System.Security.Cryptography.Pkcs` 10.0.13 → 10.0.14,
-  `ModelContextProtocol` 2.2.0 → 2.3.0 (the `mcp` verb's server library; the tool and resource listing now follows
+  `ModelContextProtocol` 2.2.0 → 2.4.0 (the `mcp` verb's server library; the tool and resource listing now follows
   registration order). No change in the CLI's verbs, options, exit codes or plan format.
 - **SQL Server: a column drop that the destructive gate withholds no longer withholds the rest.**
   Without `--allow-destructive`, a column the desired state no longer declares used to hold back
