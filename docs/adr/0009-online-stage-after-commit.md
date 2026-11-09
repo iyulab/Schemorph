@@ -28,7 +28,7 @@ Both come from the same fact: the apply has no commit boundary inside it. Giving
    - a failed concurrent build leaves an **invalid index**; it is treated as drift, and the next plan drops and rebuilds it (concurrently);
    - a constraint added `NOT VALID` and never validated is treated as drift from the declared (validated) constraint, and the next plan is the `VALIDATE` alone.
 
-   **Prerequisite:** the inspector does not read index validity or constraint validation today. That must be implemented, and proven against a real server with injected failures, before the online stage is.
+   **Prerequisite, met:** the inspector reads index validity and constraint validation, and a real server with a really failed build and a really unvalidated constraint is part of the provider's tests (the apply converges in both cases). This lands ahead of the online stage as a fix of its own — an invalid index used to be reported as in sync — so the online stage inherits the behavior rather than introducing it.
 
 7. **A lock timeout applies to each online statement** when one is configured, so an online statement that cannot get its lock fails and can be re-run instead of waiting indefinitely.
 

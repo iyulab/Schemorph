@@ -84,7 +84,14 @@ public sealed record PgConstraint(string Name, string Definition);
 /// flag says. Two indexes differing only there answer different queries, and a
 /// comparison built on it calls them equal.
 /// </param>
-public sealed record PgIndex(string Name, string Definition);
+/// <param name="IsValid">
+/// <c>pg_index.indisvalid</c>. A concurrent index build that fails part-way leaves its index
+/// behind, <em>invalid</em>: the definition reads exactly like a good one, but the engine neither
+/// uses it for queries nor (for a unique index) enforces it. It takes part in equality, so a live
+/// invalid index differs from the valid one the desired state declares and the plan rebuilds it
+/// rather than reporting the schema in sync.
+/// </param>
+public sealed record PgIndex(string Name, string Definition, bool IsValid = true);
 
 public sealed record PgTable(
     string Schema,

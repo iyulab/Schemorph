@@ -19,6 +19,20 @@ change **additively**: consumers must ignore properties they do not know.
   refuses it with `not_implemented` rather than ignoring it. The timeout bounds the statements of the apply's
   transaction; the ledger's own set-up runs on separate connections before it and is not covered.
 
+### Fixed
+
+- **PostgreSQL: an index a failed `CREATE INDEX CONCURRENTLY` left invalid was reported as in sync.** Such a build
+  leaves its index behind with the right definition but marked invalid in the catalog: the engine does not use it for
+  queries and, for a unique index, does not enforce it. The comparison read only the definition, so a desired state
+  that declared the index showed no difference, and no apply ever repaired it. The inspector now reads the index's
+  validity; an invalid index is dropped and created again by the next `apply` (a build that fails again — duplicate
+  data under a unique index — fails the apply as any statement failure does, with nothing changed). `inspect`
+  marks such an index with a comment instead of presenting it as a good one.
+- **PostgreSQL: a constraint added `NOT VALID` and never validated is validated in place.** The live definition ends in
+  `NOT VALID`, so the comparison already saw a difference; the plan dropped the constraint and added it again. When the
+  declared constraint is otherwise identical, the plan is now `ALTER TABLE … VALIDATE CONSTRAINT`, which checks the
+  existing rows under a weaker lock and keeps the constraint where it stands.
+
 ## 0.22.0 — 2026-11-09
 
 ### Changed

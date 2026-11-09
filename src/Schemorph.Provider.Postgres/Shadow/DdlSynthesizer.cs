@@ -201,7 +201,8 @@ internal static class DdlSynthesizer
         foreach (var constraint in have.Constraints)
         {
             var replaced = wantByName.TryGetValue(constraint.Name, out var target)
-                && target.Definition != constraint.Definition;
+                && target.Definition != constraint.Definition
+                && !AwaitsValidation(target, constraint);
             if (replaced || !wantByName.ContainsKey(constraint.Name))
             {
                 drops.Add(new Statement(want.Name,
@@ -211,14 +212,31 @@ internal static class DdlSynthesizer
 
         foreach (var constraint in want.Constraints)
         {
-            var unchanged = haveByName.TryGetValue(constraint.Name, out var existing)
-                && existing.Definition == constraint.Definition;
-            if (!unchanged)
+            var exists = haveByName.TryGetValue(constraint.Name, out var existing);
+            if (exists && existing!.Definition == constraint.Definition) continue;
+
+            if (exists && AwaitsValidation(constraint, existing!))
             {
-                AddConstraint(want.Name, qualified, constraint, adds, foreignKeyAdds);
+                // Only the validation is missing: the constraint is in place and enforced for new
+                // rows. Dropping and re-adding it would redo the add under the stronger lock and
+                // lose the constraint's identity; VALIDATE CONSTRAINT checks the existing rows only.
+                (constraint.Definition.StartsWith("FOREIGN KEY", StringComparison.Ordinal) ? foreignKeyAdds : adds)
+                    .Add(new Statement(want.Name,
+                        $"ALTER TABLE {qualified} VALIDATE CONSTRAINT {DesiredStateRenderer.Quote(constraint.Name)};"));
+                continue;
             }
+
+            AddConstraint(want.Name, qualified, constraint, adds, foreignKeyAdds);
         }
     }
+
+    /// <summary>
+    /// The live constraint is the declared one, added <c>NOT VALID</c> and never validated.
+    /// <c>pg_get_constraintdef</c> ends such a definition with <c>NOT VALID</c> and is otherwise
+    /// identical, which is how it is recognized without a parser.
+    /// </summary>
+    private static bool AwaitsValidation(PgConstraint wanted, PgConstraint live)
+        => live.Definition == wanted.Definition + " NOT VALID";
 
     /// <summary>
     /// Indexes have no ALTER that changes what they index, so a definition
@@ -239,8 +257,10 @@ internal static class DdlSynthesizer
 
         foreach (var index in have.Indexes)
         {
+            // An invalid index (a failed concurrent build) is rebuilt: the engine ignores it, so
+            // keeping it would leave the declared index missing while the schema reads as in sync.
             var replaced = wantByName.TryGetValue(index.Name, out var target)
-                && target.Definition != index.Definition;
+                && (target.Definition != index.Definition || !index.IsValid);
             if (replaced || !wantByName.ContainsKey(index.Name))
             {
                 drops.Add(new Statement(want.Name,
@@ -251,7 +271,7 @@ internal static class DdlSynthesizer
         foreach (var index in want.Indexes)
         {
             var unchanged = haveByName.TryGetValue(index.Name, out var existing)
-                && existing.Definition == index.Definition;
+                && existing.Definition == index.Definition && existing.IsValid;
             if (!unchanged)
             {
                 creates.Add(CreateIndex(want.Name, index));

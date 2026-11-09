@@ -104,7 +104,8 @@ internal static class CatalogReader
     private const string IndexesSql = """
         SELECT c.relname, i.relname, pg_get_indexdef(i.oid),
                quote_ident(n.nspname) || '.' || quote_ident(c.relname),
-               quote_ident(c.relname)
+               quote_ident(c.relname),
+               x.indisvalid
         FROM pg_index x
         JOIN pg_class c ON c.oid = x.indrelid
         JOIN pg_class i ON i.oid = x.indexrelid
@@ -237,7 +238,8 @@ internal static class CatalogReader
                 row.GetString(1),
                 unqualifyTable
                     ? UnqualifyTable(definition, row.GetString(3), row.GetString(4))
-                    : definition));
+                    : definition,
+                IsValid: row.GetBoolean(5)));
         }
         return result;
     }

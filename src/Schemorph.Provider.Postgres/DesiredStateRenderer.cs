@@ -97,7 +97,14 @@ internal static class DesiredStateRenderer
 
         foreach (var index in table.Indexes)
         {
-            sql.AppendLine().Append(index.Definition.TrimEnd(';', ' ', '\r', '\n')).AppendLine(";");
+            sql.AppendLine();
+            if (!index.IsValid)
+            {
+                // The definition alone would read as a good index. It is not one: the engine ignores it.
+                sql.AppendLine("-- This index is INVALID in the database (a failed concurrent build). Applying a")
+                   .AppendLine("-- desired state that declares it rebuilds it.");
+            }
+            sql.Append(index.Definition.TrimEnd(';', ' ', '\r', '\n')).AppendLine(";");
         }
 
         return sql.ToString();
