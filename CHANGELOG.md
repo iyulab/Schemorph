@@ -5,6 +5,20 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Added
+
+- **PostgreSQL: an opt-in lock timeout for `apply`** — `schemorph apply --lock-timeout 30s` (and the MCP tool's
+  `lockTimeout` argument; `500ms`, `30s` or `2m`). A PostgreSQL apply is one transaction, so a statement that has to
+  wait for a lock another session holds used to wait for as long as that session held on, with the whole apply
+  stalled behind it. With the option, a statement that waits longer fails with the engine's `55P03`, the apply rolls
+  back and nothing is applied, and the error says so and names where to look for the lock holder. Re-running the same
+  `apply` once the other session is done is the recovery, as for every apply failure. The option is off by default
+  — an apply without it behaves exactly as before — and a provider whose apply is not one transaction (SQL Server)
+  refuses it with `not_implemented` rather than ignoring it. The timeout bounds the statements of the apply's
+  transaction; the ledger's own set-up runs on separate connections before it and is not covered.
+
 ## 0.22.0 — 2026-11-09
 
 ### Changed

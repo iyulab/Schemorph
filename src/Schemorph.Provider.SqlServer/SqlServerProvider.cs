@@ -47,7 +47,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
     public Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken cancellationToken = default)
         => Task.Run(() => Compare(request, cancellationToken), cancellationToken);
 
-    public Task<IApplySession?> BeginApplySessionAsync(string connectionString, CancellationToken cancellationToken = default)
+    public Task<IApplySession?> BeginApplySessionAsync(string connectionString, ApplySessionOptions? options = null, CancellationToken cancellationToken = default)
         => Task.FromResult<IApplySession?>(null);
 
     public Task<ApplyResult> ApplyAsync(ApplyRequest request, Func<RawChange, ChangeScript?, ChangeInclusion> includeChange, Action<CompareResult>? onChangesComputed = null, IApplySession? session = null, CancellationToken cancellationToken = default)

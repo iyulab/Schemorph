@@ -134,6 +134,10 @@ switch (verb)
               --allow-destructive         apply destructive changes too
               --expect-plan <hash>        apply only if the computed plan matches this
                                           fingerprint (printed by diff); mismatch = abort
+              --lock-timeout <duration>   fail the apply if a statement waits longer than this
+                                          for a lock another session holds (500ms, 30s, 2m).
+                                          PostgreSQL only; off by default (the server's own
+                                          setting applies). A timeout rolls the apply back
               --format json|text          output form (default: text on a terminal,
                                           json when stdout is redirected)
 
@@ -205,6 +209,16 @@ async Task<int> RunApply(string[] args, string format)
             "Pass the directory that holds the V####__description.sql scripts to run before the declarative stage.");
     }
 
+    TimeSpan? lockTimeout = null;
+    if (ParseOption(args, "--lock-timeout") is { } lockTimeoutText)
+    {
+        if (!ApplySessionOptions.TryParseLockTimeout(lockTimeoutText, out var parsedTimeout, out var lockTimeoutError))
+        {
+            return Fail(format, "invalid_arguments", lockTimeoutError, "schemorph apply --lock-timeout 30s ...");
+        }
+        lockTimeout = parsedTimeout;
+    }
+
     try
     {
         // The apply itself lives in the core (ApplyOperation) — the CLI and the
@@ -213,7 +227,7 @@ async Task<int> RunApply(string[] args, string format)
         var outcome = await ApplyOperation.RunAsync(
             provider, ledger,
             new ApplyOperation.Request(schemaDir, url, allowDestructive, migrationsDir,
-                ParseOption(args, "--expect-plan"), preDir),
+                ParseOption(args, "--expect-plan"), preDir, lockTimeout),
             onPlan: plan =>
             {
                 if (format != "json")
@@ -333,6 +347,12 @@ async Task<int> RunApply(string[] args, string format)
     {
         return Fail(format, "redefine_failed", ex.Message,
             "Break the cycle by extracting the shared logic into a separate object.");
+    }
+    catch (UnsupportedByProviderException ex)
+    {
+        // A declared boundary, not a failure: this provider cannot honor what was asked (a lock
+        // timeout on a provider whose apply is not one transaction). Nothing was touched.
+        return Emit(format, ex.ToError());
     }
     catch (Exception ex)
     {

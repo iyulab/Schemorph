@@ -157,6 +157,24 @@ Not every failure leaves the database in a partial state — most do not touch i
 The ledger table is created before any of this, so failures are recordable too. It is
 excluded from comparison, so creating it never shows up in a plan.
 
+## A lock another session holds
+
+On PostgreSQL the apply is one transaction, so a statement that needs a lock another session
+holds waits for it — and the whole apply waits behind that statement, for as long as the other
+session keeps the lock. Nothing is applied while it waits, and nothing is wrong; it is only slow
+in a way you may not want in a deploy.
+
+`apply --lock-timeout <duration>` (MCP: `lockTimeout`; `500ms`, `30s`, `2m`) puts a bound on it.
+A statement that waits longer fails with the engine's `55P03`, the apply rolls back and
+**nothing is applied**, and the hint says so. Recovery is the same
+re-run as everywhere on this page: find the session holding the lock (`pg_locks`,
+`pg_stat_activity`), let it finish, run the same `apply` again.
+
+The option is off by default, which leaves the server's own setting in force (PostgreSQL's is no
+timeout). It bounds the statements of the apply's transaction; the ledger's set-up runs on
+separate connections before that transaction opens and is not covered. A provider whose apply
+is not one transaction (SQL Server) refuses the option with `not_implemented`.
+
 ## See also
 
 - [ADR-0004](adr/0004-failure-semantics-and-resume.md) — the decisions behind this, and why resume is convergent re-run rather than a repair command

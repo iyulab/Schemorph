@@ -128,7 +128,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// resolves via a command timeout, surfacing as an opaque stream-read error
     /// with nothing applied.
     /// </summary>
-    public async Task<IApplySession?> BeginApplySessionAsync(string connectionString, CancellationToken cancellationToken = default)
+    public async Task<IApplySession?> BeginApplySessionAsync(string connectionString, ApplySessionOptions? options = null, CancellationToken cancellationToken = default)
     {
         var schema = TargetSchemaOf(connectionString);
         await using (var bootstrap = new NpgsqlConnection(connectionString))
@@ -138,7 +138,7 @@ public sealed class PostgresProvider : IDatabaseProvider
                 $"CREATE SCHEMA IF NOT EXISTS {DesiredStateRenderer.Quote(schema)}", bootstrap);
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
-        return await PgApplySession.OpenAsync(connectionString, cancellationToken);
+        return await PgApplySession.OpenAsync(connectionString, options, cancellationToken);
     }
 
     /// <summary>
@@ -148,7 +148,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// PostgreSQL DDL is transactional, which is what makes the simulation exact.
     /// </summary>
     public async Task<IApplySession?> BeginSimulationAsync(string connectionString, CancellationToken cancellationToken = default)
-        => await PgApplySession.OpenAsync(connectionString, cancellationToken);
+        => await PgApplySession.OpenAsync(connectionString, options: null, cancellationToken);
 
     public async Task<ApplyResult> ApplyAsync(
         ApplyRequest request,

@@ -33,8 +33,14 @@ internal sealed class FakeProvider : IDatabaseProvider
     /// <summary>Every session value a call was made with, in call order — asserts session threading.</summary>
     public List<IApplySession?> SessionsSeen { get; } = new();
 
-    public Task<IApplySession?> BeginApplySessionAsync(string connectionString, CancellationToken ct = default)
-        => Task.FromResult(Session);
+    /// <summary>The options each <see cref="BeginApplySessionAsync"/> call was made with, in call order.</summary>
+    public List<ApplySessionOptions?> SessionOptionsSeen { get; } = new();
+
+    public Task<IApplySession?> BeginApplySessionAsync(string connectionString, ApplySessionOptions? options = null, CancellationToken ct = default)
+    {
+        SessionOptionsSeen.Add(options);
+        return Task.FromResult(Session);
+    }
 
     public Task ExecuteScriptAsync(string connectionString, string script, IApplySession? session = null, CancellationToken ct = default)
         => ExecuteScriptAsync(connectionString, script, Array.Empty<LedgerEntry>(), session, ct);

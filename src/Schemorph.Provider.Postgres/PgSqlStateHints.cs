@@ -55,6 +55,10 @@ internal static class PgSqlStateHints
                     "the plan was reviewed; re-run diff and compare against the current plan before retrying.",
         ["53300"] = "The server has no free connection slots — retry once load drops, or raise max_connections.",
         ["55006"] = "The object is locked by another session — retry once that session releases it.",
+        ["55P03"] = "A statement waited longer than the lock timeout for a lock another session holds. " +
+                    "The apply is one transaction and has rolled back: nothing was applied. Find the session " +
+                    "holding the lock (pg_locks, pg_stat_activity), wait for it to finish, then re-run — " +
+                    "or raise the lock timeout if the wait is expected.",
         ["57014"] = "The statement exceeded statement_timeout — a full-table rewrite (adding a column " +
                     "with a volatile default, or building an index) can take longer than the default " +
                     "timeout on a large table.",

@@ -25,7 +25,8 @@ public static class ApplyOperation
         bool AllowDestructive = false,
         string? MigrationsDir = null,
         string? ExpectedPlanHash = null,
-        string? PreDir = null);
+        string? PreDir = null,
+        TimeSpan? LockTimeout = null);
 
     /// <summary>
     /// Where an apply stopped. The strategy order (ADR-0002) is also the order of
@@ -103,10 +104,23 @@ public static class ApplyOperation
     /// Fires with the plan after the gate passes, before anything executes —
     /// surfaces render their preview here.
     /// </param>
+    private static ApplySessionOptions? SessionOptionsOf(Request request)
+        => request.LockTimeout is null ? null : new ApplySessionOptions(request.LockTimeout);
+
     public static async Task<Outcome> RunAsync(
         IDatabaseProvider provider, ILedgerStore ledger, Request request,
         Action<Plan>? onPlan = null, CancellationToken cancellationToken = default)
     {
+        // A lock timeout is a property of the apply-unit transaction. A provider that owns no such
+        // transaction (Partial — SQL Server's publish runs on a connection DacFx owns) has nowhere
+        // to put it, and silently ignoring a safety setting is worse than refusing it: refuse
+        // before anything is read or touched.
+        if (request.LockTimeout is not null && provider.Capabilities.PlanAtomicity != ApplyAtomicity.Transactional)
+        {
+            throw new UnsupportedByProviderException(provider.Name, "an apply lock timeout",
+                supported: "a lock timeout on providers whose apply is one transaction (atomicity: transactional)");
+        }
+
         // One load serves analysis and apply — the desired state is read and
         // classified exactly once per operation, and a broken file fails here,
         // before any DB work.
@@ -146,7 +160,7 @@ public static class ApplyOperation
             // scripts run — a transactional provider's comparison leaves Schemorph's own objects out —
             // and creating it on its own connection first avoids racing the session for the schema.
             await ledger.EnsureInitializedAsync(request.ConnectionString, session: null, cancellationToken);
-            session = await provider.BeginApplySessionAsync(request.ConnectionString, cancellationToken);
+            session = await provider.BeginApplySessionAsync(request.ConnectionString, SessionOptionsOf(request), cancellationToken);
             try
             {
                 preRun = await new MigrationRunner(provider, ledger, VersionedStage.Pre)
@@ -201,7 +215,7 @@ public static class ApplyOperation
         // planning above. `await using` disposes it on every return path,
         // committed or not (a no-op if it was never opened).
         await using var lateSession = transactional && session is null
-            ? await provider.BeginApplySessionAsync(request.ConnectionString, cancellationToken)
+            ? await provider.BeginApplySessionAsync(request.ConnectionString, SessionOptionsOf(request), cancellationToken)
             : null;
         session ??= lateSession;
 

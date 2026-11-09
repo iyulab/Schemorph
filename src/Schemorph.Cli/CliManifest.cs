@@ -73,6 +73,7 @@ internal static class CliManifest
                 new { flag = "--migrations", value = "dir", required = false, description = "Versioned migration scripts (V####__description.sql), run once each, tamper-checked." },
                 new { flag = "--pre", value = "dir", required = false, description = "Pre-stage scripts, run first and recorded once each; where the provider cannot plan past them, only they run and the exit code is 2." },
                 new { flag = "--allow-destructive", value = (string?)null, required = false, description = "Apply destructive changes too." },
+                new { flag = "--lock-timeout", value = "duration", required = false, description = "Fail the apply if a statement waits longer than this (500ms, 30s, 2m) for a lock another session holds; the apply rolls back, nothing is applied. PostgreSQL only; off by default." },
                 new { flag = "--expect-plan", value = "hash", required = false, description = "Apply only if the computed plan matches this fingerprint (diff's planHash); a mismatch aborts with error code plan_mismatch before anything executes." },
                 new { flag = "--format", value = "json|text", required = false, description = "Output form; the json envelope embeds the executed plan." },
             },

@@ -30,6 +30,7 @@ public class PgSqlStateHintsTests
     [InlineData("42P07")] // duplicate_table
     [InlineData("53300")] // too_many_connections
     [InlineData("55006")] // object_in_use
+    [InlineData("55P03")] // lock_not_available
     [InlineData("57014")] // query_canceled
     public void Every_curated_code_has_a_non_empty_hint(string sqlState)
     {

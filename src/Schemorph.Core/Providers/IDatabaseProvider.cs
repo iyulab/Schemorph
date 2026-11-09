@@ -48,8 +48,10 @@ public interface IDatabaseProvider
     /// returns one). The core opens this once per apply, before the first
     /// execution call, and threads it through every <see cref="ApplyAsync"/>/
     /// <see cref="ExecuteScriptAsync"/> call that follows in the same apply.
+    /// <paramref name="options"/> carries what the caller asked of that transaction
+    /// (<see cref="ApplySessionOptions"/>); null asks for nothing.
     /// </summary>
-    Task<IApplySession?> BeginApplySessionAsync(string connectionString, CancellationToken cancellationToken = default);
+    Task<IApplySession?> BeginApplySessionAsync(string connectionString, ApplySessionOptions? options = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Opens a transaction that is never committed, for a read-only operation that has to plan as of

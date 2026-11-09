@@ -33,12 +33,31 @@ internal sealed class PgApplySession : IApplySession
     /// </summary>
     public string ConnectionString { get; }
 
-    public static async Task<PgApplySession> OpenAsync(string connectionString, CancellationToken cancellationToken)
+    public static async Task<PgApplySession> OpenAsync(
+        string connectionString, ApplySessionOptions? options, CancellationToken cancellationToken)
     {
         var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
         var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        return new PgApplySession(connection, transaction, connectionString);
+        var session = new PgApplySession(connection, transaction, connectionString);
+        if (options?.LockTimeout is { } timeout)
+        {
+            try
+            {
+                // SET LOCAL's parameterizable form: is_local = true scopes the setting to this
+                // transaction, so it ends with the commit or rollback and never leaks into the pool.
+                // Milliseconds with an explicit unit — the server's own default unit, spelled out.
+                await using var command = new NpgsqlCommand("SELECT set_config('lock_timeout', @value, true)", connection, transaction);
+                command.Parameters.AddWithValue("value", $"{(long)timeout.TotalMilliseconds}ms");
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+            catch
+            {
+                await session.DisposeAsync();
+                throw;
+            }
+        }
+        return session;
     }
 
     public async Task CommitAsync(CancellationToken cancellationToken = default)

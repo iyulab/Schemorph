@@ -223,6 +223,7 @@ internal sealed class SchemorphTools
         [Description("Apply destructive changes (data-holding DROPs) too")] bool allowDestructive = false,
         [Description("Optional directory of versioned migration scripts (V####__description.sql)")] string? migrationsDir = null,
         [Description("Optional directory of pre-stage scripts (V####__description.sql) that run once before the declarative stage — a rename the desired state cannot express; the plan is computed as of after the pending ones. Pass the same directory to every verb")] string? preDir = null,
+        [Description("Optional lock timeout — a whole number with a unit (500ms, 30s, 2m). A statement that waits longer than this for a lock another session holds fails and the whole apply rolls back, nothing applied. PostgreSQL only; omit to keep the server's own setting")] string? lockTimeout = null,
         CancellationToken cancellationToken = default)
     {
         if (ResolveUrl() is not { } url)
@@ -249,13 +250,22 @@ internal sealed class SchemorphTools
             return Error("invalid_arguments", "expectedPlanHash is required.",
                 "Call schemorph_diff first, review the plan, and pass its planHash.");
         }
+        TimeSpan? lockTimeoutValue = null;
+        if (lockTimeout is not null)
+        {
+            if (!ApplySessionOptions.TryParseLockTimeout(lockTimeout, out var parsedTimeout, out var lockTimeoutError))
+            {
+                return Error("invalid_arguments", lockTimeoutError, "Pass lockTimeout as e.g. \"30s\", or omit it.");
+            }
+            lockTimeoutValue = parsedTimeout;
+        }
 
         try
         {
             var (provider, ledger) = ProviderSelection.Current;
             var outcome = await ApplyOperation.RunAsync(
                 provider, ledger,
-                new ApplyOperation.Request(schemaDir, url, allowDestructive, migrationsDir, expectedPlanHash, preDir),
+                new ApplyOperation.Request(schemaDir, url, allowDestructive, migrationsDir, expectedPlanHash, preDir, lockTimeoutValue),
                 cancellationToken: cancellationToken);
 
             if (!outcome.Success)
@@ -353,6 +363,12 @@ internal sealed class SchemorphTools
         {
             return Error("redefine_failed", ex.Message,
                 "Break the cycle by extracting the shared logic into a separate object.");
+        }
+        catch (UnsupportedByProviderException ex)
+        {
+            // A declared boundary, not a failure: this provider cannot honor what was asked
+            // (a lock timeout where the apply is not one transaction). Nothing was touched.
+            return Error("not_implemented", ex.Message, ex.ToError().Hint);
         }
         catch (Exception ex)
         {
