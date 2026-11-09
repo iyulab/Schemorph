@@ -34,8 +34,10 @@ public sealed class CliContractTests : IDisposable
         if (url is not null) psi.Environment["SCHEMORPH_URL"] = url;
 
         using var process = Process.Start(psi)!;
+        // stderr is drained concurrently: a child that fills its pipe (usage text on an unknown verb) would block while we wait on stdout alone.
+        var stderrTask = process.StandardError.ReadToEndAsync();
         var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
+        var stderr = stderrTask.GetAwaiter().GetResult();
         process.WaitForExit();
         return new CliResult(process.ExitCode, stdout, stderr);
     }

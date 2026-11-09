@@ -77,8 +77,10 @@ public sealed class PublicTextInternalReferenceTests
         psi.ArgumentList.Add("-z");
 
         using var p = Process.Start(psi)!;
+        // stderr is drained concurrently: a child that fills its pipe (usage text on an unknown verb) would block while we wait on stdout alone.
+        var stderrTask = p.StandardError.ReadToEndAsync();
         var stdout = p.StandardOutput.ReadToEnd();
-        var stderr = p.StandardError.ReadToEnd();
+        var stderr = stderrTask.GetAwaiter().GetResult();
         p.WaitForExit();
 
         Assert.True(p.ExitCode == 0, $"`git ls-files` exited {p.ExitCode} in '{root}': {stderr}");
