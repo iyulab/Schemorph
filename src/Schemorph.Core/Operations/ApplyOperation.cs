@@ -514,11 +514,11 @@ public static class ApplyOperation
                 var engine = EngineErrors.Find(provider, ex);
                 var number = completed.Count + 1;
                 failed = step;
-                failure = (new RawMessage("Error", "online_execution_failed",
+                failure = (new RawMessage("Error", "online_execution_failed", Redaction.Redact(
                     $"Online statement {number} of {steps.Count} ({step.ObjectName}) failed: {engine?.Describe() ?? ex.Message} " +
                     "The transactional stages have committed and stay committed" +
                     (completed.Count == 0 ? "" : $", and {completed.Count} online statement(s) before this one completed") +
-                    ". Running the same apply again converges."), engine?.Info);
+                    ". Running the same apply again converges.")), engine?.Info);
                 break;
             }
         }
@@ -539,8 +539,10 @@ public static class ApplyOperation
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // The statements ran and committed; only their audit rows are missing. Said, not swallowed.
-            ledgerNote = new RawMessage("Warning", "online_ledger_incomplete",
-                $"{completed.Count} online statement(s) ran, but their history ledger rows could not be written: {ex.Message}");
+            // Redacted where it is made: this message joins the output after the success path's own
+            // redaction pass, and an exception message can carry the connection string.
+            ledgerNote = new RawMessage("Warning", "online_ledger_incomplete", Redaction.Redact(
+                $"{completed.Count} online statement(s) ran, but their history ledger rows could not be written: {ex.Message}"));
         }
         if (failed is not null)
         {

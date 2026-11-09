@@ -117,6 +117,11 @@ switch (verb)
                                           the desired state cannot express. The plan is
                                           computed as of after them; pass the same
                                           directory to apply
+              --online                    plan the online stage: concurrent index builds
+                                          and constraint validation move out of the
+                                          transactional script and run after the commit,
+                                          each on its own (not atomic). PostgreSQL only.
+                                          The planHash covers them — pass --online to apply
               --format json|text|sql      output form (default: text on a terminal,
                                           json when stdout is redirected). sql renders
                                           the whole plan as one review document, in
@@ -134,6 +139,12 @@ switch (verb)
               --allow-destructive         apply destructive changes too
               --expect-plan <hash>        apply only if the computed plan matches this
                                           fingerprint (printed by diff); mismatch = abort
+              --online                    run the online stage: concurrent index builds and
+                                          constraint validation run after the commit, each
+                                          on its own (not atomic; a failure there leaves the
+                                          rest committed and the same apply finishes it).
+                                          PostgreSQL only; off by default. Gate it with the
+                                          planHash of a diff given --online
               --lock-timeout <duration>   fail the apply if a statement waits longer than this
                                           for a lock another session holds (500ms, 30s, 2m).
                                           PostgreSQL only; off by default (the server's own
@@ -209,6 +220,8 @@ async Task<int> RunApply(string[] args, string format)
             "Pass the directory that holds the V####__description.sql scripts to run before the declarative stage.");
     }
 
+    var online = args.Contains("--online");
+
     TimeSpan? lockTimeout = null;
     if (ParseOption(args, "--lock-timeout") is { } lockTimeoutText)
     {
@@ -227,7 +240,7 @@ async Task<int> RunApply(string[] args, string format)
         var outcome = await ApplyOperation.RunAsync(
             provider, ledger,
             new ApplyOperation.Request(schemaDir, url, allowDestructive, migrationsDir,
-                ParseOption(args, "--expect-plan"), preDir, lockTimeout),
+                ParseOption(args, "--expect-plan"), preDir, lockTimeout, online),
             onPlan: plan =>
             {
                 if (format != "json")
@@ -292,6 +305,11 @@ async Task<int> RunApply(string[] args, string format)
                     warnings = preRun.Warnings,
                 },
                 deferred = outcome.Deferred,
+                online = outcome.Online is not { } onlineRun ? null : new
+                {
+                    completed = onlineRun.Completed.Count,
+                    total = onlineRun.Total,
+                },
             }, new JsonSerializerOptions
             {
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -322,6 +340,11 @@ async Task<int> RunApply(string[] args, string format)
             {
                 Console.WriteLine($"Reconciled {redefineRun.Reconciled.Count} existing object(s) already matching their files (recorded, nothing executed).");
                 foreach (var name in redefineRun.Reconciled) Console.WriteLine($"  reconciled {name}");
+            }
+            if (outcome.Online is { } onlineRun)
+            {
+                Console.WriteLine($"Online stage: {onlineRun.Completed.Count} of {onlineRun.Total} statement(s) ran after the commit.");
+                foreach (var step in onlineRun.Completed) Console.WriteLine($"  online   {step.ObjectName}  {step.Sql}");
             }
             if (migrationRun is not null)
             {
@@ -550,13 +573,15 @@ async Task<int> RunDiff(string[] args, string format)
             "Pass the directory that holds the V####__description.sql scripts to run before the declarative stage.");
     }
 
+    var online = args.Contains("--online");
+
     try
     {
         // The diff itself lives in the core (DiffOperation) so the CLI and the MCP
         // surface render the same operation; this method only renders and maps errors.
         var (provider, ledger) = ProviderSelection.Current;
         var result = await DiffOperation.RunAsync(
-            provider, ledger, schemaDir, url, allowDestructive, migrationsDir: migrationsDir, preDir: preDir);
+            provider, ledger, schemaDir, url, allowDestructive, migrationsDir: migrationsDir, preDir: preDir, online: online);
 
         if (!result.Success)
         {
@@ -588,6 +613,12 @@ async Task<int> RunDiff(string[] args, string format)
             Console.WriteLine(format == "json" ? PlanRenderer.ToJson(plan) : PlanRenderer.ToText(plan));
         }
         return plan.HasPendingWork ? ExitChangesPending : ExitNoChanges;
+    }
+    catch (UnsupportedByProviderException ex)
+    {
+        // A declared boundary, not a failure: this provider cannot plan what was asked (the online
+        // stage on a provider that has none). Nothing was touched.
+        return Emit(format, ex.ToError());
     }
     catch (TemporaryWorkspaceException ex)
     {

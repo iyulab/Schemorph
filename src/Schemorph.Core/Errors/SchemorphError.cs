@@ -94,6 +94,7 @@ public sealed record SchemorphError(string Kind, string Code, string Message, st
         // confirm — the database engine's answer, like the other stage failures.
         "compare_failed" or "apply_failed" or "inspect_failed"
             or "redefine_execution_failed" or "migration_execution_failed" or "pre_stage_execution_failed"
+            or "online_execution_failed"
             or "commit_failed" or "review_script_unavailable"
             => "execution",
         _ => "internal",

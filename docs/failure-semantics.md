@@ -10,7 +10,9 @@ failed.
 ## An apply runs in three stages
 
 They always run in this order, and each has its own failure behaviour. When `--pre` is
-given and pre-stage scripts are pending, they run first (stage 0, below the table).
+given and pre-stage scripts are pending, they run first (stage 0, below the table). When
+`--online` is given on PostgreSQL, a fourth stage runs after the three have committed
+([below](#the-online-stage-runs-after-the-commit)).
 
 | # | Stage | What it does | If it fails |
 |---|---|---|---|
@@ -157,6 +159,56 @@ Not every failure leaves the database in a partial state — most do not touch i
 The ledger table is created before any of this, so failures are recordable too. It is
 excluded from comparison, so creating it never shows up in a plan.
 
+## The online stage runs after the commit
+
+`apply --online` (MCP: `online`; PostgreSQL only) moves the statements that cannot join the apply's
+transaction out of it and runs them afterwards. Two kinds of work move, only for tables that already
+exist:
+
+- an index the plan builds or rebuilds is built `CREATE INDEX CONCURRENTLY` (a rebuilt one is dropped
+  `DROP INDEX CONCURRENTLY` right before), so the table is not held under the strong lock the plain
+  forms take;
+- a CHECK or FOREIGN KEY the plan adds is added `NOT VALID` inside the transaction - enforced for new
+  rows at once, a change that touches no existing row - and validated afterwards by `VALIDATE CONSTRAINT`,
+  which scans under a weaker lock. A constraint left `NOT VALID` by an earlier run is validated the same way.
+
+Everything else stays in the transaction: anything on a table the apply creates (it is empty), PRIMARY KEY,
+UNIQUE and EXCLUDE constraints (they have no `NOT VALID` form), a unique index that a foreign key added by
+the same plan points at (the key needs it to exist when it is added), and the drop of an index the desired
+state no longer declares.
+
+**The stage is not atomic, and says so.** Each statement runs on a connection of its own, outside any
+transaction, and commits by itself. The plan lists them in `online[]` ([plan format 1.12](plan-format.md)),
+after the transactional script, and the review document renders them as the last stage, marked "NOT atomic".
+`planHash` covers them: a plan reviewed without `--online` does not open an apply given it, and the other way
+round.
+
+**If a statement fails**, stages 1-3 stay committed - the error says so (`Durability` is *committed*, never
+*rolled back*) - and reports `online_execution_failed`, stage `online`, with how many online statements
+completed. What the failure leaves is exactly what the next plan sees, which is why re-running the same
+apply converges:
+
+| A statement that failed | What it leaves | The next plan |
+|---|---|---|
+| `CREATE INDEX CONCURRENTLY` (duplicate data under a unique index, an interrupted build) | an **invalid** index of the declared definition | drops it and builds it again, concurrently |
+| `VALIDATE CONSTRAINT` (rows that violate it) | the constraint, `NOT VALID` | the validation alone |
+| `DROP INDEX CONCURRENTLY`, before a rebuild | no index | builds it |
+| a lock another session holds, with `--lock-timeout` | nothing of that statement | the statement again |
+
+Two things about this stage are different from the three above and worth knowing before using it:
+
+- **An index that is rebuilt is missing between its drop and the end of its build**, and stays missing if the
+  build fails (the failed build leaves an invalid one, which the engine does not use). The stage trades the
+  strong lock for that window; if the window matters, build the replacement under a new name first and drop the
+  old one in a later apply.
+- **There is no client-side time limit** on an online statement: building an index over a large table takes as
+  long as it takes. What bounds waiting is `--lock-timeout`, which applies to each online statement alone (a
+  statement that cannot get its lock fails with `55P03` and can be re-run) - it is not a limit on the build.
+
+A run cancelled while the stage is under way (Ctrl+C, a dropped MCP call) leaves the statements already
+committed as they are and writes no ledger rows for them; re-running the same apply plans what is left. A
+migration in the same apply cannot depend on an index the online stage builds - the stage runs after migrations.
+
 ## A lock another session holds
 
 On PostgreSQL the apply is one transaction, so a statement that needs a lock another session
@@ -173,7 +225,9 @@ re-run as everywhere on this page: find the session holding the lock (`pg_locks`
 The option is off by default, which leaves the server's own setting in force (PostgreSQL's is no
 timeout). It bounds the statements of the apply's transaction; the ledger's set-up runs on
 separate connections before that transaction opens and is not covered. A provider whose apply
-is not one transaction (SQL Server) refuses the option with `not_implemented`.
+is not one transaction (SQL Server) refuses the option with `not_implemented`. With `--online`
+the same bound applies to each statement of the [online stage](#the-online-stage-runs-after-the-commit),
+which fails alone and leaves the rest committed.
 
 ## See also
 

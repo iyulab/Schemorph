@@ -9,6 +9,22 @@ change **additively**: consumers must ignore properties they do not know.
 
 ### Added
 
+- **PostgreSQL: an opt-in `online` stage for `apply`** - `schemorph diff --online` and `schemorph apply --online`
+  (MCP: `online`). Builds an index with `CREATE INDEX CONCURRENTLY` and validates a CHECK or FOREIGN KEY added
+  `NOT VALID`, *after* the apply's transaction has committed, each statement on its own - so a large table is not
+  held under the strong lock the in-transaction forms take. It applies to tables that already exist; anything
+  on a table the apply creates, PRIMARY KEY / UNIQUE / EXCLUDE constraints, and a unique index a foreign key added
+  by the same plan points at stay in the transaction. The plan lists the statements in a new `online[]`
+  ([plan format 1.12](docs/plan-format.md)); `planHash` covers them, so a plan reviewed without the option does
+  not open an apply given it. The review document (`diff --format sql`) shows them as a last stage marked as
+  not atomic. A statement that fails leaves stages 1-3 committed and is reported as `online_execution_failed`
+  (stage `online`, with how many completed); it leaves an invalid index or a `NOT VALID` constraint that the next
+  plan sees, so re-running the same apply converges. `--lock-timeout` applies to each online statement. Off by
+  default - without the option the plan and the apply are exactly what they were - and refused with
+  `not_implemented` on a provider without the stage (SQL Server). See
+  [failure-semantics.md](docs/failure-semantics.md#the-online-stage-runs-after-the-commit) for what it moves and
+  what it does not guarantee, and [limitations.md](docs/limitations.md) for the cases it does not cover.
+
 - **PostgreSQL: an opt-in lock timeout for `apply`** — `schemorph apply --lock-timeout 30s` (and the MCP tool's
   `lockTimeout` argument; `500ms`, `30s` or `2m`). A PostgreSQL apply is one transaction, so a statement that has to
   wait for a lock another session holds used to wait for as long as that session held on, with the whole apply

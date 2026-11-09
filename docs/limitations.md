@@ -209,8 +209,21 @@ The two cannot both hold, and which one to give up is a decision about your
 database, not about this tool. So a desired state containing `CONCURRENTLY` is
 refused (`not_implemented`) rather than quietly stripped of the keyword or quietly
 stripped of the guarantee. Declare the index without `CONCURRENTLY` to let Schemorph
-build it inside the apply, or build it by hand outside Schemorph and declare it
-plainly afterwards — the next diff will find it already there and plan nothing.
+build it inside the apply — or give up the guarantee for that one apply, explicitly:
+`apply --online` (MCP: `online`) builds the index after the transaction has committed,
+with `CONCURRENTLY`, and validates a CHECK or FOREIGN KEY it added `NOT VALID` the same
+way. The stage is opt-in per apply, never chosen from the table's size, and it is **not
+atomic** — see [failure-semantics.md](failure-semantics.md#the-online-stage-runs-after-the-commit)
+for what it moves, what it leaves when a statement fails, and why re-running converges.
+The declared index never carries the keyword: how an index is built is a property of the
+apply, not of the state.
+
+What the option does not cover: **a partitioned table's indexes** (PostgreSQL does not
+build those concurrently - the statement fails and the stage reports it), **PRIMARY KEY,
+UNIQUE and EXCLUDE constraints** (no `NOT VALID` form, so they are added in the
+transaction as before), and **SQL Server**, whose online options are a separate decision
+(the option is refused there with `not_implemented`). A migration that needs an index the
+online stage builds cannot use it in the same apply - migrations run before the stage.
 
 ## A PostgreSQL function/procedure/trigger that changes shape fails loudly, not gracefully
 
@@ -335,8 +348,9 @@ SQL Server is complete. PostgreSQL now declares the **same capability range** �
 tables, columns, constraints, indexes, the target schema, views, functions,
 procedures, triggers, and versioned migrations ([ADR-0003](adr/0003-postgres-as-second-provider.md),
 [ADR-0007](adr/0007-postgres-engine-selection.md)). What remains outside the
-declaration — non-transactional DDL such as `CREATE INDEX CONCURRENTLY`, which
-cannot join the one transaction the declarative stage owns — is **refused with an
+declaration — non-transactional DDL such as `CREATE INDEX CONCURRENTLY` written into
+a desired state, which cannot join the one transaction the declarative stage owns (the
+opt-in `--online` stage covers the two cases it can plan; see above) — is **refused with an
 error naming what the provider does support**, never half-planned.
 
 The refusal is the contract, not a bug: a plan that cannot see a difference must
