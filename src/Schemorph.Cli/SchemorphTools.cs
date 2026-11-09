@@ -274,20 +274,27 @@ internal sealed class SchemorphTools
                 // Stages that ran after the publish committed carry what they left
                 // behind — same envelope the CLI emits, so an agent reads one shape.
                 if (outcome.Stage is ApplyOperation.FailureStage.PreStage or ApplyOperation.FailureStage.Redefine
-                    or ApplyOperation.FailureStage.Migration or ApplyOperation.FailureStage.Commit)
+                    or ApplyOperation.FailureStage.Migration or ApplyOperation.FailureStage.Commit
+                    or ApplyOperation.FailureStage.Online)
                 {
                     var (stageCode, stageLabel) = outcome.Stage switch
                     {
                         ApplyOperation.FailureStage.PreStage => ("pre_stage_execution_failed", "pre"),
                         ApplyOperation.FailureStage.Redefine => ("redefine_execution_failed", "redefine"),
                         ApplyOperation.FailureStage.Migration => ("migration_execution_failed", "migration"),
+                        // The transactional stages committed; a statement after the commit failed.
+                        ApplyOperation.FailureStage.Online => ("online_execution_failed", "online"),
                         // Everything ran; only the session's own commit failed to
                         // confirm — can only happen under Transactional atomicity.
                         _ => ("commit_failed", "commit"),
                     };
                     // `committed` is what the database is known to hold — zero once
                     // the session rolled back — never merely what ran.
-                    var hint = outcome.Durability switch
+                    var hint = outcome.Stage == ApplyOperation.FailureStage.Online
+                        ? $"The transactional stages committed and stay committed; {outcome.Online?.Completed.Count ?? 0} of " +
+                          $"{outcome.Online?.Total ?? 0} online statement(s) completed. Fix the cause and call apply again with the " +
+                          "same arguments - it is convergent and finishes the rest; see docs/failure-semantics.md."
+                        : outcome.Durability switch
                     {
                         ApplyOperation.Durability.RolledBack =>
                             "The session was rolled back — nothing was committed. Re-running is the " +

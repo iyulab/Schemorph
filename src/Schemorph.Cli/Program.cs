@@ -249,7 +249,8 @@ async Task<int> RunApply(string[] args, string format)
                     Fail(format, "plan_mismatch", outcome.Errors[0].Text,
                         "Re-run diff (with the same --migrations and --pre, if this apply runs them), review the new plan, and pass its hash with --expect-plan."),
                 ApplyOperation.FailureStage.PreStage or ApplyOperation.FailureStage.Redefine
-                    or ApplyOperation.FailureStage.Migration or ApplyOperation.FailureStage.Commit =>
+                    or ApplyOperation.FailureStage.Migration or ApplyOperation.FailureStage.Commit
+                    or ApplyOperation.FailureStage.Online =>
                     FailApplyStage(format, outcome),
                 _ => Emit(format, SchemorphError.Create("apply_failed",
                     Redaction.Redact(Detail(format, outcome.Errors, "Apply reported errors.")), SeeMessages(format)) with
@@ -715,6 +716,9 @@ static int FailApplyStage(string format, ApplyOperation.Outcome outcome)
         ApplyOperation.FailureStage.PreStage => ("pre_stage_execution_failed", "pre"),
         ApplyOperation.FailureStage.Redefine => ("redefine_execution_failed", "redefine"),
         ApplyOperation.FailureStage.Migration => ("migration_execution_failed", "migration"),
+        // The transactional stages committed; a statement after the commit failed
+        // (docs/failure-semantics.md, the online stage).
+        ApplyOperation.FailureStage.Online => ("online_execution_failed", "online"),
         // Everything ran; only the session's own commit failed to confirm
         // (docs/failure-semantics.md#commit-acknowledgement-failures) — this
         // can only happen under Transactional atomicity.
@@ -729,7 +733,9 @@ static int FailApplyStage(string format, ApplyOperation.Outcome outcome)
     // the commit itself did not confirm, the client cannot tell — re-running
     // either sees the work already done (an empty plan) or redoes it, never
     // doubles it.
-    var hint = outcome.Durability switch
+    var hint = outcome.Stage == ApplyOperation.FailureStage.Online
+        ? OnlineHint(outcome)
+        : outcome.Durability switch
     {
         ApplyOperation.Durability.RolledBack =>
             $"The session was rolled back — nothing was committed ({DescribeRan(outcome.Attempted)} " +
@@ -753,6 +759,15 @@ static int FailApplyStage(string format, ApplyOperation.Outcome outcome)
         Engine = outcome.Engine,
     });
 }
+
+// The online stage runs after the transactional stages have committed, one statement at a time, so the
+// hint says how far it got and that the same apply finishes it: a build that failed leaves an invalid
+// index and a constraint added NOT VALID stays unvalidated, and the next plan sees both
+// (docs/failure-semantics.md).
+static string OnlineHint(ApplyOperation.Outcome outcome) =>
+    $"{Describe(outcome.Committed)} {outcome.Online?.Completed.Count ?? 0} of {outcome.Online?.Total ?? 0} online " +
+    "statement(s) completed - those stay committed. Fix the cause and re-run the same apply (with the same options) - " +
+    "it is convergent and finishes the rest; see docs/failure-semantics.md.";
 
 static string Describe(CommittedWork c) =>
     c is { Declarative: 0, Redefines: 0, Migrations: 0, Pre: 0 }

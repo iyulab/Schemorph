@@ -26,7 +26,8 @@ public static class ApplyOperation
         string? MigrationsDir = null,
         string? ExpectedPlanHash = null,
         string? PreDir = null,
-        TimeSpan? LockTimeout = null);
+        TimeSpan? LockTimeout = null,
+        bool Online = false);
 
     /// <summary>
     /// Where an apply stopped. The strategy order (ADR-0002) is also the order of
@@ -42,7 +43,15 @@ public static class ApplyOperation
     /// actually persisted the work — it must be told the attempt, not handed a
     /// false success.
     /// </summary>
-    public enum FailureStage { None, DesiredState, PlanMismatch, PreStage, Publish, Redefine, Migration, Commit }
+    public enum FailureStage { None, DesiredState, PlanMismatch, PreStage, Publish, Redefine, Migration, Commit, Online }
+
+    /// <summary>
+    /// What the online stage (ADR-0009) did. It runs after the transactional stages have committed, each
+    /// statement on its own, so unlike every other stage its progress is durable one statement at a time:
+    /// <paramref name="Completed"/> are committed whatever became of the rest.
+    /// </summary>
+    /// <param name="Failed">The statement that failed; null when the stage ran to the end.</param>
+    public sealed record OnlineRun(IReadOnlyList<OnlineStep> Completed, OnlineStep? Failed, int Total);
 
     /// <summary>
     /// What the database holds of the work a failed apply reports in
@@ -71,6 +80,13 @@ public static class ApplyOperation
     {
         /// <summary>The pre-stage scripts that ran (before the declarative stage); null when there were none to run.</summary>
         public MigrationRunResult? PreScripts { get; init; }
+
+        /// <summary>
+        /// The online stage's progress; null when the apply planned none. On a failure at
+        /// <see cref="FailureStage.Online"/> every earlier stage is committed
+        /// (<see cref="Durability.Committed"/>) and <see cref="OnlineRun.Completed"/> says how far the stage got.
+        /// </summary>
+        public OnlineRun? Online { get; init; }
 
         /// <summary>
         /// True when this apply ran the pending pre-stage scripts and stopped there, because the provider
@@ -111,6 +127,10 @@ public static class ApplyOperation
         IDatabaseProvider provider, ILedgerStore ledger, Request request,
         Action<Plan>? onPlan = null, CancellationToken cancellationToken = default)
     {
+        // The online stage moves statements out of the apply's transaction (ADR-0009); a provider that
+        // cannot plan it is refused before anything is read or touched, as diff refuses it.
+        DiffOperation.EnsureOnlineSupported(provider, request.Online);
+
         // A lock timeout is a property of the apply-unit transaction. A provider that owns no such
         // transaction (Partial — SQL Server's publish runs on a connection DacFx owns) has nowhere
         // to put it, and silently ignoring a safety setting is worse than refusing it: refuse
@@ -226,7 +246,8 @@ public static class ApplyOperation
         try
         {
             result = await provider.ApplyAsync(
-                new ApplyRequest(state, request.ConnectionString, WithholdColumnDrops: !request.AllowDestructive),
+                new ApplyRequest(state, request.ConnectionString, WithholdColumnDrops: !request.AllowDestructive,
+                    Online: request.Online),
                 (change, script) => PlanBuilder.Gate(change, script, request.AllowDestructive),
                 computed =>
                 {
@@ -419,6 +440,32 @@ public static class ApplyOperation
             }
         }
 
+        // The online stage (ADR-0009): everything above has committed, so these statements - which cannot
+        // join a transaction - run now, each on its own. A failure here leaves every earlier stage committed.
+        OnlineRun? onlineRun = null;
+        var extraMessages = new List<RawMessage>();
+        if (result.OnlineSteps.Count > 0)
+        {
+            var (run, failure, ledgerNote) = await RunOnlineStageAsync(
+                provider, ledger, request, result.OnlineSteps, cancellationToken);
+            onlineRun = run;
+            if (ledgerNote is not null) extraMessages.Add(ledgerNote);
+            if (failure is not null)
+            {
+                return Failure(FailureStage.Online, new[] { failure.Value.Message }) with
+                {
+                    Plan = plan,
+                    Applied = result.AppliedChanges,
+                    Redefines = redefineRun,
+                    Migrations = migrationRun,
+                    PreScripts = preRun,
+                    Online = run,
+                    Durability = Durability.Committed,
+                    Engine = failure.Value.Engine,
+                };
+            }
+        }
+
         // Schemorph's own bookkeeping stays invisible in user-facing output, and
         // redefine-routed exclusions are not "excluded" — they show as redefinitions.
         var excludedVisible = result.ExcludedChanges
@@ -427,13 +474,82 @@ public static class ApplyOperation
         var visibleMessages = messages
             .Where(m => !LedgerObjects.IsLedgerObject(m.Text))
             .Select(m => m with { Text = Redaction.Redact(m.Text) })
+            .Concat(extraMessages)
             .ToList();
 
         return new Outcome(true, FailureStage.None, Array.Empty<RawMessage>(),
             plan, result.AppliedChanges, excludedVisible, visibleMessages, redefineRun, migrationRun)
         {
             PreScripts = preRun,
+            Online = onlineRun,
         };
+    }
+
+    /// <summary>
+    /// Runs the online stage's statements in order, stopping at the first failure. The provider executes one
+    /// statement at a time (it owns the dialect and the connection); the order, the stop, and the ledger are
+    /// the core's, so every provider that plans the stage reports it the same way. Each statement that ran is
+    /// recorded in the history ledger on its own connection, after the fact - a statement committed by
+    /// itself cannot be recorded in a transaction that has already ended. A failure is recorded best-effort,
+    /// like a failed publish.
+    /// </summary>
+    private static async Task<(OnlineRun Run, (RawMessage Message, EngineErrorInfo? Engine)? Failure, RawMessage? LedgerNote)>
+        RunOnlineStageAsync(
+            IDatabaseProvider provider, ILedgerStore ledger, Request request,
+            IReadOnlyList<OnlineStep> steps, CancellationToken cancellationToken)
+    {
+        var completed = new List<OnlineStep>();
+        (RawMessage Message, EngineErrorInfo? Engine)? failure = null;
+        OnlineStep? failed = null;
+
+        foreach (var step in steps)
+        {
+            try
+            {
+                await provider.ExecuteOnlineStepAsync(request.ConnectionString, step, request.LockTimeout, cancellationToken);
+                completed.Add(step);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                var engine = EngineErrors.Find(provider, ex);
+                var number = completed.Count + 1;
+                failed = step;
+                failure = (new RawMessage("Error", "online_execution_failed",
+                    $"Online statement {number} of {steps.Count} ({step.ObjectName}) failed: {engine?.Describe() ?? ex.Message} " +
+                    "The transactional stages have committed and stay committed" +
+                    (completed.Count == 0 ? "" : $", and {completed.Count} online statement(s) before this one completed") +
+                    ". Running the same apply again converges."), engine?.Info);
+                break;
+            }
+        }
+
+        var run = new OnlineRun(completed, failed, steps.Count);
+
+        RawMessage? ledgerNote = null;
+        try
+        {
+            if (completed.Count > 0)
+            {
+                await ledger.AppendAsync(request.ConnectionString, completed
+                    .Select(c => new LedgerEntry("declarative", c.ObjectName, "Online", Checksum: null,
+                        Succeeded: true, Detail: c.Sql))
+                    .ToList(), session: null, cancellationToken);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The statements ran and committed; only their audit rows are missing. Said, not swallowed.
+            ledgerNote = new RawMessage("Warning", "online_ledger_incomplete",
+                $"{completed.Count} online statement(s) ran, but their history ledger rows could not be written: {ex.Message}");
+        }
+        if (failed is not null)
+        {
+            await ledger.AppendFailureBestEffortAsync(request.ConnectionString, new LedgerEntry(
+                "declarative", failed.ObjectName, "Online", Checksum: null,
+                Succeeded: false, Detail: failure!.Value.Message.Text), cancellationToken);
+        }
+
+        return (run, failure, ledgerNote);
     }
 
     /// <summary>

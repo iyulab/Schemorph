@@ -95,6 +95,20 @@ public interface IDatabaseProvider
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Runs one statement of the online stage (ADR-0009) on a connection of its own, outside any
+    /// transaction, so it commits by itself - after the apply's session has committed. A statement that
+    /// fails throws and leaves everything before it as it was; deciding what to do next (stop, report the
+    /// stage, record the ledger) is the caller's. <paramref name="lockTimeout"/>, when given, bounds the
+    /// wait for a lock for this statement alone. No time limit is put on the statement itself: a build over
+    /// a large table is expected to run for a long time. The default refuses, for a provider that never
+    /// plans the stage (<see cref="ProviderCapabilities.SupportsOnlineStage"/>).
+    /// </summary>
+    Task ExecuteOnlineStepAsync(
+        string connectionString, OnlineStep step, TimeSpan? lockTimeout = null, CancellationToken cancellationToken = default)
+        => throw new UnsupportedByProviderException(Name, "the online stage",
+            supported: "the online stage on providers that can run a statement outside the apply's transaction");
+
+    /// <summary>
     /// Execute a SQL script (dialect knowledge: batch separators, transactions).
     /// Runs all batches in one transaction where the database allows.
     /// </summary>

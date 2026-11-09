@@ -64,6 +64,26 @@ internal static class PgSqlStateHints
                     "timeout on a large table.",
     };
 
+    /// <summary>
+    /// The hints that differ when the statement ran in the online stage (ADR-0009). That stage runs after
+    /// the apply's transaction has committed, one statement at a time, so a hint written for a statement
+    /// inside the transaction - "has rolled back: nothing was applied" - would be false there. A code absent
+    /// here keeps its ordinary hint.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> ByCodeOnline = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["23503"] = "Existing rows violate the foreign key. It was added NOT VALID, so it is already enforced for new rows; " +
+                    "fix the referencing data, then re-run the same apply - the plan is the validation alone.",
+        ["23505"] = "A unique index build found duplicate values. The failed build left an invalid index; the next " +
+                    "run drops and rebuilds it. De-duplicate the data, then re-run the same apply.",
+        ["23514"] = "Existing rows violate the CHECK constraint. It was added NOT VALID, so it is already enforced for new " +
+                    "rows; bring the existing rows into compliance, then re-run the same apply - the plan is the validation alone.",
+        ["55P03"] = "A statement of the online stage waited longer than the lock timeout for a lock another session holds. " +
+                    "The apply's transactional stages have committed and stay committed; this statement did not run. " +
+                    "Find the session holding the lock (pg_locks, pg_stat_activity), wait for it to finish, then re-run " +
+                    "the same apply - or raise the lock timeout if the wait is expected.",
+    };
+
     /// <summary>The known hint for <paramref name="sqlState"/>, or <c>null</c> for an unrecognized code.</summary>
     public static string? TryGet(string sqlState) => ByCode.GetValueOrDefault(sqlState);
 
@@ -75,4 +95,12 @@ internal static class PgSqlStateHints
     /// </summary>
     public static EngineError Describe(PostgresException exception)
         => new(exception.SqlState, exception.MessageText, TryGet(exception.SqlState));
+
+    /// <summary>
+    /// The same, for a statement that ran in the online stage: its own hint where the stage changes what
+    /// is true (<see cref="ByCodeOnline"/>), the ordinary one otherwise.
+    /// </summary>
+    public static EngineError DescribeOnline(PostgresException exception)
+        => new(exception.SqlState, exception.MessageText,
+            ByCodeOnline.GetValueOrDefault(exception.SqlState) ?? TryGet(exception.SqlState));
 }

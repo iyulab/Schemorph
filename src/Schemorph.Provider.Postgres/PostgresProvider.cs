@@ -262,6 +262,54 @@ public sealed class PostgresProvider : IDatabaseProvider
         return new ApplyResult(true, included, excluded, Array.Empty<RawMessage>()) { OnlineSteps = onlineSteps };
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// A connection of its own and no transaction, which is the whole point: <c>CREATE INDEX CONCURRENTLY</c>
+    /// and <c>DROP INDEX CONCURRENTLY</c> refuse to run inside one. Three consequences, each learned by
+    /// how the engine behaves rather than assumed:
+    /// <list type="bullet">
+    /// <item>Every command carries exactly one statement. Npgsql sends a command with several statements as
+    /// one implicit transaction, and the concurrent forms fail in it.</item>
+    /// <item><c>SET LOCAL</c> and <c>set_config(…, true)</c> end with the transaction they are in; outside
+    /// one they vanish at once. The schema (the index definitions leave the table unqualified) and the lock
+    /// timeout are therefore set for the session, on this connection only - the pool resets them when the
+    /// connection is returned, which a test checks.</item>
+    /// <item>The default 30-second command timeout would cut a build of a large table short. The statement
+    /// gets none; what bounds waiting is the lock timeout, which is the user's to set.</item>
+    /// </list>
+    /// </remarks>
+    public async Task ExecuteOnlineStepAsync(
+        string connectionString, OnlineStep step, TimeSpan? lockTimeout = null, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using (var schema = new NpgsqlCommand(
+            $"SET search_path TO {DesiredStateRenderer.Quote(TargetSchemaOf(connectionString))}", connection))
+        {
+            await schema.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        if (lockTimeout is { } timeout)
+        {
+            await using var limit = new NpgsqlCommand("SELECT set_config('lock_timeout', @value, false)", connection);
+            limit.Parameters.AddWithValue("value", $"{(long)timeout.TotalMilliseconds}ms");
+            await limit.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var command = new NpgsqlCommand(step.Sql, connection) { CommandTimeout = 0 };
+        try
+        {
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (PostgresException ex)
+        {
+            // Wrapped so the error is described for the stage it happened in: the ordinary hints speak of
+            // a transaction that rolled back, which is not what happened to a statement run after the commit.
+            throw new PgOnlineStepException(ex);
+        }
+    }
+
     public Task ExecuteScriptAsync(string connectionString, string script, IApplySession? session = null, CancellationToken cancellationToken = default)
         => ExecuteScriptAsync(connectionString, script, Array.Empty<LedgerEntry>(), session, cancellationToken);
 
@@ -271,8 +319,12 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// Client-side failures (a refused connection, a timeout before the server answered) carry
     /// no SQLSTATE and are not described here.
     /// </summary>
-    public EngineError? DescribeEngineError(Exception exception)
-        => exception is PostgresException pg ? PgSqlStateHints.Describe(pg) : null;
+    public EngineError? DescribeEngineError(Exception exception) => exception switch
+    {
+        PgOnlineStepException online => PgSqlStateHints.DescribeOnline(online.Engine),
+        PostgresException pg => PgSqlStateHints.Describe(pg),
+        _ => null,
+    };
 
     /// <summary>
     /// Redefine scripts (P3) carry bare, unqualified object names — the same
