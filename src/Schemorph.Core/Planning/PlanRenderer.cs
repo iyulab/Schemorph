@@ -55,6 +55,10 @@ public static class PlanRenderer
         plan.Migrations,
         // Pending pre-stage scripts the apply runs before the declarative stage — same shape, same binding.
         Pre = plan.PreScripts,
+        // The statements that run after the transactional stages have committed, each on its own (the
+        // online stage, ADR-0009) — empty unless the plan was computed with the stage requested. They
+        // also appear last in their object's `sql`; this list is what marks them as non-atomic. Bound by planHash.
+        plan.Online,
     };
 
     public static string ToJson(Plan plan) => JsonSerializer.Serialize(ToJsonModel(plan), JsonOptions);
@@ -95,6 +99,16 @@ public static class PlanRenderer
             foreach (var migration in plan.Migrations)
             {
                 sb.AppendLine($"  > {migration.FileName}  sha256:{migration.Checksum}");
+            }
+        }
+
+        if (plan.Online.Count > 0)
+        {
+            sb.AppendLine($"Online stage: {plan.Online.Count} statement(s) run after the transactional stages commit, each on its own — " +
+                          "they are not part of the atomic apply (bound by the plan hash)");
+            foreach (var step in plan.Online)
+            {
+                sb.AppendLine($"  ^ {step.ObjectName}  {step.Sql}");
             }
         }
 

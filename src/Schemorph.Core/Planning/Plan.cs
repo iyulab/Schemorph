@@ -116,8 +116,19 @@ public sealed record Plan(
     string? UpdateScript = null,
     IReadOnlyList<PlanExclusion>? Excluded = null,
     IReadOnlyList<PlanMigration>? Migrations = null,
-    IReadOnlyList<PlanMigration>? PreScripts = null)
+    IReadOnlyList<PlanMigration>? PreScripts = null,
+    IReadOnlyList<OnlineStep>? Online = null)
 {
+    /// <summary>
+    /// Never null; empty unless the plan was computed with the online stage requested (ADR-0009). The
+    /// statements that run <em>after</em> the transactional stages have committed, each on its own, in the
+    /// order they run — a concurrent index build, the validation of a constraint stage 1 added
+    /// <c>NOT VALID</c>. They are also part of their object's <see cref="PlanAction.Sql"/>, last; this list
+    /// is what says which of those statements are not part of the atomic apply. Bound by
+    /// <see cref="PlanFingerprint"/>: they execute in the apply, so a different set is a different plan.
+    /// </summary>
+    public IReadOnlyList<OnlineStep> Online { get; init; } = Online ?? Array.Empty<OnlineStep>();
+
     /// <summary>Never null; an empty list means the script and the plan agree.</summary>
     public IReadOnlyList<PlanExclusion> Excluded { get; init; } = Excluded ?? Array.Empty<PlanExclusion>();
 
@@ -140,7 +151,7 @@ public sealed record Plan(
     /// additions (consumers must ignore unknown properties); the major version
     /// increments for breaking changes. Independent of the product version.
     /// </summary>
-    public const string CurrentFormatVersion = "1.11";   // 1.11: pre[] — pending pre-stage scripts, bound by planHash (see docs/plan-format.md)
+    public const string CurrentFormatVersion = "1.12";   // 1.12: online[] — the post-commit statements, bound by planHash (1.11: pre[]; see docs/plan-format.md)
 
     public bool HasChanges => Actions.Count > 0;
 

@@ -63,8 +63,9 @@ public static class ReviewScriptRenderer
         var declarative = plan.Actions.Where(a => a.Operation != PlanOperation.Redefine).ToList();
         var redefines = plan.Actions.Where(a => a.Operation == PlanOperation.Redefine).ToList();
 
-        // Y6 — honesty over completeness-shaped output.
-        if (declarative.Count > 0 && string.IsNullOrWhiteSpace(updateScript))
+        // Y6 — honesty over completeness-shaped output. A declarative change whose every statement is an
+        // online one has no transactional script by design: the online section below carries it.
+        if (declarative.Count > 0 && string.IsNullOrWhiteSpace(updateScript) && plan.Online.Count == 0)
         {
             throw new ScriptUnavailableException(
                 $"The plan has {declarative.Count} declarative change(s) but no update script was " +
@@ -83,6 +84,10 @@ public static class ReviewScriptRenderer
         sb.AppendLine($" * generated: {generatedAt.ToUniversalTime():yyyy-MM-dd HH:mm:ss} UTC");
         sb.AppendLine($" * target:    {Redaction.Redact(target)}");
         sb.AppendLine($" * atomicity: {AtomicityLine(plan)}");
+        if (plan.Online.Count > 0)
+        {
+            sb.AppendLine($" * online:    {plan.Online.Count} statement(s) run after the commit, each on its own — NOT part of the atomic apply");
+        }
         sb.AppendLine(" *");
         sb.AppendLine($" * {Summary(declarative.Count, redefines.Count)}");
         sb.AppendLine(" *");
@@ -163,24 +168,35 @@ public static class ReviewScriptRenderer
         }
 
         // Stage order is execution order (ADR-0002): declarative publish, then
-        // re-definitions. A reviewer reads it in the order it will happen.
+        // re-definitions, then — only when the plan asks for it (ADR-0009) — the online
+        // statements, after everything above has committed. A reviewer reads it in the
+        // order it will happen. Without an online stage the numbering is what it always was.
+        var online = plan.Online.Count > 0;
+        var totalStages = online ? (declarative.Count > 0 ? 1 : 0) + (redefines.Count > 0 ? 1 : 0) + 1 : 2;
         if (declarative.Count > 0)
         {
             sb.AppendLine();
-            sb.AppendLine($"-- ===== Stage 1 of 2: declarative publish ({declarative.Count} change(s)) =====");
+            sb.AppendLine($"-- ===== Stage 1 of {totalStages}: declarative publish ({declarative.Count} change(s)) =====");
             sb.AppendLine("-- One transaction: it commits in full or not at all.");
             foreach (var a in declarative)
             {
                 sb.AppendLine($"--   {a.Operation,-7} {a.ObjectType,-12} {a.ObjectName}{RiskNote(a)}");
             }
-            sb.AppendLine();
-            sb.AppendLine(updateScript!.TrimEnd());
+            if (!string.IsNullOrWhiteSpace(updateScript))
+            {
+                sb.AppendLine();
+                sb.AppendLine(updateScript.TrimEnd());
+            }
+            else
+            {
+                sb.AppendLine("-- (no transactional statements: every statement of these changes is in the online stage below)");
+            }
         }
 
         if (redefines.Count > 0)
         {
             sb.AppendLine();
-            sb.AppendLine($"-- ===== Stage {(declarative.Count > 0 ? 2 : 1)} of 2: idempotent re-definitions " +
+            sb.AppendLine($"-- ===== Stage {(declarative.Count > 0 ? 2 : 1)} of {totalStages}: idempotent re-definitions " +
                           $"({redefines.Count} object(s)) =====");
             sb.AppendLine("-- One transaction per object, in dependency order; each records its own ledger row.");
             foreach (var a in redefines)
@@ -189,6 +205,21 @@ public static class ReviewScriptRenderer
                 sb.AppendLine($"-- ---- {a.ObjectType} {a.ObjectName}");
                 sb.AppendLine(a.Sql?.TrimEnd()
                     ?? $"-- (no script available for {a.ObjectName})");
+            }
+        }
+
+        if (online)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"-- ===== Stage {totalStages} of {totalStages}: online ({plan.Online.Count} statement(s)) =====");
+            sb.AppendLine("-- Runs AFTER everything above has committed. Each statement runs on its own, outside any");
+            sb.AppendLine("-- transaction, and commits on its own: this stage is NOT atomic. If one fails, the stages above");
+            sb.AppendLine("-- stay committed and the failure names the stage; running the same apply again converges.");
+            foreach (var step in plan.Online)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"-- ---- {step.ObjectName}");
+                sb.AppendLine(step.Sql.TrimEnd());
             }
         }
 

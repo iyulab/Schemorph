@@ -64,6 +64,16 @@ public sealed record ProviderCapabilities(
     ApplyAtomicity? Atomicity)
 {
     /// <summary>
+    /// Whether the provider can plan and run the <c>online</c> stage (ADR-0009): the statements that cannot
+    /// join the apply's transaction — a concurrent index build, the validation of a constraint added
+    /// <c>NOT VALID</c> — run after it commits, each on its own. Judged here rather than inferred from
+    /// <see cref="Atomicity"/>: a provider whose apply is one transaction does not thereby know how to move
+    /// a statement out of it. An apply that asks for the stage on a provider without it is refused, never
+    /// run without it.
+    /// </summary>
+    public bool SupportsOnlineStage { get; init; }
+
+    /// <summary>
     /// The atomicity a computed plan carries. A provider that reaches plan
     /// building without declaring an apply guarantee violates its own
     /// contract — that is a defect in the provider, not a user error.

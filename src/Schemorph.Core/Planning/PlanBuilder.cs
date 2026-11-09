@@ -156,8 +156,20 @@ public static class PlanBuilder
 
         // The executed declarative script rides the plan so its fingerprint binds
         // exactly what runs, not just the object-level action shape (PlanFingerprint).
+        // The online stage's statements ride the plan beside the script, for the same reason: what the
+        // fingerprint binds is what runs. A statement belongs to an object's change, so one whose object the
+        // plan holds out of execution (gated, withheld) is held out with it — otherwise the plan would
+        // promise a post-commit statement for a change it does not make.
+        var heldOut = excluded.Select(e => e.ObjectName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var online = (compareResult.OnlineSteps ?? Array.Empty<OnlineStep>())
+            .Where(s => !heldOut.Contains(s.ObjectName))
+            .ToList();
+
         return new Plan(Plan.CurrentFormatVersion, actions, messages, atomicity, compareResult.UpdateScript,
-            excluded);
+            excluded)
+        {
+            Online = online,
+        };
     }
 
     /// <summary>

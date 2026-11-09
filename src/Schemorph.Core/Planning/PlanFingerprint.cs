@@ -23,6 +23,7 @@ namespace Schemorph.Core.Planning;
 /// each pending migration's file name and checksum, tagged with its stage. They execute in the same
 /// apply, so a script edited or added after the plan was reviewed has to move the hash like any other
 /// change to what runs — and a pre-stage script also decides what the declarative actions are.
+/// The online stage's statements (<see cref="Plan.Online"/>) join the same way, tagged <c>online</c>.
 ///
 /// Still excluded, deliberately: messages (diagnostics, not execution),
 /// <c>explanation</c> (prose about a change, not the change), and
@@ -71,6 +72,13 @@ public static class PlanFingerprint
         foreach (var migration in plan.Migrations)
         {
             identity += $"{Record}migration{Field}{migration.FileName}{Field}{migration.Checksum}";
+        }
+        // The online stage's statements run in the same apply, after everything above has committed, so a
+        // different set must not pass the gate. Like migrations, appended only when there are any — a plan
+        // computed without the stage hashes exactly as it did before the stage existed.
+        foreach (var step in plan.Online)
+        {
+            identity += $"{Record}online{Field}{step.ObjectName}{Field}{step.Sql}";
         }
         return ContentChecksum.Compute(identity);
     }

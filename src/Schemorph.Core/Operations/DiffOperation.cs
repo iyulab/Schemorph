@@ -39,8 +39,14 @@ public static class DiffOperation
     public static async Task<DiffResult> RunAsync(
         IDatabaseProvider provider, ILedgerStore ledger,
         string schemaDir, string connectionString, bool allowDestructive,
-        CancellationToken cancellationToken = default, string? migrationsDir = null, string? preDir = null)
+        CancellationToken cancellationToken = default, string? migrationsDir = null, string? preDir = null,
+        bool online = false)
     {
+        // The online stage moves statements out of the apply's transaction (ADR-0009). A provider that
+        // cannot plan it is refused up front — handing back a plan without the stage would let a reviewer
+        // approve something that is not what they asked for.
+        EnsureOnlineSupported(provider, online);
+
         // One load serves compare and analysis — the desired state is read and
         // classified exactly once per operation.
         var state = await provider.LoadDesiredStateAsync(schemaDir, cancellationToken);
@@ -87,7 +93,9 @@ public static class DiffOperation
             }
         }
 
-        var compared = await provider.CompareAsync(new CompareRequest(state, connectionString, simulation, WithholdColumnDrops: !allowDestructive), cancellationToken);
+        var compared = await provider.CompareAsync(
+            new CompareRequest(state, connectionString, simulation, WithholdColumnDrops: !allowDestructive, Online: online),
+            cancellationToken);
         // Classification skip warnings (deploy scripts, seed DML) surface once
         // per operation, riding the compare messages into the plan.
         var messages = state.Warnings.Concat(compared.Messages).ToList();
@@ -132,6 +140,20 @@ public static class DiffOperation
             },
             Array.Empty<RawMessage>(),
             UpdateScript: compared.UpdateScript);
+    }
+
+    /// <summary>
+    /// Refuses the online stage (ADR-0009) on a provider that cannot plan it. Shared by diff and apply so
+    /// both say the same thing, and checked before anything is read or touched.
+    /// </summary>
+    internal static void EnsureOnlineSupported(IDatabaseProvider provider, bool online)
+    {
+        if (online && !provider.Capabilities.SupportsOnlineStage)
+        {
+            throw new UnsupportedByProviderException(provider.Name, "the online stage",
+                supported: "the online stage on providers that can run a statement outside the apply's transaction " +
+                           "(PostgreSQL: concurrent index builds, constraint validation)");
+        }
     }
 
     /// <summary>

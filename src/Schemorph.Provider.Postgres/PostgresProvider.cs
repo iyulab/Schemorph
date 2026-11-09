@@ -43,7 +43,10 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// ADR-0004's addendum sets for this declaration.
     /// </summary>
     public ProviderCapabilities Capabilities { get; } = new(
-        DeclaredCapabilities, ApplyAtomicity.Transactional);
+        DeclaredCapabilities, ApplyAtomicity.Transactional)
+    {
+        SupportsOnlineStage = true,
+    };
 
     public async Task<InspectResult> InspectAsync(InspectRequest request, CancellationToken cancellationToken = default)
     {
@@ -100,10 +103,11 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     public async Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken cancellationToken = default)
     {
-        var compared = await CompareCoreAsync(request.DesiredState, request.ConnectionString, request.Session, cancellationToken);
+        var compared = await CompareCoreAsync(
+            request.DesiredState, request.ConnectionString, request.Session, cancellationToken, request.Online);
         return new CompareResult(compared.Changes, compared.Messages,
             compared.UpdateScript, compared.ChangeScripts, compared.TablesWithColumnChanges,
-            compared.ViewsDroppedFirst);
+            compared.ViewsDroppedFirst, OnlineSteps: compared.OnlineSteps);
     }
 
     /// <summary>
@@ -162,7 +166,7 @@ public sealed class PostgresProvider : IDatabaseProvider
         // Read through the session: it may already hold work this comparison has to see (a pre-stage
         // script), and when it holds none the result is the committed state, as before.
         var compared =
-            await CompareCoreAsync(request.DesiredState, request.ConnectionString, session, cancellationToken);
+            await CompareCoreAsync(request.DesiredState, request.ConnectionString, session, cancellationToken, request.Online);
 
         // A comparison this provider cannot carry out never becomes an announced
         // plan: the hook is what the fingerprint gate and the caller's rendering
@@ -178,7 +182,7 @@ public sealed class PostgresProvider : IDatabaseProvider
         onChangesComputed?.Invoke(new CompareResult(
             compared.Changes, Array.Empty<RawMessage>(),
             compared.UpdateScript, compared.ChangeScripts, compared.TablesWithColumnChanges,
-            compared.ViewsDroppedFirst));
+            compared.ViewsDroppedFirst, OnlineSteps: compared.OnlineSteps));
 
         // The gate reads the same attribution the hook just announced — the plan
         // built there and the filter applied here must classify identically, or
@@ -204,7 +208,7 @@ public sealed class PostgresProvider : IDatabaseProvider
         IReadOnlyList<DdlSynthesizer.Statement> statements =
             [.. DropStatements(compared.Undeclared.Where(u => includedNames.Contains(u.ObjectName)),
                     compared.ViewsDroppedFirst, compared.ViewReads, TargetSchemaOf(request.ConnectionString)),
-             .. DdlSynthesizer.Synthesize(TargetSchemaOf(request.ConnectionString), desired, live)];
+             .. DdlSynthesizer.Synthesize(TargetSchemaOf(request.ConnectionString), desired, live, request.Online)];
 
         // Masking removes work, so it can also remove the statement an included
         // change needed — the pairing has to be re-checked against what will
@@ -214,13 +218,18 @@ public sealed class PostgresProvider : IDatabaseProvider
             return new ApplyResult(false, Array.Empty<RawChange>(), excluded, new[] { gap });
         }
 
-        if (statements.Count > 0)
+        // The online stage's statements are not executed here: the transaction this call runs in has to
+        // commit first. They are handed back, in the order they run, for the caller's post-commit step.
+        var transactional = statements.Where(s => !s.Online).ToList();
+        var onlineSteps = statements.Where(s => s.Online).Select(s => new OnlineStep(s.ObjectName, s.Sql)).ToList();
+
+        if (transactional.Count > 0)
         {
             try
             {
                 await PgScriptExecutor.ExecuteAsync(
                     request.ConnectionString,
-                    ComposeScript(TargetSchemaOf(request.ConnectionString), statements),
+                    ComposeScript(TargetSchemaOf(request.ConnectionString), transactional),
                     Array.Empty<LedgerEntry>(),
                     session is null ? null : PgApplySession.From(session),
                     cancellationToken);
@@ -250,7 +259,7 @@ public sealed class PostgresProvider : IDatabaseProvider
             }
         }
 
-        return new ApplyResult(true, included, excluded, Array.Empty<RawMessage>());
+        return new ApplyResult(true, included, excluded, Array.Empty<RawMessage>()) { OnlineSteps = onlineSteps };
     }
 
     public Task ExecuteScriptAsync(string connectionString, string script, IApplySession? session = null, CancellationToken cancellationToken = default)
@@ -364,14 +373,21 @@ public sealed class PostgresProvider : IDatabaseProvider
         IReadOnlyList<string> TablesWithColumnChanges,
         IReadOnlyList<PgLiveProgrammables.Undeclared> Undeclared,
         IReadOnlyList<string> ViewsDroppedFirst,
-        IReadOnlyList<PgLiveProgrammables.ViewRead> ViewReads);
+        IReadOnlyList<PgLiveProgrammables.ViewRead> ViewReads)
+    {
+        /// <summary>The online stage's statements, in the order they run; empty unless it was requested.</summary>
+        public IReadOnlyList<OnlineStep> OnlineSteps { get; init; } = Array.Empty<OnlineStep>();
+    }
 
     /// <summary>
     /// The shadow pipeline (ADR-0007): desired state applied to a scratch
     /// schema, both sides read back in comparison mode, compared structurally.
+    /// With <paramref name="online"/> the statements the apply's transaction cannot do well are planned
+    /// as the online stage (ADR-0009) — see <see cref="DdlSynthesizer.Synthesize"/>.
     /// </summary>
     private async Task<Compared> CompareCoreAsync(
-        IDesiredState desiredState, string connectionString, IApplySession? session, CancellationToken cancellationToken)
+        IDesiredState desiredState, string connectionString, IApplySession? session, CancellationToken cancellationToken,
+        bool online = false)
     {
         var state = PgDesiredState.From(desiredState);
         var schema = TargetSchemaOf(connectionString);
@@ -413,8 +429,11 @@ public sealed class PostgresProvider : IDatabaseProvider
              .. SnapshotComparer.Compare(desired, live)];
         IReadOnlyList<DdlSynthesizer.Statement> statements =
             [.. DropStatements(undeclared, viewsDroppedFirst, viewReads, schema),
-             .. DdlSynthesizer.Synthesize(schema, desired, live)];
-        var updateScript = statements.Count == 0 ? null : ComposeScript(schema, statements);
+             .. DdlSynthesizer.Synthesize(schema, desired, live, online)];
+        // The reviewed script is the transactional one - the online statements are listed beside it, not in
+        // it, so the text that is "one transaction" never contains a statement that cannot be in one.
+        var transactional = statements.Where(s => !s.Online).ToList();
+        var updateScript = transactional.Count == 0 ? null : ComposeScript(schema, transactional);
 
         // Synthesis is what executes here, so an unsynthesized change is not a
         // missing explanation — it is a change that cannot happen. Reported as an
@@ -427,7 +446,10 @@ public sealed class PostgresProvider : IDatabaseProvider
         return new Compared(changes, new Snapshots(desired, live), updateScript,
             AttributeStatements(statements, desired, live), messages,
             SnapshotComparer.TablesWithColumnChanges(desired, live), undeclared,
-            viewsDroppedFirst, viewReads);
+            viewsDroppedFirst, viewReads)
+        {
+            OnlineSteps = statements.Where(s => s.Online).Select(s => new OnlineStep(s.ObjectName, s.Sql)).ToList(),
+        };
     }
 
     /// <summary>

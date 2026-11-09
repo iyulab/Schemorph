@@ -345,9 +345,23 @@ public static class DesiredStateFormat
 /// (<see cref="CompareResult.WithheldColumnDrops"/>); a provider that can already separate the drop
 /// (<see cref="ChangeScript.DestructiveSql"/>) ignores the flag. False reports every drop.
 /// </param>
+/// <param name="Online">
+/// Plan the apply's <c>online</c> stage (ADR-0009): the work that cannot join the apply's transaction is
+/// moved out of the transactional script into <see cref="CompareResult.OnlineSteps"/>. False — the default,
+/// and what every provider without <see cref="ProviderCapabilities.SupportsOnlineStage"/> must be given —
+/// plans exactly what it always did. Never chosen from the live database's size or statistics: the plan has
+/// to be the same whenever it is computed.
+/// </param>
 public sealed record CompareRequest(
     IDesiredState DesiredState, string ConnectionString, IApplySession? Session = null,
-    bool WithholdColumnDrops = false);
+    bool WithholdColumnDrops = false, bool Online = false);
+
+/// <summary>
+/// One statement of the <c>online</c> stage: it runs after the transactional stages have committed, on its
+/// own, outside any transaction. The object it belongs to is named so the plan and a failure can say which
+/// change it is part of.
+/// </summary>
+public sealed record OnlineStep(string ObjectName, string Sql);
 
 /// <summary>
 /// Provider-raw comparison output, in Schemorph terms (no engine types).
@@ -380,7 +394,8 @@ public sealed record CompareResult(
     IReadOnlyList<string>? TablesWithColumnChanges = null,
     IReadOnlyList<string>? ProgrammablesDroppedFirst = null,
     IReadOnlyDictionary<string, IReadOnlyList<string>>? ExclusionDependencies = null,
-    IReadOnlyList<WithheldColumnDrop>? WithheldColumnDrops = null);
+    IReadOnlyList<WithheldColumnDrop>? WithheldColumnDrops = null,
+    IReadOnlyList<OnlineStep>? OnlineSteps = null);
 
 /// <summary>
 /// The columns of one table that the comparison kept instead of dropping.
@@ -526,7 +541,9 @@ public sealed record ProgrammableAnalysis(
 }
 
 /// <param name="WithholdColumnDrops">See <see cref="CompareRequest.WithholdColumnDrops"/>.</param>
-public sealed record ApplyRequest(IDesiredState DesiredState, string ConnectionString, bool WithholdColumnDrops = false);
+/// <param name="Online">See <see cref="CompareRequest.Online"/>. The statements it moves out are returned in <see cref="ApplyResult.OnlineSteps"/> — not run by the call.</param>
+public sealed record ApplyRequest(
+    IDesiredState DesiredState, string ConnectionString, bool WithholdColumnDrops = false, bool Online = false);
 
 public sealed record ApplyResult(
     bool Success,
@@ -541,4 +558,11 @@ public sealed record ApplyResult(
     /// envelope say which engine code it was and whether it was translated.
     /// </summary>
     public EngineError? Engine { get; init; }
+
+    /// <summary>
+    /// The <c>online</c> stage's statements for what this apply included (<see cref="ApplyRequest.Online"/>),
+    /// in the order they run — empty otherwise. The call has executed only the transactional script; running
+    /// these is the caller's step, after the session has committed.
+    /// </summary>
+    public IReadOnlyList<OnlineStep> OnlineSteps { get; init; } = Array.Empty<OnlineStep>();
 }
