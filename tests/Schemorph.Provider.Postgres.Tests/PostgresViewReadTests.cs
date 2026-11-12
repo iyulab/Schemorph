@@ -10,9 +10,9 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// (<see cref="PostgresProvider.RedefineAsync"/>), so the apply fails at the view and rolls back — the previous
 /// definition stays.
 /// </summary>
-public class PgViewReadTests : IAsyncLifetime
+public class PostgresViewReadTests : IAsyncLifetime
 {
-    private PgTestSchema _live = null!;
+    private PostgresTestSchema _live = null!;
     private string _url = null!;
     private string _schemaDir = null!;
     private readonly PostgresProvider _provider = new();
@@ -20,8 +20,8 @@ public class PgViewReadTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _live = await PgTestSchema.CreateAsync("");
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _live.Name }
+        _live = await PostgresTestSchema.CreateAsync("");
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _live.Name }
             .ConnectionString;
         _schemaDir = Path.Combine(Path.GetTempPath(), "schemorph-pg-viewread-" + Guid.NewGuid().ToString("n")[..8]);
         Directory.CreateDirectory(Path.Combine(_schemaDir, "tables"));

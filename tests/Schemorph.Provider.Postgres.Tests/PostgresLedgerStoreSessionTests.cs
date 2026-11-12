@@ -5,15 +5,15 @@ namespace Schemorph.Provider.Postgres.Tests;
 
 public sealed class PostgresLedgerStoreSessionTests : IAsyncLifetime
 {
-    private PgTestSchema _schema = null!;
+    private PostgresTestSchema _schema = null!;
     private readonly PostgresProvider _provider = new();
     private readonly PostgresLedgerStore _ledger = new();
     private string _url = null!;
 
     public async Task InitializeAsync()
     {
-        _schema = await PgTestSchema.CreateAsync("SELECT 1;");
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _schema.Name }
+        _schema = await PostgresTestSchema.CreateAsync("SELECT 1;");
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _schema.Name }
             .ConnectionString;
         await _ledger.EnsureInitializedAsync(_url);   // always its own connection, durable immediately
     }

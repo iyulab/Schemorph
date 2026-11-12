@@ -2,7 +2,7 @@ using Npgsql;
 
 namespace Schemorph.Provider.Postgres.Tests;
 
-using ProgrammableFile = PgDesiredState.ProgrammableFile;
+using ProgrammableFile = PostgresDesiredState.ProgrammableFile;
 
 /// <summary>
 /// A view that exists live is rebuilt from its file in a scratch schema to compare columns. When
@@ -16,15 +16,15 @@ public class ViewProbeFailureTests
     [SkippableFact]
     public async Task A_view_file_that_cannot_be_built_is_reported_by_name_and_file()
     {
-        await using var live = await PgTestSchema.CreateAsync("""
+        await using var live = await PostgresTestSchema.CreateAsync("""
             CREATE TABLE t (a int, b int);
             CREATE VIEW v1 AS SELECT a FROM t;
             CREATE VIEW v2 AS SELECT b FROM t;
             """);
-        var url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = live.Name }
+        var url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = live.Name }
             .ConnectionString;
 
-        var analysis = PgProgrammables.Analyze(new[]
+        var analysis = PostgresProgrammables.Analyze(new[]
         {
             new ProgrammableFile("views/v1.sql", "CREATE VIEW v1 AS SELECT a, 1 AS c FROM t;"),
             new ProgrammableFile("views/v2.sql", "CREATE VIEW v2 AS SELECT b, bb FROM t;"),

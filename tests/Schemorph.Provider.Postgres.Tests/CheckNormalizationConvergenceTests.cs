@@ -18,7 +18,7 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// </summary>
 public class CheckNormalizationConvergenceTests : IAsyncLifetime
 {
-    private PgTestSchema _live = null!;
+    private PostgresTestSchema _live = null!;
     private string _url = null!;
     private string _schemaDir = null!;
     private readonly PostgresProvider _provider = new();
@@ -26,8 +26,8 @@ public class CheckNormalizationConvergenceTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _live = await PgTestSchema.CreateAsync("SELECT 1;");
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _live.Name }
+        _live = await PostgresTestSchema.CreateAsync("SELECT 1;");
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _live.Name }
             .ConnectionString;
 
         _schemaDir = Path.Combine(

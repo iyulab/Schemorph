@@ -26,15 +26,15 @@ public class ShadowSchemaTests
     [SkippableFact]
     public async Task The_rendered_desired_state_round_trips_through_a_shadow_schema()
     {
-        await using var source = await PgTestSchema.CreateAsync(Ddl);
-        var sourceTables = await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, source.Name);
+        await using var source = await PostgresTestSchema.CreateAsync(Ddl);
+        var sourceTables = await CatalogReader.ReadTablesAsync(PostgresTestSchema.ServerUrl!, source.Name);
         var rendered = DesiredStateRenderer.Render(sourceTables);
 
-        await using var shadow = await ShadowSchema.CreateAsync(PgTestSchema.ServerUrl!);
+        await using var shadow = await ShadowSchema.CreateAsync(PostgresTestSchema.ServerUrl!);
         await shadow.ApplyAsync(
             rendered.Select(f => f.Content).ToList(), sourceSchema: source.Name);
 
-        var shadowTables = await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, shadow.Name);
+        var shadowTables = await CatalogReader.ReadTablesAsync(PostgresTestSchema.ServerUrl!, shadow.Name);
 
         var expected = Assert.Single(sourceTables);
         var actual = Assert.Single(shadowTables);
@@ -58,33 +58,33 @@ public class ShadowSchemaTests
     [SkippableFact]
     public async Task The_scratch_schema_is_gone_after_disposal()
     {
-        Skip.If(PgTestSchema.ServerUrl is null,
+        Skip.If(PostgresTestSchema.ServerUrl is null,
             "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
         string name;
-        await using (var shadow = await ShadowSchema.CreateAsync(PgTestSchema.ServerUrl!))
+        await using (var shadow = await ShadowSchema.CreateAsync(PostgresTestSchema.ServerUrl!))
         {
             name = shadow.Name;
         }
 
-        var leftover = await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, name);
+        var leftover = await CatalogReader.ReadTablesAsync(PostgresTestSchema.ServerUrl!, name);
         Assert.Empty(leftover);
     }
 
     [SkippableFact]
     public async Task A_failing_statement_leaves_no_half_applied_desired_state()
     {
-        await using var source = await PgTestSchema.CreateAsync(Ddl);
+        await using var source = await PostgresTestSchema.CreateAsync(Ddl);
         var rendered = DesiredStateRenderer.Render(
-            await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, source.Name));
+            await CatalogReader.ReadTablesAsync(PostgresTestSchema.ServerUrl!, source.Name));
 
-        await using var shadow = await ShadowSchema.CreateAsync(PgTestSchema.ServerUrl!);
+        await using var shadow = await ShadowSchema.CreateAsync(PostgresTestSchema.ServerUrl!);
         var sabotaged = rendered[0].Content + "\nCREATE INDEX \"IX_Dup\" ON \"Missing\" (\"x\");";
 
         await Assert.ThrowsAsync<Npgsql.PostgresException>(
             () => shadow.ApplyAsync([sabotaged], sourceSchema: source.Name));
 
         // One transaction per desired-state text: nothing from it may survive.
-        Assert.Empty(await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, shadow.Name));
+        Assert.Empty(await CatalogReader.ReadTablesAsync(PostgresTestSchema.ServerUrl!, shadow.Name));
     }
 }

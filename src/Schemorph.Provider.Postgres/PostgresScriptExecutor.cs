@@ -7,7 +7,7 @@ namespace Schemorph.Provider.Postgres;
 /// Tool-owned transactional execution — the control ADR-0007 chose native
 /// execution to get: the script and its ledger rows commit in ONE transaction
 /// (ADR-0004 §2 — either the script ran and is recorded, or neither
-/// happened). Given a <see cref="PgApplySession"/>, that boundary is the
+/// happened). Given a <see cref="PostgresApplySession"/>, that boundary is the
 /// session's own connection/transaction — shared across every call the whole
 /// apply makes, and left uncommitted here; without one, this call opens and
 /// commits its own connection, so the guarantee is per-call only. That is
@@ -18,12 +18,12 @@ namespace Schemorph.Provider.Postgres;
 /// the declared/refused symmetry (§2 of the dev plan) flips per slice, never
 /// per helper.
 /// </summary>
-internal static class PgScriptExecutor
+internal static class PostgresScriptExecutor
 {
     public static Task ExecuteAsync(
         string connectionString, string script,
         IReadOnlyList<LedgerEntry> ledgerEntries,
-        PgApplySession? session = null,
+        PostgresApplySession? session = null,
         CancellationToken cancellationToken = default,
         string? read = null)
         => session is null
@@ -47,7 +47,7 @@ internal static class PgScriptExecutor
 
         foreach (var entry in ledgerEntries)
         {
-            await PgLedgerSql.InsertAsync(connection, transaction, schema, entry, cancellationToken);
+            await PostgresLedgerSql.InsertAsync(connection, transaction, schema, entry, cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -61,7 +61,7 @@ internal static class PgScriptExecutor
     /// (<see cref="Operations.ApplyOperation.RunAsync"/> in Core).
     /// </summary>
     private static async Task ExecuteOnSessionAsync(
-        PgApplySession session, string script,
+        PostgresApplySession session, string script,
         IReadOnlyList<LedgerEntry> ledgerEntries, string? read, CancellationToken cancellationToken)
     {
         var schema = PostgresProvider.TargetSchemaOf(session.ConnectionString);
@@ -73,7 +73,7 @@ internal static class PgScriptExecutor
 
         foreach (var entry in ledgerEntries)
         {
-            await PgLedgerSql.InsertAsync(session.Connection, session.Transaction, schema, entry, cancellationToken);
+            await PostgresLedgerSql.InsertAsync(session.Connection, session.Transaction, schema, entry, cancellationToken);
         }
     }
 

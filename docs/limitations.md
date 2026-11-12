@@ -230,7 +230,7 @@ online stage builds cannot use it in the same apply - migrations run before the 
 `CREATE OR REPLACE FUNCTION`/`PROCEDURE`/`TRIGGER` is PostgreSQL's own
 idempotent form, and Schemorph's redefinition of a programmable object is
 exactly that statement, re-run whenever the file's checksum changes
-(`PgProgrammablesTests`, `PgProgrammablesLoopTests`). The engine itself refuses
+(`PostgresProgrammablesTests`, `PostgresProgrammablesLoopTests`). The engine itself refuses
 `OR REPLACE` when the new definition is not shape-compatible with the old one
 — a function whose parameter list or return type changed, most commonly — and
 Schemorph does not catch that refusal and retry as a drop and a create (unlike

@@ -4,7 +4,7 @@ using Schemorph.Core.Planning;
 
 namespace Schemorph.Provider.Postgres.Tests;
 
-using ProgrammableFile = PgDesiredState.ProgrammableFile;
+using ProgrammableFile = PostgresDesiredState.ProgrammableFile;
 
 /// <summary>
 /// A view's column list changing anywhere but the end used to mean <c>apply</c>
@@ -17,14 +17,14 @@ public class ViewRedefineDropAndCreateTests
     [SkippableFact]
     public async Task Appending_a_column_stays_a_plain_redefine_and_clears_the_blanket_warning()
     {
-        await using var live = await PgTestSchema.CreateAsync("""
+        await using var live = await PostgresTestSchema.CreateAsync("""
             CREATE TABLE t (a int, b int);
             CREATE VIEW v AS SELECT a, b FROM t;
             """);
-        var url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = live.Name }
+        var url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = live.Name }
             .ConnectionString;
 
-        var analysis = PgProgrammables.Analyze(new[]
+        var analysis = PostgresProgrammables.Analyze(new[]
         {
             new ProgrammableFile("v.sql", "CREATE VIEW v AS SELECT a, b, 1 AS c FROM t;"),
         });
@@ -47,14 +47,14 @@ public class ViewRedefineDropAndCreateTests
         // The live table deliberately does NOT yet have "c" — at `diff` time
         // nothing has been applied, so only the shadow (materialized from the
         // desired-state table file below) carries the desired shape.
-        await using var live = await PgTestSchema.CreateAsync("""
+        await using var live = await PostgresTestSchema.CreateAsync("""
             CREATE TABLE t (a int, b int, created_at timestamptz);
             CREATE VIEW v AS SELECT a, b, created_at FROM t;
             """);
-        var url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = live.Name }
+        var url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = live.Name }
             .ConnectionString;
 
-        var analysis = PgProgrammables.Analyze(new[]
+        var analysis = PostgresProgrammables.Analyze(new[]
         {
             new ProgrammableFile("v.sql", "CREATE VIEW v AS SELECT a, b, c, created_at FROM t;"),
         });
@@ -89,18 +89,18 @@ public class ViewRedefineDropAndCreateTests
     [SkippableFact]
     public async Task A_dependent_outside_the_desired_state_is_refused_rather_than_dropped_blindly()
     {
-        await using var live = await PgTestSchema.CreateAsync("""
+        await using var live = await PostgresTestSchema.CreateAsync("""
             CREATE TABLE t (a int, b int, created_at timestamptz);
             CREATE VIEW v AS SELECT a, b, created_at FROM t;
             """);
         // Another schema's view reads it: not the desired state's to drop, and the plan
         // would have no way to put it back.
-        await using var other = await PgTestSchema.CreateAsync(
+        await using var other = await PostgresTestSchema.CreateAsync(
             $"""CREATE VIEW v2 AS SELECT * FROM "{live.Name}".v;""");
-        var url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = live.Name }
+        var url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = live.Name }
             .ConnectionString;
 
-        var analysis = PgProgrammables.Analyze(new[]
+        var analysis = PostgresProgrammables.Analyze(new[]
         {
             new ProgrammableFile("v.sql", "CREATE VIEW v AS SELECT a, b, c, created_at FROM t;"),
         });
@@ -125,17 +125,17 @@ public class ViewRedefineDropAndCreateTests
     [SkippableFact]
     public async Task An_undeclared_reader_in_the_schema_is_left_to_the_declarative_drop()
     {
-        await using var live = await PgTestSchema.CreateAsync("""
+        await using var live = await PostgresTestSchema.CreateAsync("""
             CREATE TABLE t (a int, b int, created_at timestamptz);
             CREATE VIEW v AS SELECT a, b, created_at FROM t;
             CREATE VIEW v2 AS SELECT * FROM v;
             """);
-        var url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = live.Name }
+        var url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = live.Name }
             .ConnectionString;
 
         // v2 has no file: the comparison plans it as a Delete, dropped before any of this
         // runs. The re-definition neither refuses over it nor takes it on.
-        var analysis = PgProgrammables.Analyze(new[]
+        var analysis = PostgresProgrammables.Analyze(new[]
         {
             new ProgrammableFile("v.sql", "CREATE VIEW v AS SELECT a, b, c, created_at FROM t;"),
         });
@@ -241,15 +241,15 @@ public class ViewRedefineDropAndCreateTests
     [SkippableFact]
     public async Task A_schema_qualified_body_is_probed_inside_the_shadow_not_against_live()
     {
-        await using var live = await PgTestSchema.CreateAsync("""
+        await using var live = await PostgresTestSchema.CreateAsync("""
             CREATE TABLE t (a int, b int, created_at timestamptz);
             CREATE VIEW v AS SELECT b.a, b.b, b.created_at FROM t AS b;
             """);
-        var url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = live.Name }
+        var url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = live.Name }
             .ConnectionString;
         var q = live.Name;
 
-        var analysis = PgProgrammables.Analyze(new[]
+        var analysis = PostgresProgrammables.Analyze(new[]
         {
             new ProgrammableFile("v.sql",
                 $"CREATE VIEW {q}.v AS SELECT b.a, b.b, b.c, b.created_at FROM {q}.t AS b;"),
@@ -268,11 +268,11 @@ public class ViewRedefineDropAndCreateTests
     [SkippableFact]
     public async Task A_view_that_does_not_exist_live_yet_is_a_plain_create_without_the_blanket_warning()
     {
-        await using var live = await PgTestSchema.CreateAsync("CREATE TABLE t (a int, b int);");
-        var url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = live.Name }
+        await using var live = await PostgresTestSchema.CreateAsync("CREATE TABLE t (a int, b int);");
+        var url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = live.Name }
             .ConnectionString;
 
-        var analysis = PgProgrammables.Analyze(new[]
+        var analysis = PostgresProgrammables.Analyze(new[]
         {
             new ProgrammableFile("v.sql", "CREATE VIEW v AS SELECT a, b FROM t;"),
         });
@@ -289,11 +289,11 @@ public class ViewRedefineDropAndCreateTests
     [SkippableFact]
     public async Task Diff_and_apply_converge_when_table_and_schema_qualified_view_change_in_one_plan()
     {
-        await using var live = await PgTestSchema.CreateAsync("""
+        await using var live = await PostgresTestSchema.CreateAsync("""
             CREATE TABLE t (a int, b int, created_at timestamptz);
             CREATE VIEW v AS SELECT b.a, b.b, b.created_at FROM t AS b;
             """);
-        var url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = live.Name }
+        var url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = live.Name }
             .ConnectionString;
         var q = live.Name;
         var provider = new PostgresProvider();
@@ -333,11 +333,11 @@ public class ViewRedefineDropAndCreateTests
     [SkippableFact]
     public async Task Diff_and_apply_converge_on_a_mid_list_column_insertion()
     {
-        await using var live = await PgTestSchema.CreateAsync("""
+        await using var live = await PostgresTestSchema.CreateAsync("""
             CREATE TABLE t (a int, b int, created_at timestamptz);
             CREATE VIEW v AS SELECT a, b, created_at FROM t;
             """);
-        var url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = live.Name }
+        var url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = live.Name }
             .ConnectionString;
         var provider = new PostgresProvider();
         var ledger = new PostgresLedgerStore();

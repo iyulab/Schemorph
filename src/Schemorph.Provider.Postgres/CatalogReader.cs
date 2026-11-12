@@ -5,7 +5,7 @@ namespace Schemorph.Provider.Postgres;
 
 /// <summary>
 /// Reads a schema out of pg_catalog. The only place in this provider that knows
-/// about a connection — everything downstream works on <see cref="PgTable"/>.
+/// about a connection — everything downstream works on <see cref="PostgresTable"/>.
 ///
 /// Every rendering (types, constraint definitions, index statements) comes from
 /// the engine's own functions rather than being re-spelled here. That is the
@@ -26,13 +26,13 @@ internal static class CatalogReader
     /// One rendering does not obey search_path and is normalized by hand
     /// instead: an index's ON clause (see <see cref="UnqualifyTable"/>).
     /// </param>
-    public static async Task<IReadOnlyList<PgTable>> ReadTablesAsync(
+    public static async Task<IReadOnlyList<PostgresTable>> ReadTablesAsync(
         string connectionString, string schema,
         bool normalizeSameSchemaReferences = false,
         CancellationToken cancellationToken = default,
         IApplySession? session = null)
     {
-        await using var lease = await PgReadConnection.OpenAsync(connectionString, session, cancellationToken);
+        await using var lease = await PostgresReadConnection.OpenAsync(connectionString, session, cancellationToken);
         var connection = lease.Connection;
 
         if (normalizeSameSchemaReferences)
@@ -57,7 +57,7 @@ internal static class CatalogReader
             .OrderBy(n => n, StringComparer.Ordinal);
 
         return tableNames
-            .Select(name => new PgTable(
+            .Select(name => new PostgresTable(
                 schema,
                 name,
                 columns.TryGetValue(name, out var c) ? c : [],
@@ -116,7 +116,7 @@ internal static class CatalogReader
         """;
 
     // Not-null constraints are left out: a column's NOT NULL is read from attnotnull, which is what
-    // PgColumn carries. Before PostgreSQL 18 a table's NOT NULL had no pg_constraint row; since 18 it
+    // PostgresColumn carries. Before PostgreSQL 18 a table's NOT NULL had no pg_constraint row; since 18 it
     // has one (contype 'n', conrelid set) next to the flag, so reading every row would hand each NOT NULL
     // column back twice — once on the column and once as a table constraint of its own.
     internal const string ConstraintsSql = """
@@ -128,22 +128,22 @@ internal static class CatalogReader
         ORDER BY c.relname, con.conname
         """;
 
-    private static async Task<Dictionary<string, List<PgColumn>>> ReadColumnsAsync(
+    private static async Task<Dictionary<string, List<PostgresColumn>>> ReadColumnsAsync(
         NpgsqlConnection connection, string schema, CancellationToken cancellationToken)
     {
-        var result = new Dictionary<string, List<PgColumn>>(StringComparer.Ordinal);
+        var result = new Dictionary<string, List<PostgresColumn>>(StringComparer.Ordinal);
         await foreach (var row in QueryAsync(connection, ColumnsSql, schema, cancellationToken))
         {
             var expression = row.IsDBNull(4) ? null : row.GetString(4);
             var identity = row.GetChar(5) switch
             {
-                'a' => PgIdentity.Always,
-                'd' => PgIdentity.ByDefault,
-                _ => PgIdentity.None,
+                'a' => PostgresIdentity.Always,
+                'd' => PostgresIdentity.ByDefault,
+                _ => PostgresIdentity.None,
             };
             var (defaultExpression, generationExpression, generatedKind) = RouteExpression(row.GetChar(6), expression);
 
-            Bucket(result, row.GetString(0)).Add(new PgColumn(
+            Bucket(result, row.GetString(0)).Add(new PostgresColumn(
                 row.GetString(1),
                 row.GetString(2),
                 row.GetBoolean(3),
@@ -151,7 +151,7 @@ internal static class CatalogReader
                 identity,
                 GeneratedAs: generationExpression,
                 GeneratedKind: generatedKind,
-                IdentityOptions: identity == PgIdentity.None || row.IsDBNull(7)
+                IdentityOptions: identity == PostgresIdentity.None || row.IsDBNull(7)
                     ? null
                     : IdentityOptions(
                         start: row.GetInt64(7), increment: row.GetInt64(8),
@@ -172,12 +172,12 @@ internal static class CatalogReader
     /// <c>'s'</c> turned every virtual column's expression into a DEFAULT, and
     /// <c>DEFAULT (a * 2)</c> over another column is not SQL the engine accepts.
     /// </summary>
-    internal static (string? Default, string? GeneratedAs, PgGeneratedKind Kind) RouteExpression(
+    internal static (string? Default, string? GeneratedAs, PostgresGeneratedKind Kind) RouteExpression(
         char attgenerated, string? expression) => attgenerated switch
     {
-        's' => (null, expression, PgGeneratedKind.Stored),
-        'v' => (null, expression, PgGeneratedKind.Virtual),
-        _ => (expression, null, PgGeneratedKind.Stored),
+        's' => (null, expression, PostgresGeneratedKind.Stored),
+        'v' => (null, expression, PostgresGeneratedKind.Virtual),
+        _ => (expression, null, PostgresGeneratedKind.Stored),
     };
 
     /// <summary>
@@ -215,26 +215,26 @@ internal static class CatalogReader
         return options.Count == 0 ? null : string.Join(" ", options);
     }
 
-    private static async Task<Dictionary<string, List<PgConstraint>>> ReadConstraintsAsync(
+    private static async Task<Dictionary<string, List<PostgresConstraint>>> ReadConstraintsAsync(
         NpgsqlConnection connection, string schema, CancellationToken cancellationToken)
     {
-        var result = new Dictionary<string, List<PgConstraint>>(StringComparer.Ordinal);
+        var result = new Dictionary<string, List<PostgresConstraint>>(StringComparer.Ordinal);
         await foreach (var row in QueryAsync(connection, ConstraintsSql, schema, cancellationToken))
         {
-            Bucket(result, row.GetString(0)).Add(new PgConstraint(row.GetString(1), row.GetString(2)));
+            Bucket(result, row.GetString(0)).Add(new PostgresConstraint(row.GetString(1), row.GetString(2)));
         }
         return result;
     }
 
-    private static async Task<Dictionary<string, List<PgIndex>>> ReadIndexesAsync(
+    private static async Task<Dictionary<string, List<PostgresIndex>>> ReadIndexesAsync(
         NpgsqlConnection connection, string schema, bool unqualifyTable,
         CancellationToken cancellationToken)
     {
-        var result = new Dictionary<string, List<PgIndex>>(StringComparer.Ordinal);
+        var result = new Dictionary<string, List<PostgresIndex>>(StringComparer.Ordinal);
         await foreach (var row in QueryAsync(connection, IndexesSql, schema, cancellationToken))
         {
             var definition = row.GetString(2);
-            Bucket(result, row.GetString(0)).Add(new PgIndex(
+            Bucket(result, row.GetString(0)).Add(new PostgresIndex(
                 row.GetString(1),
                 unqualifyTable
                     ? UnqualifyTable(definition, row.GetString(3), row.GetString(4))

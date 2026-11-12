@@ -12,7 +12,7 @@ namespace Schemorph.Provider.Postgres;
 /// baseline is a DB owner whose rights may end at their schema, so Schemorph's
 /// bookkeeping stays inside the schema it manages.
 /// </summary>
-internal static class PgLedgerSql
+internal static class PostgresLedgerSql
 {
     public static string AppliedBy => $"{Environment.UserName}@{Environment.MachineName}";
 

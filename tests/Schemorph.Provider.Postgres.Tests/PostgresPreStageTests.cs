@@ -12,9 +12,9 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// table carries rows and a view reads it, so "the values came along" and "planning read through the
 /// session" are both observable rather than assumed.
 /// </summary>
-public class PgPreStageTests : IAsyncLifetime
+public class PostgresPreStageTests : IAsyncLifetime
 {
-    private PgTestSchema _live = null!;
+    private PostgresTestSchema _live = null!;
     private string _url = null!;
     private string _schemaDir = null!;
     private string _preDir = null!;
@@ -33,8 +33,8 @@ public class PgPreStageTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _live = await PgTestSchema.CreateAsync(LiveV1);
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _live.Name }.ConnectionString;
+        _live = await PostgresTestSchema.CreateAsync(LiveV1);
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _live.Name }.ConnectionString;
 
         var root = Path.Combine(Path.GetTempPath(), "schemorph-pg-pre-" + Guid.NewGuid().ToString("n")[..8]);
         _schemaDir = Path.Combine(root, "schema");

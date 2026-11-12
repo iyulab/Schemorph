@@ -32,7 +32,7 @@ public sealed class PostgresLedgerStore : ILedgerStore
         {
             await schemaCommand.ExecuteNonQueryAsync(cancellationToken);
         }
-        await using var command = new NpgsqlCommand(PgLedgerSql.CreateTableSql(schema), connection);
+        await using var command = new NpgsqlCommand(PostgresLedgerSql.CreateTableSql(schema), connection);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -44,10 +44,10 @@ public sealed class PostgresLedgerStore : ILedgerStore
 
         if (session is not null)
         {
-            var pg = PgApplySession.From(session);
+            var pg = PostgresApplySession.From(session);
             foreach (var entry in entries)
             {
-                await PgLedgerSql.InsertAsync(pg.Connection, pg.Transaction, schema, entry, cancellationToken);
+                await PostgresLedgerSql.InsertAsync(pg.Connection, pg.Transaction, schema, entry, cancellationToken);
             }
             return;
         }
@@ -56,7 +56,7 @@ public sealed class PostgresLedgerStore : ILedgerStore
         await connection.OpenAsync(cancellationToken);
         foreach (var entry in entries)
         {
-            await PgLedgerSql.InsertAsync(connection, transaction: null, schema, entry, cancellationToken);
+            await PostgresLedgerSql.InsertAsync(connection, transaction: null, schema, entry, cancellationToken);
         }
     }
 
@@ -69,7 +69,7 @@ public sealed class PostgresLedgerStore : ILedgerStore
         // The ledger may not exist yet on a fresh database — that means "no history".
         await using var existsCommand = new NpgsqlCommand(
             "SELECT to_regclass(@name)::text", connection);
-        existsCommand.Parameters.AddWithValue("name", PgLedgerSql.QualifiedTable(schema));
+        existsCommand.Parameters.AddWithValue("name", PostgresLedgerSql.QualifiedTable(schema));
         if (await existsCommand.ExecuteScalarAsync(cancellationToken) is DBNull or null)
         {
             return Array.Empty<LedgerEntry>();
@@ -77,7 +77,7 @@ public sealed class PostgresLedgerStore : ILedgerStore
 
         await using var command = new NpgsqlCommand($"""
             SELECT "Kind", "ObjectName", "Operation", "Checksum", "Succeeded", "Detail", "AppliedAtUtc"
-            FROM {PgLedgerSql.QualifiedTable(schema)}
+            FROM {PostgresLedgerSql.QualifiedTable(schema)}
             WHERE "Kind" = @kind
             ORDER BY "Id"
             """, connection);

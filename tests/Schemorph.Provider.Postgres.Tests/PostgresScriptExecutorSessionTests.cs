@@ -3,16 +3,16 @@ using Schemorph.Core.Ledger;
 
 namespace Schemorph.Provider.Postgres.Tests;
 
-public sealed class PgScriptExecutorSessionTests : IAsyncLifetime
+public sealed class PostgresScriptExecutorSessionTests : IAsyncLifetime
 {
-    private PgTestSchema _schema = null!;
+    private PostgresTestSchema _schema = null!;
     private readonly PostgresProvider _provider = new();
     private string _url = null!;
 
     public async Task InitializeAsync()
     {
-        _schema = await PgTestSchema.CreateAsync("SELECT 1;");
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _schema.Name }
+        _schema = await PostgresTestSchema.CreateAsync("SELECT 1;");
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _schema.Name }
             .ConnectionString;
     }
 
@@ -21,9 +21,9 @@ public sealed class PgScriptExecutorSessionTests : IAsyncLifetime
     [SkippableFact]
     public async Task A_script_executed_through_a_session_does_not_commit_until_the_session_does()
     {
-        var session = PgApplySession.From((await _provider.BeginApplySessionAsync(_url))!);
+        var session = PostgresApplySession.From((await _provider.BeginApplySessionAsync(_url))!);
 
-        await PgScriptExecutor.ExecuteAsync(
+        await PostgresScriptExecutor.ExecuteAsync(
             _url, $"CREATE TABLE \"{_schema.Name}\".\"Sentinel\" (\"Id\" int)",
             Array.Empty<LedgerEntry>(), session);
 
@@ -40,15 +40,15 @@ public sealed class PgScriptExecutorSessionTests : IAsyncLifetime
     [SkippableFact]
     public async Task A_scripts_ledger_entries_land_in_the_same_session_transaction()
     {
-        var session = PgApplySession.From((await _provider.BeginApplySessionAsync(_url))!);
+        var session = PostgresApplySession.From((await _provider.BeginApplySessionAsync(_url))!);
         await using (var command = new NpgsqlCommand(
-            PgLedgerSql.CreateTableSql(_schema.Name), session.Connection, session.Transaction))
+            PostgresLedgerSql.CreateTableSql(_schema.Name), session.Connection, session.Transaction))
         {
             await command.ExecuteNonQueryAsync();
         }
 
         var entry = new LedgerEntry("redefine", "dbo.Widget", "Redefine", "checksum-1", Succeeded: true, Detail: "View");
-        await PgScriptExecutor.ExecuteAsync(
+        await PostgresScriptExecutor.ExecuteAsync(
             _url, $"CREATE VIEW \"{_schema.Name}\".\"V\" AS SELECT 1", new[] { entry }, session);
 
         await session.RollbackAsync();
@@ -60,7 +60,7 @@ public sealed class PgScriptExecutorSessionTests : IAsyncLifetime
 
     private async Task<bool> TableExistsAsync()
     {
-        await using var connection = new NpgsqlConnection(PgTestSchema.ServerUrl);
+        await using var connection = new NpgsqlConnection(PostgresTestSchema.ServerUrl);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand("SELECT to_regclass(@name)::text", connection);
         command.Parameters.AddWithValue("name", $"\"{_schema.Name}\".\"Sentinel\"");
@@ -69,7 +69,7 @@ public sealed class PgScriptExecutorSessionTests : IAsyncLifetime
 
     private async Task<bool> ViewExistsAsync()
     {
-        await using var connection = new NpgsqlConnection(PgTestSchema.ServerUrl);
+        await using var connection = new NpgsqlConnection(PostgresTestSchema.ServerUrl);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand("SELECT to_regclass(@name)::text", connection);
         command.Parameters.AddWithValue("name", $"\"{_schema.Name}\".\"V\"");

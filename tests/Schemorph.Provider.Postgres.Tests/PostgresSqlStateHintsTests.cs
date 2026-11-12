@@ -1,11 +1,11 @@
 namespace Schemorph.Provider.Postgres.Tests;
 
 /// <summary>
-/// The lookup table in isolation — no live server needed. <see cref="PgSqlStateHintApplyTests"/>
+/// The lookup table in isolation — no live server needed. <see cref="PostgresSqlStateHintApplyTests"/>
 /// covers one entry end-to-end through a real <c>PostgresException</c>; this covers the rest of
 /// the curated allowlist and the "unrecognized code" default.
 /// </summary>
-public class PgSqlStateHintsTests
+public class PostgresSqlStateHintsTests
 {
     [Theory]
     [InlineData("2BP01")] // dependent_objects_still_exist
@@ -34,7 +34,7 @@ public class PgSqlStateHintsTests
     [InlineData("57014")] // query_canceled
     public void Every_curated_code_has_a_non_empty_hint(string sqlState)
     {
-        var hint = PgSqlStateHints.TryGet(sqlState);
+        var hint = PostgresSqlStateHints.TryGet(sqlState);
 
         Assert.NotNull(hint);
         Assert.NotEmpty(hint);
@@ -46,6 +46,6 @@ public class PgSqlStateHintsTests
     [InlineData("")]
     public void An_unrecognized_code_gets_no_guessed_hint(string sqlState)
     {
-        Assert.Null(PgSqlStateHints.TryGet(sqlState));
+        Assert.Null(PostgresSqlStateHints.TryGet(sqlState));
     }
 }

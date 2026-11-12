@@ -9,15 +9,15 @@ namespace Schemorph.Provider.Postgres;
 /// real PostgreSQL grammar: a file either belongs to the declared structural
 /// slice (tables, columns, constraints, indexes, schemas), is exactly one
 /// programmable object (view, function, procedure or trigger — P3, routed to
-/// <see cref="PgProgrammables"/> for idempotent re-definition), is imperative
+/// <see cref="PostgresProgrammables"/> for idempotent re-definition), is imperative
 /// content that is not desired state (skipped loudly, the SQL Server
 /// convention), or demands something this provider has not earned yet — and
 /// that last case REFUSES rather than skips, because a plan that silently
 /// ignored a file would claim a sync it cannot see.
 /// </summary>
-internal sealed class PgDesiredState : IDesiredState
+internal sealed class PostgresDesiredState : IDesiredState
 {
-    private PgDesiredState(
+    private PostgresDesiredState(
         IReadOnlyList<string> modelTexts,
         IReadOnlyList<ProgrammableFile> programmableFiles,
         IReadOnlyList<RawMessage> warnings,
@@ -38,7 +38,7 @@ internal sealed class PgDesiredState : IDesiredState
     /// <summary>
     /// Files classified as exactly one view/function/procedure/trigger
     /// definition (P3, ADR-0002 strategy 2) — analyzed by
-    /// <see cref="PgProgrammables"/>, never diffed structurally.
+    /// <see cref="PostgresProgrammables"/>, never diffed structurally.
     /// </summary>
     internal IReadOnlyList<ProgrammableFile> ProgrammableFiles { get; }
 
@@ -47,11 +47,11 @@ internal sealed class PgDesiredState : IDesiredState
     public IReadOnlyList<RawMessage> Errors { get; }
 
     /// <summary>Downcast with a real error, mirroring the SQL Server provider's guard.</summary>
-    public static PgDesiredState From(IDesiredState state) => state as PgDesiredState
+    public static PostgresDesiredState From(IDesiredState state) => state as PostgresDesiredState
         ?? throw new ArgumentException(
             $"The desired state was not loaded by this provider (got {state.GetType().Name}).", nameof(state));
 
-    public static PgDesiredState Load(string directory)
+    public static PostgresDesiredState Load(string directory)
     {
         var modelTexts = new List<string>();
         var programmableFiles = new List<ProgrammableFile>();
@@ -119,7 +119,7 @@ internal sealed class PgDesiredState : IDesiredState
             }
         }
 
-        return new PgDesiredState(modelTexts, programmableFiles, warnings, errors);
+        return new PostgresDesiredState(modelTexts, programmableFiles, warnings, errors);
     }
 
     private static UnsupportedByProviderException Unsupported(string capability)

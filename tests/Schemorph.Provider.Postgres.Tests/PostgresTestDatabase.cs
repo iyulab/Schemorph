@@ -8,7 +8,7 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// "DB owner only" (requirement R1), which does not include CREATEDB — the tests
 /// have to live inside the same constraint the tool does.
 /// </summary>
-public sealed class PgTestSchema : IAsyncDisposable
+public sealed class PostgresTestSchema : IAsyncDisposable
 {
     /// <summary>
     /// The env var, with pooling forced off. Every live test here builds its own connection
@@ -30,11 +30,11 @@ public sealed class PgTestSchema : IAsyncDisposable
         }
     }
 
-    private PgTestSchema(string name) => Name = name;
+    private PostgresTestSchema(string name) => Name = name;
 
     public string Name { get; }
 
-    public static async Task<PgTestSchema> CreateAsync(string ddl)
+    public static async Task<PostgresTestSchema> CreateAsync(string ddl)
     {
         Skip.If(ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
@@ -45,7 +45,7 @@ public sealed class PgTestSchema : IAsyncDisposable
             await Execute(connection, $"CREATE SCHEMA \"{name}\"");
             await Execute(connection, $"SET search_path TO \"{name}\"; {ddl}");
         }
-        return new PgTestSchema(name);
+        return new PostgresTestSchema(name);
     }
 
     public async ValueTask DisposeAsync()

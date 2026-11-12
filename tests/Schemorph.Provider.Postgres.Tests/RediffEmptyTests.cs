@@ -35,11 +35,11 @@ public class RediffEmptyTests
     [SkippableFact]
     public async Task Applying_the_rendered_state_and_rediffing_yields_an_empty_comparison()
     {
-        await using var live = await PgTestSchema.CreateAsync(Corpus);
+        await using var live = await PostgresTestSchema.CreateAsync(Corpus);
         var rendered = DesiredStateRenderer.Render(
-            await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, live.Name));
+            await CatalogReader.ReadTablesAsync(PostgresTestSchema.ServerUrl!, live.Name));
 
-        await using var shadow = await ShadowSchema.CreateAsync(PgTestSchema.ServerUrl!);
+        await using var shadow = await ShadowSchema.CreateAsync(PostgresTestSchema.ServerUrl!);
         await shadow.ApplyAsync(
             rendered.Select(f => f.Content).ToList(), sourceSchema: live.Name);
 
@@ -48,9 +48,9 @@ public class RediffEmptyTests
         // unqualified by the reader, so the shadow and
         // the live schema produce byte-equal canonical texts.
         var desired = await CatalogReader.ReadTablesAsync(
-            PgTestSchema.ServerUrl!, shadow.Name, normalizeSameSchemaReferences: true);
+            PostgresTestSchema.ServerUrl!, shadow.Name, normalizeSameSchemaReferences: true);
         var actual = await CatalogReader.ReadTablesAsync(
-            PgTestSchema.ServerUrl!, live.Name, normalizeSameSchemaReferences: true);
+            PostgresTestSchema.ServerUrl!, live.Name, normalizeSameSchemaReferences: true);
 
         var result = SnapshotComparer.Compare(desired, actual);
 
@@ -61,20 +61,20 @@ public class RediffEmptyTests
     public async Task A_real_difference_still_surfaces_through_the_same_normalized_read()
     {
         // Normalization must erase schema-location noise and NOTHING else.
-        await using var live = await PgTestSchema.CreateAsync(Corpus);
+        await using var live = await PostgresTestSchema.CreateAsync(Corpus);
         var rendered = DesiredStateRenderer.Render(
-            await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, live.Name));
+            await CatalogReader.ReadTablesAsync(PostgresTestSchema.ServerUrl!, live.Name));
 
-        await using var shadow = await ShadowSchema.CreateAsync(PgTestSchema.ServerUrl!);
+        await using var shadow = await ShadowSchema.CreateAsync(PostgresTestSchema.ServerUrl!);
         await shadow.ApplyAsync(
             rendered.Select(f => f.Content).ToList(), sourceSchema: live.Name);
-        await PgTestSchema.ExecuteAsync(
+        await PostgresTestSchema.ExecuteAsync(
             $"ALTER TABLE \"{shadow.Name}\".\"Members\" ADD COLUMN \"JoinedAt\" timestamptz NOT NULL DEFAULT now();");
 
         var desired = await CatalogReader.ReadTablesAsync(
-            PgTestSchema.ServerUrl!, shadow.Name, normalizeSameSchemaReferences: true);
+            PostgresTestSchema.ServerUrl!, shadow.Name, normalizeSameSchemaReferences: true);
         var actual = await CatalogReader.ReadTablesAsync(
-            PgTestSchema.ServerUrl!, live.Name, normalizeSameSchemaReferences: true);
+            PostgresTestSchema.ServerUrl!, live.Name, normalizeSameSchemaReferences: true);
 
         var change = Assert.Single(SnapshotComparer.Compare(desired, actual));
         Assert.Equal(new Core.Providers.RawChange("Change", "Table", "Members"), change);

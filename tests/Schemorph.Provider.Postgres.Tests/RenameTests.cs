@@ -22,7 +22,7 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// </summary>
 public class RenameTests : IAsyncLifetime
 {
-    private PgTestSchema _live = null!;
+    private PostgresTestSchema _live = null!;
     private string _url = null!;
     private string _schemaDir = null!;
     private readonly PostgresProvider _provider = new();
@@ -40,8 +40,8 @@ public class RenameTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _live = await PgTestSchema.CreateAsync(LiveV1);
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _live.Name }
+        _live = await PostgresTestSchema.CreateAsync(LiveV1);
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _live.Name }
             .ConnectionString;
         _schemaDir = Path.Combine(Path.GetTempPath(), "schemorph-pg-rename-" + Guid.NewGuid().ToString("n")[..8]);
         Directory.CreateDirectory(Path.Combine(_schemaDir, "tables"));

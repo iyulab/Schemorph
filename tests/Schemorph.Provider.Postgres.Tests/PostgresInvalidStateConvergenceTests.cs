@@ -11,9 +11,9 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// under test is the one every apply failure leans on: running the same apply again converges.
 /// Before the inspector read these states the first was reported as in sync, forever.
 /// </summary>
-public sealed class PgInvalidStateConvergenceTests : IAsyncLifetime
+public sealed class PostgresInvalidStateConvergenceTests : IAsyncLifetime
 {
-    private PgTestSchema _live = null!;
+    private PostgresTestSchema _live = null!;
     private string _url = null!;
     private string _schemaDir = null!;
     private readonly PostgresProvider _provider = new();
@@ -21,7 +21,7 @@ public sealed class PgInvalidStateConvergenceTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _live = await PgTestSchema.CreateAsync("""
+        _live = await PostgresTestSchema.CreateAsync("""
             CREATE TABLE "Doc" (
                 "Id" integer NOT NULL,
                 "Name" text,
@@ -29,7 +29,7 @@ public sealed class PgInvalidStateConvergenceTests : IAsyncLifetime
                 CONSTRAINT "PK_Doc" PRIMARY KEY ("Id")
             );
             """);
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _live.Name }.ConnectionString;
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _live.Name }.ConnectionString;
         _schemaDir = Path.Combine(Path.GetTempPath(), "schemorph-pg-invalid-" + Guid.NewGuid().ToString("n")[..8]);
         Directory.CreateDirectory(Path.Combine(_schemaDir, "tables"));
         await File.WriteAllTextAsync(Path.Combine(_schemaDir, "tables", "schema.sql"), $"""
@@ -52,7 +52,7 @@ public sealed class PgInvalidStateConvergenceTests : IAsyncLifetime
 
     private async Task ExecuteAsync(string sql)
     {
-        await using var connection = new NpgsqlConnection(PgTestSchema.ServerUrl);
+        await using var connection = new NpgsqlConnection(PostgresTestSchema.ServerUrl);
         await connection.OpenAsync();
         // One statement per command, schema-qualified: a multi-statement text runs in an implicit
         // transaction, and CREATE INDEX CONCURRENTLY refuses to.
@@ -64,7 +64,7 @@ public sealed class PgInvalidStateConvergenceTests : IAsyncLifetime
 
     private async Task<T> ScalarAsync<T>(string sql)
     {
-        await using var connection = new NpgsqlConnection(PgTestSchema.ServerUrl);
+        await using var connection = new NpgsqlConnection(PostgresTestSchema.ServerUrl);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand(sql, connection);
         return (T)(await command.ExecuteScalarAsync())!;
@@ -86,7 +86,7 @@ public sealed class PgInvalidStateConvergenceTests : IAsyncLifetime
     [SkippableFact]
     public async Task An_index_a_failed_concurrent_build_left_invalid_is_rebuilt_not_reported_in_sync()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
         // The way a real invalid index is made: a unique build that really fails on duplicate data.
         await ExecuteAsync($"""INSERT INTO {Doc} ("Id", "Name", "Qty") VALUES (1, 'dup', 1), (2, 'dup', 1)""");
@@ -118,7 +118,7 @@ public sealed class PgInvalidStateConvergenceTests : IAsyncLifetime
     [SkippableFact]
     public async Task A_constraint_added_not_valid_is_validated_in_place_and_converges()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
         // A row that predates the constraint and breaks it: ADD ... NOT VALID accepts that.
         await ExecuteAsync($"""INSERT INTO {Doc} ("Id", "Name", "Qty") VALUES (1, 'a', 5), (2, 'b', -1)""");

@@ -11,9 +11,9 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// tests make the stage fail the way a real one does (a unique build over duplicate data, a validation over
 /// violating rows, a lock another session holds) rather than by hand-crafting the leftover state.
 /// </summary>
-public sealed class PgOnlineStageTests : IAsyncLifetime
+public sealed class PostgresOnlineStageTests : IAsyncLifetime
 {
-    private PgTestSchema _live = null!;
+    private PostgresTestSchema _live = null!;
     private string _url = null!;
     private string _schemaDir = null!;
     private readonly PostgresProvider _provider = new();
@@ -31,8 +31,8 @@ public sealed class PgOnlineStageTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _live = await PgTestSchema.CreateAsync(LiveDdl);
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _live.Name }.ConnectionString;
+        _live = await PostgresTestSchema.CreateAsync(LiveDdl);
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _live.Name }.ConnectionString;
         _schemaDir = Path.Combine(Path.GetTempPath(), "schemorph-pg-online-" + Guid.NewGuid().ToString("n")[..8]);
         Directory.CreateDirectory(Path.Combine(_schemaDir, "tables"));
     }
@@ -63,7 +63,7 @@ public sealed class PgOnlineStageTests : IAsyncLifetime
 
     private async Task ExecuteAsync(string sql)
     {
-        await using var connection = new NpgsqlConnection(PgTestSchema.ServerUrl);
+        await using var connection = new NpgsqlConnection(PostgresTestSchema.ServerUrl);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand(sql, connection);
         await command.ExecuteNonQueryAsync();
@@ -71,7 +71,7 @@ public sealed class PgOnlineStageTests : IAsyncLifetime
 
     private async Task<T> ScalarAsync<T>(string sql)
     {
-        await using var connection = new NpgsqlConnection(PgTestSchema.ServerUrl);
+        await using var connection = new NpgsqlConnection(PostgresTestSchema.ServerUrl);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand(sql, connection);
         return (T)(await command.ExecuteScalarAsync())!;
@@ -82,7 +82,7 @@ public sealed class PgOnlineStageTests : IAsyncLifetime
     /// <summary>Null when the index does not exist at all.</summary>
     private async Task<bool?> IndexIsValidAsync()
     {
-        await using var connection = new NpgsqlConnection(PgTestSchema.ServerUrl);
+        await using var connection = new NpgsqlConnection(PostgresTestSchema.ServerUrl);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand(
             "SELECT x.indisvalid FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid JOIN pg_namespace n ON n.oid = i.relnamespace " +
@@ -94,7 +94,7 @@ public sealed class PgOnlineStageTests : IAsyncLifetime
     /// <summary>Null when the constraint does not exist.</summary>
     private async Task<bool?> ConstraintIsValidatedAsync()
     {
-        await using var connection = new NpgsqlConnection(PgTestSchema.ServerUrl);
+        await using var connection = new NpgsqlConnection(PostgresTestSchema.ServerUrl);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand(
             $"SELECT convalidated FROM pg_constraint WHERE conrelid = '{Doc}'::regclass AND conname = 'CK_Doc_Qty'", connection);
@@ -115,7 +115,7 @@ public sealed class PgOnlineStageTests : IAsyncLifetime
     [SkippableFact]
     public async Task The_index_is_built_and_the_constraint_validated_after_the_commit_and_the_apply_converges()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
         await DeclareCheckAndUniqueIndexAsync();
 
         var outcome = await ApplyAsync();
@@ -140,7 +140,7 @@ public sealed class PgOnlineStageTests : IAsyncLifetime
     [SkippableFact]
     public async Task Each_online_statement_is_recorded_in_the_history_ledger()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
         await DeclareCheckAndUniqueIndexAsync();
 
         var outcome = await ApplyAsync();
@@ -155,7 +155,7 @@ public sealed class PgOnlineStageTests : IAsyncLifetime
     [SkippableFact]
     public async Task Without_the_option_the_same_change_is_built_inside_the_transaction_and_nothing_runs_after()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
         await DeclareCheckAndUniqueIndexAsync();
 
         var outcome = await ApplyAsync(online: false);
@@ -171,7 +171,7 @@ public sealed class PgOnlineStageTests : IAsyncLifetime
     [SkippableFact]
     public async Task The_index_lands_in_the_target_schema_not_the_default_one()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
         await DeclareCheckAndUniqueIndexAsync();
 
         Assert.True((await ApplyAsync()).Success);
@@ -187,7 +187,7 @@ public sealed class PgOnlineStageTests : IAsyncLifetime
     [SkippableFact]
     public async Task A_unique_build_over_duplicate_data_fails_the_stage_and_the_same_apply_converges_once_the_data_is_fixed()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
         await ExecuteAsync($"""INSERT INTO {Doc} ("Id", "Name", "Qty") VALUES (3, 'a', 3)""");   // 'a' twice
         await DeclareCheckAndUniqueIndexAsync();
 
@@ -228,7 +228,7 @@ public sealed class PgOnlineStageTests : IAsyncLifetime
     [SkippableFact]
     public async Task A_validation_over_violating_rows_fails_the_stage_and_the_next_plan_is_the_validation_alone()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
         await ExecuteAsync($"""UPDATE {Doc} SET "Qty" = -5 WHERE "Id" = 2""");
         await WriteDesiredAsync(constraints: CheckConstraint);
 
@@ -261,7 +261,7 @@ public sealed class PgOnlineStageTests : IAsyncLifetime
     [SkippableFact]
     public async Task The_plan_hash_binds_the_online_statements_so_a_diff_without_the_option_does_not_gate_an_apply_with_it()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
         await DeclareCheckAndUniqueIndexAsync();
 
         var plain = await DiffOperation.RunAsync(_provider, _ledger, _schemaDir, _url, allowDestructive: false);
@@ -289,12 +289,12 @@ public sealed class PgOnlineStageTests : IAsyncLifetime
     [SkippableFact]
     public async Task A_lock_another_session_holds_fails_the_online_statement_at_the_timeout_and_the_stage_is_reported()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
         await WriteDesiredAsync(indexes: $"""CREATE INDEX "IX_Doc_Name" ON "{_live.Name}"."Doc" ("Name");""");
 
         // SHARE ROW EXCLUSIVE conflicts with the SHARE UPDATE EXCLUSIVE a concurrent build takes, but not
         // with the reads the planning does - so the apply reaches the online stage and waits there.
-        await using var holder = new NpgsqlConnection(PgTestSchema.ServerUrl);
+        await using var holder = new NpgsqlConnection(PostgresTestSchema.ServerUrl);
         await holder.OpenAsync();
         await using var holderTransaction = await holder.BeginTransactionAsync();
         await using (var lockCommand = new NpgsqlCommand($"LOCK TABLE {Doc} IN SHARE ROW EXCLUSIVE MODE", holder, holderTransaction))
@@ -321,7 +321,7 @@ public sealed class PgOnlineStageTests : IAsyncLifetime
     [SkippableFact]
     public async Task The_session_settings_of_an_online_statement_do_not_outlive_it()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
         await _provider.ExecuteOnlineStepAsync(_url,
             new OnlineStep("Doc", $"""CREATE INDEX CONCURRENTLY "IX_Doc_Name" ON "Doc" ("Name");"""),
@@ -338,13 +338,13 @@ public sealed class PgOnlineStageTests : IAsyncLifetime
     [SkippableFact]
     public async Task A_statement_the_server_rejects_is_described_for_the_stage_it_ran_in()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
-        var ex = await Assert.ThrowsAsync<PgOnlineStepException>(() => _provider.ExecuteOnlineStepAsync(_url,
+        var ex = await Assert.ThrowsAsync<PostgresOnlineStepException>(() => _provider.ExecuteOnlineStepAsync(_url,
             new OnlineStep("Doc", """CREATE INDEX CONCURRENTLY "IX_x" ON "NoSuchTable" ("Name");""")));
 
         var engine = _provider.DescribeEngineError(ex)!;
         Assert.Equal("42P01", engine.Code);
-        Assert.Equal(PgSqlStateHints.TryGet("42P01"), engine.Hint);   // no online-specific text for this code
+        Assert.Equal(PostgresSqlStateHints.TryGet("42P01"), engine.Hint);   // no online-specific text for this code
     }
 }

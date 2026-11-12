@@ -8,14 +8,14 @@ namespace Schemorph.Provider.Postgres;
 /// one transaction, held open across every execution call the apply makes.
 /// Internal — <see cref="IApplySession"/> is all the core ever sees; only this
 /// project reaches for <see cref="Connection"/>/<see cref="Transaction"/> to
-/// hand the SAME boundary to <see cref="PgScriptExecutor"/> and
+/// hand the SAME boundary to <see cref="PostgresScriptExecutor"/> and
 /// <see cref="PostgresLedgerStore"/>.
 /// </summary>
-internal sealed class PgApplySession : IApplySession
+internal sealed class PostgresApplySession : IApplySession
 {
     private bool _completed;
 
-    private PgApplySession(NpgsqlConnection connection, NpgsqlTransaction transaction, string connectionString)
+    private PostgresApplySession(NpgsqlConnection connection, NpgsqlTransaction transaction, string connectionString)
     {
         Connection = connection;
         Transaction = transaction;
@@ -33,13 +33,13 @@ internal sealed class PgApplySession : IApplySession
     /// </summary>
     public string ConnectionString { get; }
 
-    public static async Task<PgApplySession> OpenAsync(
+    public static async Task<PostgresApplySession> OpenAsync(
         string connectionString, ApplySessionOptions? options, CancellationToken cancellationToken)
     {
         var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
         var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        var session = new PgApplySession(connection, transaction, connectionString);
+        var session = new PostgresApplySession(connection, transaction, connectionString);
         if (options?.LockTimeout is { } timeout)
         {
             try
@@ -93,8 +93,8 @@ internal sealed class PgApplySession : IApplySession
         await Connection.DisposeAsync();
     }
 
-    /// <summary>Downcast with a real error — mirrors <see cref="PgDesiredState.From"/>: only this provider's own session ever reaches its own execution calls.</summary>
-    public static PgApplySession From(IApplySession session) => session as PgApplySession
+    /// <summary>Downcast with a real error — mirrors <see cref="PostgresDesiredState.From"/>: only this provider's own session ever reaches its own execution calls.</summary>
+    public static PostgresApplySession From(IApplySession session) => session as PostgresApplySession
         ?? throw new ArgumentException(
             $"The apply session was not opened by this provider (got {session.GetType().Name}).", nameof(session));
 }

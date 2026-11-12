@@ -8,17 +8,17 @@ namespace Schemorph.Provider.Postgres;
 /// <summary>
 /// Dialect half of the migration safety lint (P4): which risky constructs a
 /// script provably contains — AST judgment, never regex-over-text, the same
-/// discipline <see cref="Shadow.SchemaRewriter"/> and <see cref="PgProgrammables"/>
+/// discipline <see cref="Shadow.SchemaRewriter"/> and <see cref="PostgresProgrammables"/>
 /// already hold. An unparseable script yields no signals, the conservative
 /// contract on <c>IDatabaseProvider.LintMigrationScriptAsync</c>.
 ///
 /// Walked generically over the whole protobuf tree rather than only the
 /// top-level statement list, so a signal inside any nested construct this
-/// grammar actually parses is found the same way <see cref="PgProgrammables"/>
+/// grammar actually parses is found the same way <see cref="PostgresProgrammables"/>
 /// finds a <c>RangeVar</c> anywhere in a view's query — coverage does not
 /// depend on enumerating statement positions.
 /// </summary>
-internal static class PgMigrationLinter
+internal static class PostgresMigrationLinter
 {
     public static IReadOnlyList<MigrationLintSignal> Lint(string scriptText)
     {
@@ -43,7 +43,7 @@ internal static class PgMigrationLinter
             // One node covers GRANT and REVOKE alike (IsGrant); PostgreSQL has no
             // DENY (a T-SQL-only construct SQL Server's linter also checks).
             if (node.GrantStmt is not null) signals.Add(MigrationLintSignal.PermissionChange);
-            // Same field, same semantics as PgDesiredState's CONCURRENTLY refusal
+            // Same field, same semantics as PostgresDesiredState's CONCURRENTLY refusal
             // for desired-state files — here it flags migration scripts instead.
             if (node.IndexStmt is { Concurrent: true }) signals.Add(MigrationLintSignal.NonTransactional);
         }

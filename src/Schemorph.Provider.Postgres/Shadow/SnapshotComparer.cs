@@ -18,7 +18,7 @@ namespace Schemorph.Provider.Postgres.Shadow;
 internal static class SnapshotComparer
 {
     public static IReadOnlyList<RawChange> Compare(
-        IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live)
+        IReadOnlyList<PostgresTable> desired, IReadOnlyList<PostgresTable> live)
     {
         var changes = new List<RawChange>();
         var liveByName = live.ToDictionary(t => t.Name, StringComparer.Ordinal);
@@ -62,7 +62,7 @@ internal static class SnapshotComparer
     /// there is.
     /// </summary>
     public static IReadOnlyList<string> TablesWithColumnChanges(
-        IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live)
+        IReadOnlyList<PostgresTable> desired, IReadOnlyList<PostgresTable> live)
     {
         var liveByName = live.ToDictionary(t => t.Name, StringComparer.Ordinal);
         var changed = new List<string>();
@@ -96,11 +96,11 @@ internal static class SnapshotComparer
     // empties, and the apply has nothing to run. Where such a difference is
     // material (a positional `INSERT`, `SELECT *`), the remedy is naming the
     // columns, not rebuilding the table.
-    private static bool ColumnsEqual(PgTable a, PgTable b)
+    private static bool ColumnsEqual(PostgresTable a, PostgresTable b)
         => a.Columns.OrderBy(c => c.Name, StringComparer.Ordinal)
             .SequenceEqual(b.Columns.OrderBy(c => c.Name, StringComparer.Ordinal));
 
-    private static bool ConstraintsEqual(PgTable a, PgTable b)
+    private static bool ConstraintsEqual(PostgresTable a, PostgresTable b)
         => a.Constraints.OrderBy(c => c.Name, StringComparer.Ordinal)
             .SequenceEqual(b.Constraints.OrderBy(c => c.Name, StringComparer.Ordinal));
 
@@ -110,7 +110,7 @@ internal static class SnapshotComparer
     // direction, NULLS placement, operator class, collation, INCLUDE columns and
     // predicate alike. A projection over columns cannot do that, and reporting
     // two such indexes as equal is drift the tool would never plan away.
-    private static bool IndexesEqual(PgTable a, PgTable b)
+    private static bool IndexesEqual(PostgresTable a, PostgresTable b)
         => a.Indexes.OrderBy(i => i.Name, StringComparer.Ordinal)
             .SequenceEqual(b.Indexes.OrderBy(i => i.Name, StringComparer.Ordinal));
 }

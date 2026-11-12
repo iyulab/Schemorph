@@ -18,12 +18,12 @@ namespace Schemorph.Provider.Postgres;
 /// uses), never by pattern-matching the keyword.
 ///
 /// Single-schema scope (ADR-0007): object identity is the bare name, the same
-/// convention <see cref="PgTable.Name"/> already uses for tables — this slice
+/// convention <see cref="PostgresTable.Name"/> already uses for tables — this slice
 /// does not qualify by schema, and a reference schema-qualified to something
 /// else is read by its bare name too (cross-schema DDL is explicitly a later
 /// slice, per <see cref="Shadow.SchemaRewriter"/>'s own boundary).
 /// </summary>
-internal static class PgProgrammables
+internal static class PostgresProgrammables
 {
     /// <summary>
     /// <c>CREATE OR REPLACE VIEW</c> only ever appends — PostgreSQL raises
@@ -40,7 +40,7 @@ internal static class PgProgrammables
         "time (SQLSTATE 42P16) even though this plan reports the statement itself. " +
         "Review the view's column list if it changed anywhere but the end.";
 
-    public static ProgrammableAnalysis Analyze(IReadOnlyList<PgDesiredState.ProgrammableFile> files)
+    public static ProgrammableAnalysis Analyze(IReadOnlyList<PostgresDesiredState.ProgrammableFile> files)
     {
         var messages = new List<RawMessage>();
         var parsedObjects = new List<(string ObjectName, string ObjectType, string Path, string Text,
@@ -49,7 +49,7 @@ internal static class PgProgrammables
         foreach (var file in files)
         {
             // Load already parsed this file to classify it; re-parsing here
-            // keeps PgDesiredState a pure classifier and this the only place
+            // keeps PostgresDesiredState a pure classifier and this the only place
             // that owns the AST rewrite, at the cost of one cheap re-parse of
             // a single-statement file.
             var parsed = Parser.Parse(file.Text);

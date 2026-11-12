@@ -15,7 +15,7 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// </summary>
 public sealed class ViewsDroppedFirstTests : IAsyncLifetime
 {
-    private PgTestSchema _live = null!;
+    private PostgresTestSchema _live = null!;
     private string _url = null!;
     private string _dir = null!;
     private readonly PostgresProvider _provider = new();
@@ -23,8 +23,8 @@ public sealed class ViewsDroppedFirstTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _live = await PgTestSchema.CreateAsync("SELECT 1;");
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _live.Name }
+        _live = await PostgresTestSchema.CreateAsync("SELECT 1;");
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _live.Name }
             .ConnectionString;
         _dir = Path.Combine(Path.GetTempPath(), "schemorph-pg-dropfirst-" + Guid.NewGuid().ToString("n")[..8]);
         Directory.CreateDirectory(Path.Combine(_dir, "tables"));
@@ -73,7 +73,7 @@ public sealed class ViewsDroppedFirstTests : IAsyncLifetime
         await WriteAsync("CREATE TABLE orders (id int PRIMARY KEY, a int NOT NULL, b int NOT NULL);",
             ("order_b", "CREATE VIEW order_b AS SELECT id, b FROM orders;"));
         await ApplyAsync();
-        await PgTestSchema.ExecuteAsync($"""INSERT INTO "{_live.Name}".orders VALUES (1, 2, 3);""");
+        await PostgresTestSchema.ExecuteAsync($"""INSERT INTO "{_live.Name}".orders VALUES (1, 2, 3);""");
     }
 
     [SkippableFact]
@@ -119,7 +119,7 @@ public sealed class ViewsDroppedFirstTests : IAsyncLifetime
             ("order_x", "CREATE VIEW order_x AS SELECT id, b AS x FROM orders;"),
             ("order_x_ids", "CREATE VIEW order_x_ids AS SELECT id, x FROM order_x;"));
         await ApplyAsync();
-        await PgTestSchema.ExecuteAsync($"""INSERT INTO "{_live.Name}".orders VALUES (1, 2, 3);""");
+        await PostgresTestSchema.ExecuteAsync($"""INSERT INTO "{_live.Name}".orders VALUES (1, 2, 3);""");
 
         // The inner view keeps its shape (a plain CREATE OR REPLACE would do), but it reads
         // the column being dropped; the outer view's file is untouched and reads the inner.
@@ -175,7 +175,7 @@ public sealed class ViewsDroppedFirstTests : IAsyncLifetime
             ("v1", "CREATE VIEW v1 AS SELECT id, b FROM orders;"),
             ("v2", "CREATE VIEW v2 AS SELECT id FROM v1;"));
         await ApplyAsync();
-        await PgTestSchema.ExecuteAsync($"""INSERT INTO "{_live.Name}".orders VALUES (1, 2, 3);""");
+        await PostgresTestSchema.ExecuteAsync($"""INSERT INTO "{_live.Name}".orders VALUES (1, 2, 3);""");
     }
 
     [SkippableFact]

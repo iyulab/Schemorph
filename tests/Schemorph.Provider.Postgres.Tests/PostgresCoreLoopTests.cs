@@ -10,9 +10,9 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// layer of parity with the first provider: identical operations, plan vocabulary and ledger
 /// semantics, with the provider only supplying dialect (ADR-0003).
 /// </summary>
-public class PgCoreLoopTests : IAsyncLifetime
+public class PostgresCoreLoopTests : IAsyncLifetime
 {
-    private PgTestSchema _live = null!;
+    private PostgresTestSchema _live = null!;
     private string _url = null!;
     private string _schemaDir = null!;
     private readonly PostgresProvider _provider = new();
@@ -28,8 +28,8 @@ public class PgCoreLoopTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _live = await PgTestSchema.CreateAsync(LiveV1);
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _live.Name }
+        _live = await PostgresTestSchema.CreateAsync(LiveV1);
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _live.Name }
             .ConnectionString;
 
         // The desired state: v1 plus a column, a CHECK, and a new table — the
@@ -106,7 +106,7 @@ public class PgCoreLoopTests : IAsyncLifetime
         Assert.False(outcome.Success);
         Assert.Equal(ApplyOperation.FailureStage.PlanMismatch, outcome.Stage);
 
-        var live = await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, _live.Name);
+        var live = await CatalogReader.ReadTablesAsync(PostgresTestSchema.ServerUrl!, _live.Name);
         Assert.DoesNotContain(live, t => t.Name == "Members");   // nothing executed
     }
 
@@ -150,7 +150,7 @@ public class PgCoreLoopTests : IAsyncLifetime
             Assert.Equal(ApplyOperation.FailureStage.Redefine, outcome.Stage);
             Assert.Single(outcome.Applied);   // the outcome still names what the rolled-back transaction attempted...
 
-            var live = await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, _live.Name);
+            var live = await CatalogReader.ReadTablesAsync(PostgresTestSchema.ServerUrl!, _live.Name);
             Assert.DoesNotContain(live, t => t.Name == "Widgets");   // ...but the rollback took it back out.
 
             var declarative = await _ledger.ReadAsync(_url, "declarative");
@@ -207,7 +207,7 @@ public class PgCoreLoopTests : IAsyncLifetime
             Assert.False(outcome.Success);
             Assert.Equal(ApplyOperation.FailureStage.Migration, outcome.Stage);
 
-            var live = await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, _live.Name);
+            var live = await CatalogReader.ReadTablesAsync(PostgresTestSchema.ServerUrl!, _live.Name);
             Assert.DoesNotContain(live, t => t.Name == "Gadgets");   // declarative rolled back...
 
             var declarative = await _ledger.ReadAsync(_url, "declarative");

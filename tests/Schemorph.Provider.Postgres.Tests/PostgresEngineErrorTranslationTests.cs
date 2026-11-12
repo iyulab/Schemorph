@@ -12,10 +12,10 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// drives a different boundary against a live server: the declarative publish, a migration,
 /// and a comparison that throws.
 /// </summary>
-public sealed class PgEngineErrorTranslationTests : IAsyncLifetime
+public sealed class PostgresEngineErrorTranslationTests : IAsyncLifetime
 {
-    private PgTestSchema _live = null!;
-    private PgTestSchema? _other;
+    private PostgresTestSchema _live = null!;
+    private PostgresTestSchema? _other;
     private string _url = null!;
     private string _schemaDir = null!;
     private readonly PostgresProvider _provider = new();
@@ -27,8 +27,8 @@ public sealed class PgEngineErrorTranslationTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _live = await PgTestSchema.CreateAsync(LiveV1);
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _live.Name }
+        _live = await PostgresTestSchema.CreateAsync(LiveV1);
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _live.Name }
             .ConnectionString;
         _schemaDir = Path.Combine(
             Path.GetTempPath(), "schemorph-pg-engine-" + Guid.NewGuid().ToString("n")[..8]);
@@ -49,11 +49,11 @@ public sealed class PgEngineErrorTranslationTests : IAsyncLifetime
     [SkippableFact]
     public async Task A_drop_blocked_by_a_dependent_outside_the_desired_state_is_translated_at_publish()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
         // A view in another schema reads the column — outside the desired state and outside
         // the target schema, so nothing in the plan removes it and the engine refuses the drop.
-        _other = await PgTestSchema.CreateAsync(
+        _other = await PostgresTestSchema.CreateAsync(
             $"""CREATE VIEW "DocNames" AS SELECT "Name" FROM "{_live.Name}"."Doc";""");
         await WriteTableAsync("\"Id\" integer NOT NULL");
 
@@ -77,9 +77,9 @@ public sealed class PgEngineErrorTranslationTests : IAsyncLifetime
     [SkippableFact]
     public async Task A_blocked_drop_names_the_view_that_still_reads_the_column()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
-        _other = await PgTestSchema.CreateAsync(
+        _other = await PostgresTestSchema.CreateAsync(
             $"""CREATE VIEW "DocNames" AS SELECT "Name" FROM "{_live.Name}"."Doc";""");
         await WriteTableAsync("\"Id\" integer NOT NULL");
 
@@ -98,9 +98,9 @@ public sealed class PgEngineErrorTranslationTests : IAsyncLifetime
     [SkippableFact]
     public async Task A_blocked_drop_names_the_function_whose_body_reads_the_column()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
-        _other = await PgTestSchema.CreateAsync(
+        _other = await PostgresTestSchema.CreateAsync(
             $"""CREATE FUNCTION "FirstName"(fallback text) RETURNS text LANGUAGE sql RETURN (SELECT "Name" FROM "{_live.Name}"."Doc" LIMIT 1);""");
         await WriteTableAsync("\"Id\" integer NOT NULL");
 
@@ -120,7 +120,7 @@ public sealed class PgEngineErrorTranslationTests : IAsyncLifetime
     [SkippableFact]
     public async Task A_blocked_drop_names_the_policy_whose_expression_reads_the_column()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
         await using (var connection = new NpgsqlConnection(_url))
         {
@@ -142,9 +142,9 @@ public sealed class PgEngineErrorTranslationTests : IAsyncLifetime
     [SkippableFact]
     public async Task A_blocked_table_drop_names_the_foreign_key_that_still_references_it()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
-        _other = await PgTestSchema.CreateAsync(
+        _other = await PostgresTestSchema.CreateAsync(
             $"""CREATE TABLE "Line" ("Id" integer PRIMARY KEY, "DocId" integer CONSTRAINT "FK_Line_Doc" REFERENCES "{_live.Name}"."Doc" ("Id"));""");
         // An empty desired state: the apply drops "Doc", which the other schema's key still references.
         File.Delete(Path.Combine(_schemaDir, "tables", "Doc.sql"));
@@ -164,7 +164,7 @@ public sealed class PgEngineErrorTranslationTests : IAsyncLifetime
     [SkippableFact]
     public async Task A_code_with_no_translation_is_marked_untranslated_in_the_migration_stage()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
         await WriteTableAsync("\"Id\" integer NOT NULL, \"Name\" text");
         var migrations = Path.Combine(_schemaDir, "..", Path.GetFileName(_schemaDir) + "-migrations");
@@ -194,12 +194,12 @@ public sealed class PgEngineErrorTranslationTests : IAsyncLifetime
     [SkippableFact]
     public async Task A_view_file_the_comparison_cannot_build_is_described_without_the_statement_offset()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
         // The desired state contradicts itself: the view reads a column its table no longer
         // declares. The view exists live, so the comparison probes the file's query against
         // the desired table shape in its shadow schema, and the engine rejects it there.
-        await PgTestSchema.ExecuteAsync(
+        await PostgresTestSchema.ExecuteAsync(
             $"""CREATE VIEW "{_live.Name}"."DocNames" AS SELECT "Name" FROM "{_live.Name}"."Doc";""");
         await WriteTableAsync("\"Id\" integer NOT NULL");
         Directory.CreateDirectory(Path.Combine(_schemaDir, "views"));

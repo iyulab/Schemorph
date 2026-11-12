@@ -3,7 +3,7 @@ using Schemorph.Core.Operations;
 
 namespace Schemorph.Provider.Postgres.Tests;
 
-using ProgrammableFile = PgDesiredState.ProgrammableFile;
+using ProgrammableFile = PostgresDesiredState.ProgrammableFile;
 
 /// <summary>
 /// The column probe builds each changed view in a scratch schema holding the desired state. A
@@ -19,12 +19,12 @@ using ProgrammableFile = PgDesiredState.ProgrammableFile;
 /// </remarks>
 public sealed class ViewProbeUndeclaredFunctionTests
 {
-    private static async Task<(PgTestSchema Live, string Url)> LiveWithPgcryptoAsync(string ddl)
+    private static async Task<(PostgresTestSchema Live, string Url)> LiveWithPgcryptoAsync(string ddl)
     {
-        var live = await PgTestSchema.CreateAsync("SELECT 1;");
-        await PgTestSchema.ExecuteAsync($"""CREATE EXTENSION pgcrypto SCHEMA "{live.Name}";""");
-        await PgTestSchema.ExecuteAsync($"""SET search_path TO "{live.Name}"; {ddl}""");
-        var url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = live.Name }
+        var live = await PostgresTestSchema.CreateAsync("SELECT 1;");
+        await PostgresTestSchema.ExecuteAsync($"""CREATE EXTENSION pgcrypto SCHEMA "{live.Name}";""");
+        await PostgresTestSchema.ExecuteAsync($"""SET search_path TO "{live.Name}"; {ddl}""");
+        var url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = live.Name }
             .ConnectionString;
         return (live, url);
     }
@@ -38,7 +38,7 @@ public sealed class ViewProbeUndeclaredFunctionTests
             """);
         await using var _ = live;
 
-        var analysis = PgProgrammables.Analyze(new[]
+        var analysis = PostgresProgrammables.Analyze(new[]
         {
             new ProgrammableFile("v.sql", "CREATE VIEW v AS SELECT a, encode(digest(b, 'sha256'), 'hex') AS h, 1 AS c FROM t;"),
         });
@@ -109,14 +109,14 @@ public sealed class ViewProbeUndeclaredFunctionTests
     {
         // The target schema is the fallback, not a peer: a table the desired state declares must
         // be read in its desired shape, or a mid-list column insert would look like an append.
-        await using var live = await PgTestSchema.CreateAsync("""
+        await using var live = await PostgresTestSchema.CreateAsync("""
             CREATE TABLE t (a int, b int);
             CREATE VIEW v AS SELECT * FROM t;
             """);
-        var url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = live.Name }
+        var url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = live.Name }
             .ConnectionString;
 
-        var analysis = PgProgrammables.Analyze(new[]
+        var analysis = PostgresProgrammables.Analyze(new[]
         {
             new ProgrammableFile("v.sql", "CREATE VIEW v AS SELECT * FROM t;"),
         });

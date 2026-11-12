@@ -13,7 +13,7 @@ namespace Schemorph.Provider.Postgres;
 /// guessed one: a hint for an unfamiliar code would send the reader after the wrong thing, which
 /// is worse than the raw message alone.
 /// </summary>
-internal static class PgSqlStateHints
+internal static class PostgresSqlStateHints
 {
     private static readonly IReadOnlyDictionary<string, string> ByCode = new Dictionary<string, string>(StringComparer.Ordinal)
     {

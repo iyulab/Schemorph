@@ -47,13 +47,13 @@ public class DdlSynthesisTests
     [SkippableFact]
     public async Task Applying_the_synthesized_script_converges_to_an_empty_diff()
     {
-        await using var desiredSchema = await PgTestSchema.CreateAsync(DesiredV2);
-        await using var liveSchema = await PgTestSchema.CreateAsync(LiveV1);
+        await using var desiredSchema = await PostgresTestSchema.CreateAsync(DesiredV2);
+        await using var liveSchema = await PostgresTestSchema.CreateAsync(LiveV1);
 
         var desired = await CatalogReader.ReadTablesAsync(
-            PgTestSchema.ServerUrl!, desiredSchema.Name, normalizeSameSchemaReferences: true);
+            PostgresTestSchema.ServerUrl!, desiredSchema.Name, normalizeSameSchemaReferences: true);
         var live = await CatalogReader.ReadTablesAsync(
-            PgTestSchema.ServerUrl!, liveSchema.Name, normalizeSameSchemaReferences: true);
+            PostgresTestSchema.ServerUrl!, liveSchema.Name, normalizeSameSchemaReferences: true);
 
         var statements = DdlSynthesizer.Synthesize(liveSchema.Name, desired, live);
         Assert.NotEmpty(statements);
@@ -64,12 +64,12 @@ public class DdlSynthesisTests
 
         // Embedded expression texts are unqualified (comparison-mode snapshots),
         // so the executor sets search_path — the contract the synthesizer states.
-        await PgTestSchema.ExecuteAsync(
+        await PostgresTestSchema.ExecuteAsync(
             $"SET search_path TO \"{liveSchema.Name}\";\n"
             + string.Join("\n", statements.Select(s => s.Sql)));
 
         var after = await CatalogReader.ReadTablesAsync(
-            PgTestSchema.ServerUrl!, liveSchema.Name, normalizeSameSchemaReferences: true);
+            PostgresTestSchema.ServerUrl!, liveSchema.Name, normalizeSameSchemaReferences: true);
         var result = SnapshotComparer.Compare(desired, after);
 
         Assert.Empty(result);
@@ -81,13 +81,13 @@ public class DdlSynthesisTests
         // The synthesizer must agree with the comparer about what "equal" is —
         // a statement synthesized out of two equal snapshots would be drift
         // manufactured by the tool itself.
-        await using var a = await PgTestSchema.CreateAsync(DesiredV2);
-        await using var b = await PgTestSchema.CreateAsync(DesiredV2);
+        await using var a = await PostgresTestSchema.CreateAsync(DesiredV2);
+        await using var b = await PostgresTestSchema.CreateAsync(DesiredV2);
 
         var desired = await CatalogReader.ReadTablesAsync(
-            PgTestSchema.ServerUrl!, a.Name, normalizeSameSchemaReferences: true);
+            PostgresTestSchema.ServerUrl!, a.Name, normalizeSameSchemaReferences: true);
         var live = await CatalogReader.ReadTablesAsync(
-            PgTestSchema.ServerUrl!, b.Name, normalizeSameSchemaReferences: true);
+            PostgresTestSchema.ServerUrl!, b.Name, normalizeSameSchemaReferences: true);
 
         Assert.Empty(DdlSynthesizer.Synthesize(b.Name, desired, live));
     }

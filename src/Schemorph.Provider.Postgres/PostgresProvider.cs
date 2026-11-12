@@ -99,7 +99,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     }
 
     public Task<IDesiredState> LoadDesiredStateAsync(string desiredStateDirectory, CancellationToken cancellationToken = default)
-        => Task.Run<IDesiredState>(() => PgDesiredState.Load(desiredStateDirectory), cancellationToken);
+        => Task.Run<IDesiredState>(() => PostgresDesiredState.Load(desiredStateDirectory), cancellationToken);
 
     public async Task<CompareResult> CompareAsync(CompareRequest request, CancellationToken cancellationToken = default)
     {
@@ -142,7 +142,7 @@ public sealed class PostgresProvider : IDatabaseProvider
                 $"CREATE SCHEMA IF NOT EXISTS {DesiredStateRenderer.Quote(schema)}", bootstrap);
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
-        return await PgApplySession.OpenAsync(connectionString, options, cancellationToken);
+        return await PostgresApplySession.OpenAsync(connectionString, options, cancellationToken);
     }
 
     /// <summary>
@@ -152,7 +152,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// PostgreSQL DDL is transactional, which is what makes the simulation exact.
     /// </summary>
     public async Task<IApplySession?> BeginSimulationAsync(string connectionString, CancellationToken cancellationToken = default)
-        => await PgApplySession.OpenAsync(connectionString, options: null, cancellationToken);
+        => await PostgresApplySession.OpenAsync(connectionString, options: null, cancellationToken);
 
     public async Task<ApplyResult> ApplyAsync(
         ApplyRequest request,
@@ -227,11 +227,11 @@ public sealed class PostgresProvider : IDatabaseProvider
         {
             try
             {
-                await PgScriptExecutor.ExecuteAsync(
+                await PostgresScriptExecutor.ExecuteAsync(
                     request.ConnectionString,
                     ComposeScript(TargetSchemaOf(request.ConnectionString), transactional),
                     Array.Empty<LedgerEntry>(),
-                    session is null ? null : PgApplySession.From(session),
+                    session is null ? null : PostgresApplySession.From(session),
                     cancellationToken);
             }
             catch (PostgresException ex)
@@ -239,17 +239,17 @@ public sealed class PostgresProvider : IDatabaseProvider
                 // The engine's own message, plus a curated hint for the SQLSTATE codes an
                 // apply actually hits in practice — an unrecognized code is marked as
                 // untranslated rather than given a guessed hint.
-                var engine = PgSqlStateHints.Describe(ex);
+                var engine = PostgresSqlStateHints.Describe(ex);
                 // A refused drop: name what still depends on the relations this apply changes — the
-                // engine puts that only in the withheld Detail (see PgDependents).
+                // engine puts that only in the withheld Detail (see PostgresDependents).
                 if (ex.SqlState == "2BP01")
                 {
-                    var dependents = await PgDependents.FindAsync(request.ConnectionString,
+                    var dependents = await PostgresDependents.FindAsync(request.ConnectionString,
                         TargetSchemaOf(request.ConnectionString),
                         statements.Select(s => s.ObjectName).Distinct(StringComparer.Ordinal).ToList(),
                         cancellationToken);
                     if (dependents.Count > 0)
-                        engine = engine with { Hint = PgDependents.AppendTo(engine.Hint, dependents) };
+                        engine = engine with { Hint = PostgresDependents.AppendTo(engine.Hint, dependents) };
                 }
                 return new ApplyResult(false, Array.Empty<RawChange>(), excluded,
                     new[] { new RawMessage("Error", engine.Code, engine.Text) })
@@ -306,7 +306,7 @@ public sealed class PostgresProvider : IDatabaseProvider
         {
             // Wrapped so the error is described for the stage it happened in: the ordinary hints speak of
             // a transaction that rolled back, which is not what happened to a statement run after the commit.
-            throw new PgOnlineStepException(ex);
+            throw new PostgresOnlineStepException(ex);
         }
     }
 
@@ -315,20 +315,20 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     /// <summary>
     /// A <see cref="PostgresException"/> is the server rejecting a statement — its SQLSTATE,
-    /// primary message, and the curated hint where <see cref="PgSqlStateHints"/> has one.
+    /// primary message, and the curated hint where <see cref="PostgresSqlStateHints"/> has one.
     /// Client-side failures (a refused connection, a timeout before the server answered) carry
     /// no SQLSTATE and are not described here.
     /// </summary>
     public EngineError? DescribeEngineError(Exception exception) => exception switch
     {
-        PgOnlineStepException online => PgSqlStateHints.DescribeOnline(online.Engine),
-        PostgresException pg => PgSqlStateHints.Describe(pg),
+        PostgresOnlineStepException online => PostgresSqlStateHints.DescribeOnline(online.Engine),
+        PostgresException pg => PostgresSqlStateHints.Describe(pg),
         _ => null,
     };
 
     /// <summary>
     /// Redefine scripts (P3) carry bare, unqualified object names — the same
-    /// single-schema convention <see cref="PgTable.Name"/> uses — so unlike
+    /// single-schema convention <see cref="PostgresTable.Name"/> uses — so unlike
     /// <see cref="ComposeScript"/>'s declarative script, which the caller
     /// already schema-qualifies, this path must set the target schema itself
     /// before running: the redefine runner (core, provider-agnostic) has no
@@ -341,11 +341,11 @@ public sealed class PostgresProvider : IDatabaseProvider
     public Task ExecuteScriptAsync(
         string connectionString, string script,
         IReadOnlyList<LedgerEntry> ledgerEntries, IApplySession? session = null, CancellationToken cancellationToken = default)
-        => PgScriptExecutor.ExecuteAsync(
+        => PostgresScriptExecutor.ExecuteAsync(
             connectionString,
             $"SET LOCAL search_path TO {DesiredStateRenderer.Quote(TargetSchemaOf(connectionString))};\n{script}",
             ledgerEntries,
-            session is null ? null : PgApplySession.From(session),
+            session is null ? null : PostgresApplySession.From(session),
             cancellationToken);
 
     /// <inheritdoc/>
@@ -358,11 +358,11 @@ public sealed class PostgresProvider : IDatabaseProvider
     public Task RedefineAsync(
         string connectionString, ProgrammableObjectInfo obj,
         IReadOnlyList<LedgerEntry> ledgerEntries, IApplySession? session = null, CancellationToken cancellationToken = default)
-        => PgScriptExecutor.ExecuteAsync(
+        => PostgresScriptExecutor.ExecuteAsync(
             connectionString,
             $"SET LOCAL search_path TO {DesiredStateRenderer.Quote(TargetSchemaOf(connectionString))};\n{obj.ApplyScript}",
             ledgerEntries,
-            session is null ? null : PgApplySession.From(session),
+            session is null ? null : PostgresApplySession.From(session),
             cancellationToken,
             read: obj.ObjectType == "View"
                 ? $"SELECT max(length(t::text)) FROM {DesiredStateRenderer.Quote(obj.ObjectName)} AS t"
@@ -370,11 +370,11 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     /// <summary>
     /// P3: views, functions, procedures and triggers, analyzed by
-    /// <see cref="PgProgrammables"/> from the files <see cref="PgDesiredState"/>
+    /// <see cref="PostgresProgrammables"/> from the files <see cref="PostgresDesiredState"/>
     /// classified as exactly one programmable statement.
     /// </summary>
     public Task<ProgrammableAnalysis> AnalyzeProgrammablesAsync(IDesiredState desiredState, CancellationToken cancellationToken = default)
-        => Task.FromResult(PgProgrammables.Analyze(PgDesiredState.From(desiredState).ProgrammableFiles));
+        => Task.FromResult(PostgresProgrammables.Analyze(PostgresDesiredState.From(desiredState).ProgrammableFiles));
 
     /// <summary>
     /// Brownfield reconciliation is not attempted (unlike the SQL Server
@@ -397,7 +397,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     public Task<IReadOnlyList<ProgrammableObjectInfo>> FilterExistingLiveAsync(
         string connectionString, IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken = default,
         IApplySession? session = null)
-        => PgLiveProgrammables.FilterExistingAsync(
+        => PostgresLiveProgrammables.FilterExistingAsync(
             connectionString, TargetSchemaOf(connectionString), objects, cancellationToken, session);
 
     /// <inheritdoc/>
@@ -405,12 +405,12 @@ public sealed class PostgresProvider : IDatabaseProvider
         ProgrammableAnalysis analysis, IDesiredState desiredState, string connectionString,
         CancellationToken cancellationToken = default, IApplySession? session = null)
         => ViewRedefinePlanner.RefineAsync(
-            analysis, PgDesiredState.From(desiredState).ModelTexts,
+            analysis, PostgresDesiredState.From(desiredState).ModelTexts,
             connectionString, TargetSchemaOf(connectionString), cancellationToken, session);
 
     // ------------------------------------------------------------- pipeline
 
-    private sealed record Snapshots(IReadOnlyList<PgTable> Desired, IReadOnlyList<PgTable> Live);
+    private sealed record Snapshots(IReadOnlyList<PostgresTable> Desired, IReadOnlyList<PostgresTable> Live);
 
     /// <summary>
     /// One comparison pass and everything derived from it — including the
@@ -423,9 +423,9 @@ public sealed class PostgresProvider : IDatabaseProvider
         IReadOnlyList<ChangeScript> ChangeScripts,
         IReadOnlyList<RawMessage> Messages,
         IReadOnlyList<string> TablesWithColumnChanges,
-        IReadOnlyList<PgLiveProgrammables.Undeclared> Undeclared,
+        IReadOnlyList<PostgresLiveProgrammables.Undeclared> Undeclared,
         IReadOnlyList<string> ViewsDroppedFirst,
-        IReadOnlyList<PgLiveProgrammables.ViewRead> ViewReads)
+        IReadOnlyList<PostgresLiveProgrammables.ViewRead> ViewReads)
     {
         /// <summary>The online stage's statements, in the order they run; empty unless it was requested.</summary>
         public IReadOnlyList<OnlineStep> OnlineSteps { get; init; } = Array.Empty<OnlineStep>();
@@ -441,10 +441,10 @@ public sealed class PostgresProvider : IDatabaseProvider
         IDesiredState desiredState, string connectionString, IApplySession? session, CancellationToken cancellationToken,
         bool online = false)
     {
-        var state = PgDesiredState.From(desiredState);
+        var state = PostgresDesiredState.From(desiredState);
         var schema = TargetSchemaOf(connectionString);
 
-        IReadOnlyList<PgTable> desired;
+        IReadOnlyList<PostgresTable> desired;
         await using (var shadow = await ShadowSchema.CreateAsync(connectionString, cancellationToken))
         {
             await shadow.ApplyAsync(state.ModelTexts, sourceSchema: schema, cancellationToken);
@@ -461,16 +461,16 @@ public sealed class PostgresProvider : IDatabaseProvider
         // the live catalog against the files can see that. Deleting the file is how the
         // desired state says "drop it" (what the SQL Server provider's engine does for
         // every object not in source), so each one becomes a Delete, dropped first.
-        var declaredObjects = PgProgrammables.Analyze(state.ProgrammableFiles).Objects;
+        var declaredObjects = PostgresProgrammables.Analyze(state.ProgrammableFiles).Objects;
         var declared = declaredObjects.Select(o => o.ObjectName).ToHashSet(StringComparer.Ordinal);
-        var undeclared = await PgLiveProgrammables.ReadUndeclaredAsync(
+        var undeclared = await PostgresLiveProgrammables.ReadUndeclaredAsync(
             connectionString, schema, declared, cancellationToken, session);
 
         // A declared view that reads what this change removes — a table, a column, a view
         // no file declares — or a column whose type changes blocks that statement
         // (2BP01 / 0A000) for as long as it exists, and re-definition only runs after the
         // declarative stage. So it goes first too, and the redefine stage re-creates it.
-        var viewReads = await PgLiveProgrammables.ReadViewReadsAsync(connectionString, schema, cancellationToken, session);
+        var viewReads = await PostgresLiveProgrammables.ReadViewReadsAsync(connectionString, schema, cancellationToken, session);
         var viewsDroppedFirst = ViewsDroppedFirst(
             desired, live,
             declaredObjects.Where(o => o.ObjectType == "View").Select(o => o.ObjectName).ToHashSet(StringComparer.Ordinal),
@@ -512,17 +512,17 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// reading only columns that stay as they are is not touched.
     /// </summary>
     internal static IReadOnlyList<string> ViewsDroppedFirst(
-        IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live,
+        IReadOnlyList<PostgresTable> desired, IReadOnlyList<PostgresTable> live,
         IReadOnlySet<string> declaredViews,
-        IReadOnlyList<PgLiveProgrammables.Undeclared> undeclared,
-        IReadOnlyList<PgLiveProgrammables.ViewRead> reads)
+        IReadOnlyList<PostgresLiveProgrammables.Undeclared> undeclared,
+        IReadOnlyList<PostgresLiveProgrammables.ViewRead> reads)
     {
         var desiredByName = desired.ToDictionary(t => t.Name, StringComparer.Ordinal);
         var liveByName = live.ToDictionary(t => t.Name, StringComparer.Ordinal);
         var undeclaredViews = undeclared.Where(u => u.ObjectType == "View")
             .Select(u => u.ObjectName).ToHashSet(StringComparer.Ordinal);
 
-        bool Removed(PgLiveProgrammables.ViewRead read)
+        bool Removed(PostgresLiveProgrammables.ViewRead read)
         {
             if (undeclaredViews.Contains(read.Source)) return true;
             if (!liveByName.TryGetValue(read.Source, out var have)) return false;
@@ -565,9 +565,9 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// if anything else removed it.
     /// </summary>
     private static IEnumerable<DdlSynthesizer.Statement> DropStatements(
-        IEnumerable<PgLiveProgrammables.Undeclared> undeclared,
+        IEnumerable<PostgresLiveProgrammables.Undeclared> undeclared,
         IReadOnlyList<string> viewsDroppedFirst,
-        IReadOnlyList<PgLiveProgrammables.ViewRead> reads,
+        IReadOnlyList<PostgresLiveProgrammables.ViewRead> reads,
         string schema)
     {
         var all = undeclared.ToList();
@@ -582,7 +582,7 @@ public sealed class PostgresProvider : IDatabaseProvider
 
         IEnumerable<(string Name, IReadOnlyList<string> Sql)> ordered =
             [.. all.Where(u => u.ObjectType == "DmlTrigger").Select(u => (u.ObjectName, u.DropStatements)),
-             .. PgLiveProgrammables.ReadersFirst(views.Keys, edges).Select(v => (v, views[v])),
+             .. PostgresLiveProgrammables.ReadersFirst(views.Keys, edges).Select(v => (v, views[v])),
              .. all.Where(u => u.ObjectType is not ("DmlTrigger" or "View")).Select(u => (u.ObjectName, u.DropStatements))];
         return ordered.SelectMany(o => o.Sql.Select(sql => new DdlSynthesizer.Statement(o.Name, sql)));
     }
@@ -598,7 +598,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// </summary>
     private static IReadOnlyList<ChangeScript> AttributeStatements(
         IReadOnlyList<DdlSynthesizer.Statement> statements,
-        IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live)
+        IReadOnlyList<PostgresTable> desired, IReadOnlyList<PostgresTable> live)
     {
         var desiredByName = desired.ToDictionary(t => t.Name, StringComparer.Ordinal);
         var liveByName = live.ToDictionary(t => t.Name, StringComparer.Ordinal);
@@ -632,7 +632,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// Whether this table gains a column the live one does not have. Only for a table on
     /// both sides — a created table's columns are not additions to anything.
     /// </summary>
-    private static bool AddsColumn(PgTable? want, PgTable? have)
+    private static bool AddsColumn(PostgresTable? want, PostgresTable? have)
     {
         if (want is null || have is null) return false;
 
@@ -684,7 +684,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// nobody loses anything to. Judged on the model rather than the emitted text,
     /// so the distinction is proven rather than pattern-matched.
     /// </summary>
-    private static bool DropsColumn(PgTable? want, PgTable? have)
+    private static bool DropsColumn(PostgresTable? want, PostgresTable? have)
     {
         if (want is null || have is null) return false;
 
@@ -706,7 +706,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// Nothing is reported for a table the desired state drops: its indexes go
     /// with it, and that plan entry is already destructive.
     /// </summary>
-    private static bool DropsIndex(PgTable? want, PgTable? have)
+    private static bool DropsIndex(PostgresTable? want, PostgresTable? have)
     {
         if (want is null || have is null) return false;
 
@@ -730,7 +730,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// than pattern-matched, and only for a column that exists on both sides: a
     /// generated column in a brand-new table replaces nothing.
     /// </summary>
-    private static bool RecreatesColumn(PgTable? want, PgTable? have)
+    private static bool RecreatesColumn(PostgresTable? want, PostgresTable? have)
     {
         if (want is null || have is null) return false;
 
@@ -753,7 +753,7 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// Identity and generated columns are excluded — the engine supplies their
     /// values, so NOT NULL without a default is not a gap there.
     /// </summary>
-    private static bool AddsNotNullWithoutDefault(PgTable? want, PgTable? have)
+    private static bool AddsNotNullWithoutDefault(PostgresTable? want, PostgresTable? have)
     {
         if (want is null || have is null) return false;
 
@@ -763,7 +763,7 @@ public sealed class PostgresProvider : IDatabaseProvider
             !existing.Contains(c.Name)
             && c.NotNull
             && c.Default is null
-            && c.Identity == PgIdentity.None
+            && c.Identity == PostgresIdentity.None
             && c.GeneratedAs is null);
     }
 
@@ -808,8 +808,8 @@ public sealed class PostgresProvider : IDatabaseProvider
         $"SET LOCAL search_path TO {DesiredStateRenderer.Quote(schema)};\n" +
         string.Join("\n", statements.Select(s => s.Sql));
 
-    private static (IReadOnlyList<PgTable> Desired, IReadOnlyList<PgTable> Live) MaskExclusions(
-        IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live,
+    private static (IReadOnlyList<PostgresTable> Desired, IReadOnlyList<PostgresTable> Live) MaskExclusions(
+        IReadOnlyList<PostgresTable> desired, IReadOnlyList<PostgresTable> live,
         IReadOnlyList<RawChange> excluded, IReadOnlyList<RawChange> withoutDestructive)
     {
         if (excluded.Count == 0 && withoutDestructive.Count == 0) return (desired, live);
@@ -837,14 +837,14 @@ public sealed class PostgresProvider : IDatabaseProvider
         return (maskedDesired, maskedLive);
     }
 
-    private static PgTable WithUndeclaredColumnsKept(PgTable want, PgTable have)
+    private static PostgresTable WithUndeclaredColumnsKept(PostgresTable want, PostgresTable have)
     {
         var declared = want.Columns.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
         return want with { Columns = [.. want.Columns, .. have.Columns.Where(c => !declared.Contains(c.Name))] };
     }
 
-    /// <summary>P4: dialect judgment delegated to <see cref="PgMigrationLinter"/>.</summary>
+    /// <summary>P4: dialect judgment delegated to <see cref="PostgresMigrationLinter"/>.</summary>
     public Task<IReadOnlyList<MigrationLintSignal>> LintMigrationScriptAsync(
         string scriptText, CancellationToken cancellationToken = default)
-        => Task.FromResult(PgMigrationLinter.Lint(scriptText));
+        => Task.FromResult(PostgresMigrationLinter.Lint(scriptText));
 }

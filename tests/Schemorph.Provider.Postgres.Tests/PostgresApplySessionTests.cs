@@ -2,16 +2,16 @@ using Npgsql;
 
 namespace Schemorph.Provider.Postgres.Tests;
 
-public sealed class PgApplySessionTests : IAsyncLifetime
+public sealed class PostgresApplySessionTests : IAsyncLifetime
 {
-    private PgTestSchema _schema = null!;
+    private PostgresTestSchema _schema = null!;
     private readonly PostgresProvider _provider = new();
     private string _url = null!;
 
     public async Task InitializeAsync()
     {
-        _schema = await PgTestSchema.CreateAsync("SELECT 1;");
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _schema.Name }
+        _schema = await PostgresTestSchema.CreateAsync("SELECT 1;");
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _schema.Name }
             .ConnectionString;
     }
 
@@ -22,7 +22,7 @@ public sealed class PgApplySessionTests : IAsyncLifetime
     {
         var session = await _provider.BeginApplySessionAsync(_url);
         Assert.NotNull(session);
-        var pg = PgApplySession.From(session!);
+        var pg = PostgresApplySession.From(session!);
 
         await using (var command = new NpgsqlCommand(
             $"CREATE TABLE \"{_schema.Name}\".\"Sentinel\" (\"Id\" int)", pg.Connection, pg.Transaction))
@@ -39,7 +39,7 @@ public sealed class PgApplySessionTests : IAsyncLifetime
     public async Task Rollback_discards_work_done_through_the_session()
     {
         var session = await _provider.BeginApplySessionAsync(_url);
-        var pg = PgApplySession.From(session!);
+        var pg = PostgresApplySession.From(session!);
 
         await using (var command = new NpgsqlCommand(
             $"CREATE TABLE \"{_schema.Name}\".\"Sentinel\" (\"Id\" int)", pg.Connection, pg.Transaction))
@@ -56,7 +56,7 @@ public sealed class PgApplySessionTests : IAsyncLifetime
     public async Task Disposing_without_commit_or_rollback_discards_the_work()
     {
         var session = await _provider.BeginApplySessionAsync(_url);
-        var pg = PgApplySession.From(session!);
+        var pg = PostgresApplySession.From(session!);
 
         await using (var command = new NpgsqlCommand(
             $"CREATE TABLE \"{_schema.Name}\".\"Sentinel\" (\"Id\" int)", pg.Connection, pg.Transaction))
@@ -70,7 +70,7 @@ public sealed class PgApplySessionTests : IAsyncLifetime
 
     private async Task<bool> TableExistsAsync()
     {
-        await using var connection = new NpgsqlConnection(PgTestSchema.ServerUrl);
+        await using var connection = new NpgsqlConnection(PostgresTestSchema.ServerUrl);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand("SELECT to_regclass(@name)::text", connection);
         command.Parameters.AddWithValue("name", $"\"{_schema.Name}\".\"Sentinel\"");

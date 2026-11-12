@@ -88,7 +88,7 @@ public sealed class MigrationRunner(IDatabaseProvider provider, ILedgerStore led
 
             // A construct that cannot run inside a transaction is fatal, not a
             // warning, when the provider's apply is one transaction it owns
-            // (ADR-0004 addendum) — the same reason PgDesiredState refuses
+            // (ADR-0004 addendum) — the same reason PostgresDesiredState refuses
             // CONCURRENTLY in desired-state files, extended here: a migration
             // now executes inside that SAME session (RedefineRunner and
             // MigrationRunner both thread it through), so the constraint is

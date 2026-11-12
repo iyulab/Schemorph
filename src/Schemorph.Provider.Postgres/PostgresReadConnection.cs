@@ -22,13 +22,13 @@ namespace Schemorph.Provider.Postgres;
 /// its own (the connection already has one).
 /// </para>
 /// </remarks>
-internal sealed class PgReadConnection : IAsyncDisposable
+internal sealed class PostgresReadConnection : IAsyncDisposable
 {
     private const string ProbeSavepoint = "schemorph_probe";
 
-    private readonly PgApplySession? _session;
+    private readonly PostgresApplySession? _session;
 
-    private PgReadConnection(NpgsqlConnection connection, PgApplySession? session)
+    private PostgresReadConnection(NpgsqlConnection connection, PostgresApplySession? session)
     {
         Connection = connection;
         _session = session;
@@ -36,17 +36,17 @@ internal sealed class PgReadConnection : IAsyncDisposable
 
     public NpgsqlConnection Connection { get; }
 
-    public static async Task<PgReadConnection> OpenAsync(
+    public static async Task<PostgresReadConnection> OpenAsync(
         string connectionString, IApplySession? session, CancellationToken cancellationToken)
     {
         if (session is not null)
         {
-            var pg = PgApplySession.From(session);
-            return new PgReadConnection(pg.Connection, pg);
+            var pg = PostgresApplySession.From(session);
+            return new PostgresReadConnection(pg.Connection, pg);
         }
         var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
-        return new PgReadConnection(connection, session: null);
+        return new PostgresReadConnection(connection, session: null);
     }
 
     /// <summary>Sets the search path for the reads that follow — for this transaction only on a borrowed connection.</summary>

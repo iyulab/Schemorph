@@ -6,12 +6,12 @@ namespace Schemorph.Provider.Postgres;
 /// <summary>
 /// Which of the desired programmable objects the live catalog actually holds —
 /// by name and kind, in the target schema, nothing about their definitions.
-/// Names follow <see cref="PgProgrammables"/>'s bare-name convention: a view
+/// Names follow <see cref="PostgresProgrammables"/>'s bare-name convention: a view
 /// or routine is its own name, a trigger is <c>table.trigger</c>. Routines are
 /// matched by name alone (an overload set counts as present — the
 /// redefinition script is <c>CREATE OR REPLACE</c> either way).
 /// </summary>
-internal static class PgLiveProgrammables
+internal static class PostgresLiveProgrammables
 {
     private const string ViewsSql = """
         SELECT c.relname
@@ -41,7 +41,7 @@ internal static class PgLiveProgrammables
     {
         if (objects.Count == 0) return Array.Empty<ProgrammableObjectInfo>();
 
-        await using var lease = await PgReadConnection.OpenAsync(connectionString, session, cancellationToken);
+        await using var lease = await PostgresReadConnection.OpenAsync(connectionString, session, cancellationToken);
         var connection = lease.Connection;
 
         var views = await ReadNamesAsync(connection, ViewsSql, schema, cancellationToken);
@@ -87,7 +87,7 @@ internal static class PgLiveProgrammables
     public static async Task<IReadOnlyList<ViewRead>> ReadViewReadsAsync(
         string connectionString, string schema, CancellationToken cancellationToken, IApplySession? session = null)
     {
-        await using var lease = await PgReadConnection.OpenAsync(connectionString, session, cancellationToken);
+        await using var lease = await PostgresReadConnection.OpenAsync(connectionString, session, cancellationToken);
         var connection = lease.Connection;
         await using var command = new NpgsqlCommand(ViewReadsSql, connection);
         command.Parameters.AddWithValue("schema", schema);
@@ -171,7 +171,7 @@ internal static class PgLiveProgrammables
         string connectionString, string schema, IReadOnlySet<string> declaredNames,
         CancellationToken cancellationToken, IApplySession? session = null)
     {
-        await using var lease = await PgReadConnection.OpenAsync(connectionString, session, cancellationToken);
+        await using var lease = await PostgresReadConnection.OpenAsync(connectionString, session, cancellationToken);
         var connection = lease.Connection;
 
         var result = new List<Undeclared>();

@@ -11,9 +11,9 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// rolls the whole apply back, and says so — where, without the option, it would wait for as
 /// long as the other session holds on.
 /// </summary>
-public sealed class PgLockTimeoutTests : IAsyncLifetime
+public sealed class PostgresLockTimeoutTests : IAsyncLifetime
 {
-    private PgTestSchema _live = null!;
+    private PostgresTestSchema _live = null!;
     private string _url = null!;
     private string _schemaDir = null!;
     private readonly PostgresProvider _provider = new();
@@ -30,8 +30,8 @@ public sealed class PgLockTimeoutTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _live = await PgTestSchema.CreateAsync(LiveDdl);
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _live.Name }.ConnectionString;
+        _live = await PostgresTestSchema.CreateAsync(LiveDdl);
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _live.Name }.ConnectionString;
         _schemaDir = await WriteDesiredStateAsync(_live.Name);
     }
 
@@ -57,7 +57,7 @@ public sealed class PgLockTimeoutTests : IAsyncLifetime
         try { Directory.Delete(_schemaDir, recursive: true); } catch { }
     }
 
-    private static async Task<string> ShowLockTimeoutAsync(PgApplySession session)
+    private static async Task<string> ShowLockTimeoutAsync(PostgresApplySession session)
     {
         await using var command = new NpgsqlCommand("SHOW lock_timeout", session.Connection, session.Transaction);
         return (string)(await command.ExecuteScalarAsync())!;
@@ -66,9 +66,9 @@ public sealed class PgLockTimeoutTests : IAsyncLifetime
     [SkippableFact]
     public async Task Without_the_option_the_session_keeps_the_servers_own_setting()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
-        await using var session = PgApplySession.From((await _provider.BeginApplySessionAsync(_url))!);
+        await using var session = PostgresApplySession.From((await _provider.BeginApplySessionAsync(_url))!);
 
         Assert.Equal("0", await ShowLockTimeoutAsync(session));
     }
@@ -80,9 +80,9 @@ public sealed class PgLockTimeoutTests : IAsyncLifetime
     public async Task With_the_option_the_transaction_carries_the_timeout_and_the_setting_ends_with_it(
         int milliseconds, string shownByServer)
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
-        var session = PgApplySession.From((await _provider.BeginApplySessionAsync(
+        var session = PostgresApplySession.From((await _provider.BeginApplySessionAsync(
             _url, new ApplySessionOptions(TimeSpan.FromMilliseconds(milliseconds))))!);
         await using (session)
         {
@@ -100,16 +100,16 @@ public sealed class PgLockTimeoutTests : IAsyncLifetime
     [SkippableFact]
     public async Task A_statement_stuck_behind_another_sessions_lock_fails_fast_and_nothing_is_applied()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
         // Warm the provider on a schema nobody holds, so the timing below measures the wait and not
         // the first apply of a cold process (which alone takes many seconds on this machine).
-        await using (var warm = await PgTestSchema.CreateAsync(LiveDdl))
+        await using (var warm = await PostgresTestSchema.CreateAsync(LiveDdl))
         {
             var warmDir = await WriteDesiredStateAsync(warm.Name);
             try
             {
-                var warmUrl = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = warm.Name }.ConnectionString;
+                var warmUrl = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = warm.Name }.ConnectionString;
                 var warmup = await ApplyOperation.RunAsync(_provider, _ledger, new ApplyOperation.Request(warmDir, warmUrl));
                 Assert.True(warmup.Success, string.Join("; ", warmup.Errors.Select(e => $"{e.Code}: {e.Text}")));
             }
@@ -117,7 +117,7 @@ public sealed class PgLockTimeoutTests : IAsyncLifetime
         }
 
         // Another session holds the table: the ALTER the publish needs cannot get its lock.
-        await using var holder = new NpgsqlConnection(PgTestSchema.ServerUrl);
+        await using var holder = new NpgsqlConnection(PostgresTestSchema.ServerUrl);
         await holder.OpenAsync();
         await using var holderTransaction = await holder.BeginTransactionAsync();
         await using (var lockCommand = new NpgsqlCommand(
@@ -162,7 +162,7 @@ public sealed class PgLockTimeoutTests : IAsyncLifetime
 
     private async Task<bool> ColumnExistsAsync(string column)
     {
-        await using var connection = new NpgsqlConnection(PgTestSchema.ServerUrl);
+        await using var connection = new NpgsqlConnection(PostgresTestSchema.ServerUrl);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand(
             "SELECT count(*) FROM information_schema.columns WHERE table_schema = @s AND table_name = 'Doc' AND column_name = @c",

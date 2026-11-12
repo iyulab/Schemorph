@@ -197,7 +197,7 @@ The 2026-07-22 addendum above described `transactional` as a claim a *second* pr
 PostgreSQL provider now does.
 
 Mechanism: `PostgresProvider.BeginApplySessionAsync` opens a single `IApplySession`
-(`PgApplySession`) before the pipeline's first stage, and `ApplyOperation.RunAsync`
+(`PostgresApplySession`) before the pipeline's first stage, and `ApplyOperation.RunAsync`
 (core) threads it through every execution call the apply makes — the declarative
 publish, every redefine, every migration, and their ledger rows — via the
 `ExecuteScriptAsync(..., IApplySession?)` overload each stage already called through.

@@ -58,7 +58,7 @@ internal static class DdlSynthesizer
     /// produces exactly what this method always did.
     /// </summary>
     public static IReadOnlyList<Statement> Synthesize(
-        string targetSchema, IReadOnlyList<PgTable> desired, IReadOnlyList<PgTable> live, bool online = false)
+        string targetSchema, IReadOnlyList<PostgresTable> desired, IReadOnlyList<PostgresTable> live, bool online = false)
     {
         var constraintDrops = new List<Statement>();
         var indexDrops = new List<Statement>();
@@ -135,7 +135,7 @@ internal static class DdlSynthesizer
     /// table, not by column — it errs toward keeping an index in the transaction, which is always safe.
     /// </summary>
     private static HashSet<string> TablesReferencedByAddedForeignKeys(
-        IReadOnlyList<PgTable> desired, Dictionary<string, PgTable> liveByName)
+        IReadOnlyList<PostgresTable> desired, Dictionary<string, PostgresTable> liveByName)
     {
         var referenced = new HashSet<string>(StringComparer.Ordinal);
         foreach (var want in desired)
@@ -155,7 +155,7 @@ internal static class DdlSynthesizer
         return referenced;
     }
 
-    private static bool IsForeignKey(PgConstraint constraint)
+    private static bool IsForeignKey(PostgresConstraint constraint)
         => constraint.Definition.StartsWith("FOREIGN KEY", StringComparison.Ordinal);
 
     /// <summary>
@@ -207,7 +207,7 @@ internal static class DdlSynthesizer
     }
 
     private static void SynthesizeColumns(
-        string qualified, PgTable want, PgTable have, List<Statement> statements)
+        string qualified, PostgresTable want, PostgresTable have, List<Statement> statements)
     {
         var haveByName = have.Columns.ToDictionary(c => c.Name, StringComparer.Ordinal);
         var wantNames = want.Columns.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
@@ -276,11 +276,11 @@ internal static class DdlSynthesizer
             }
             if (column.Identity != existing.Identity || column.IdentityOptions != existing.IdentityOptions)
             {
-                if (existing.Identity != PgIdentity.None)
+                if (existing.Identity != PostgresIdentity.None)
                 {
                     Add($"ALTER TABLE {qualified} ALTER COLUMN {name} DROP IDENTITY;");
                 }
-                if (column.Identity != PgIdentity.None)
+                if (column.Identity != PostgresIdentity.None)
                 {
                     Add(
                         $"ALTER TABLE {qualified} ALTER COLUMN {name} ADD{DesiredStateRenderer.IdentityClause(column)};");
@@ -300,7 +300,7 @@ internal static class DdlSynthesizer
     }
 
     private static void SynthesizeConstraints(
-        string qualified, PgTable want, PgTable have,
+        string qualified, PostgresTable want, PostgresTable have,
         List<Statement> drops, List<Statement> adds, List<Statement> foreignKeyAdds,
         List<Statement>? onlineValidations)
     {
@@ -347,7 +347,7 @@ internal static class DdlSynthesizer
     /// <c>pg_get_constraintdef</c> ends such a definition with <c>NOT VALID</c> and is otherwise
     /// identical, which is how it is recognized without a parser.
     /// </summary>
-    private static bool AwaitsValidation(PgConstraint wanted, PgConstraint live)
+    private static bool AwaitsValidation(PostgresConstraint wanted, PostgresConstraint live)
         => live.Definition == wanted.Definition + " NOT VALID";
 
     /// <summary>
@@ -361,7 +361,7 @@ internal static class DdlSynthesizer
     /// already gone.
     /// </summary>
     private static void SynthesizeIndexes(
-        string targetSchema, PgTable want, PgTable have,
+        string targetSchema, PostgresTable want, PostgresTable have,
         List<Statement> drops, List<Statement> creates,
         List<Statement>? onlineIndexes, IReadOnlySet<string> referencedByAddedKeys)
     {
@@ -370,7 +370,7 @@ internal static class DdlSynthesizer
 
         // An index the online stage rebuilds is dropped there too, right before its build; every other
         // drop stays where it was.
-        bool BuiltOnline(PgIndex index)
+        bool BuiltOnline(PostgresIndex index)
             => onlineIndexes is not null && OnlineCreate(want.Name, index, referencedByAddedKeys.Contains(want.Name)) is not null;
 
         foreach (var index in have.Indexes)
@@ -418,7 +418,7 @@ internal static class DdlSynthesizer
     /// not in the shape <c>pg_get_indexdef</c> produces (nothing is guessed - an unrecognised text stays
     /// exactly where it was).
     /// </summary>
-    private static Statement? OnlineCreate(string objectName, PgIndex index, bool referencedByAddedKey)
+    private static Statement? OnlineCreate(string objectName, PostgresIndex index, bool referencedByAddedKey)
     {
         var definition = index.Definition.TrimEnd(';', ' ', '\r', '\n');
         const string unique = "CREATE UNIQUE INDEX ";
@@ -446,11 +446,11 @@ internal static class DdlSynthesizer
     // The definition is the engine's own CREATE INDEX with the schema removed
     // from its ON clause, so it lands in the target schema by the search_path
     // the executor sets — the same contract the constraint definitions run under.
-    private static Statement CreateIndex(string objectName, PgIndex index)
+    private static Statement CreateIndex(string objectName, PostgresIndex index)
         => new(objectName, $"{index.Definition.TrimEnd(';', ' ', '\r', '\n')};");
 
     private static void AddConstraint(
-        string objectName, string qualified, PgConstraint constraint,
+        string objectName, string qualified, PostgresConstraint constraint,
         List<Statement> adds, List<Statement> foreignKeyAdds, List<Statement>? onlineValidations = null)
     {
         var target = IsForeignKey(constraint) ? foreignKeyAdds : adds;
@@ -474,7 +474,7 @@ internal static class DdlSynthesizer
             $"ALTER TABLE {qualified} ADD CONSTRAINT {name} {constraint.Definition};"));
     }
 
-    private static string CreateTable(string qualified, PgTable table)
+    private static string CreateTable(string qualified, PostgresTable table)
     {
         var sql = new StringBuilder("CREATE TABLE ").Append(qualified).Append(" (");
         for (var i = 0; i < table.Columns.Count; i++)

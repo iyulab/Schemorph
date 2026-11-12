@@ -24,7 +24,7 @@ namespace Schemorph.Provider.Postgres.Tests;
 /// </summary>
 public class IndexPlanningTests : IAsyncLifetime
 {
-    private PgTestSchema _live = null!;
+    private PostgresTestSchema _live = null!;
     private string _url = null!;
     private string _schemaDir = null!;
     private readonly PostgresProvider _provider = new();
@@ -50,8 +50,8 @@ public class IndexPlanningTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _live = await PgTestSchema.CreateAsync(LiveV1);
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _live.Name }
+        _live = await PostgresTestSchema.CreateAsync(LiveV1);
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _live.Name }
             .ConnectionString;
         _schemaDir = Path.Combine(
             Path.GetTempPath(), "schemorph-pg-index-" + Guid.NewGuid().ToString("n")[..8]);
@@ -136,7 +136,7 @@ public class IndexPlanningTests : IAsyncLifetime
     [SkippableFact]
     public async Task Dropping_an_index_does_not_require_the_destructive_flag()
     {
-        await PgTestSchema.ExecuteAsync(
+        await PostgresTestSchema.ExecuteAsync(
             $"""CREATE INDEX "IX_Doc_OwnerId" ON "{_live.Name}"."Doc" ("OwnerId");""");
         await DeclareAsync();
 
@@ -172,7 +172,7 @@ public class IndexPlanningTests : IAsyncLifetime
         // The live side is seeded directly rather than applied, so what this
         // measures is the comparison alone: the index exists on both sides under
         // the same name, and the only question is whether the difference is seen.
-        await PgTestSchema.ExecuteAsync($"""CREATE INDEX "IX_Doc" ON "{_live.Name}"."Doc" {live};""");
+        await PostgresTestSchema.ExecuteAsync($"""CREATE INDEX "IX_Doc" ON "{_live.Name}"."Doc" {live};""");
         await DeclareAsync($"""CREATE INDEX "IX_Doc" ON <s>."Doc" {declared};""");
 
         await ApplyAsync();

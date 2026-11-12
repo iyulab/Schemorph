@@ -8,7 +8,7 @@ namespace Schemorph.Provider.Postgres;
 
 /// <summary>
 /// The DROP+CREATE fallback for view redefinition that
-/// <see cref="PgProgrammables.ViewRedefineRiskNote"/> left as a known gap:
+/// <see cref="PostgresProgrammables.ViewRedefineRiskNote"/> left as a known gap:
 /// <c>CREATE OR REPLACE VIEW</c> can only append output columns, so a rename,
 /// reorder, retype, or removal fails at apply time (SQLSTATE 42P16) even
 /// though the plan reports the statement itself.
@@ -48,16 +48,16 @@ internal static class ViewRedefinePlanner
         if (views.Count == 0) return analysis;
 
         // Live reads go through the session when there is one — it may already have changed what
-        // they read (PgReadConnection). The shadow below stays on a connection of its own: it is a
+        // they read (PostgresReadConnection). The shadow below stays on a connection of its own: it is a
         // separate, committed schema the session never touches.
-        await using var liveLease = await PgReadConnection.OpenAsync(connectionString, session, cancellationToken);
+        await using var liveLease = await PostgresReadConnection.OpenAsync(connectionString, session, cancellationToken);
         var liveConnection = liveLease.Connection;
         await liveLease.SetSearchPathAsync(cancellationToken, schema);
 
         var refined = analysis.Objects.ToList();
         var messages = analysis.Messages.ToList();
         var droppedByRedefine = new List<string>();
-        IReadOnlyList<PgLiveProgrammables.ViewRead>? reads = null;
+        IReadOnlyList<PostgresLiveProgrammables.ViewRead>? reads = null;
 
         // Only a view that already exists live needs comparing at all — a
         // brand-new one's "redefinition" is a plain CREATE, unconditionally
@@ -105,7 +105,7 @@ internal static class ViewRedefinePlanner
                 // already offer apply, so a view that cannot be built there is a fault in its file —
                 // a typo, a column or function that is not declared. Name the file: the engine's own
                 // message says what is missing, never where.
-                messages.Add(ProbeFailed(view, PgSqlStateHints.Describe(ex)));
+                messages.Add(ProbeFailed(view, PostgresSqlStateHints.Describe(ex)));
                 continue;
             }
             var index = refined.FindIndex(o => o.ObjectName == view.ObjectName);
@@ -121,7 +121,7 @@ internal static class ViewRedefinePlanner
 
             // The views reading this one go with it — dropped ahead of it, re-created after it —
             // when every one of them is the desired state's to re-create.
-            reads ??= await PgLiveProgrammables.ReadViewReadsAsync(connectionString, schema, cancellationToken, session);
+            reads ??= await PostgresLiveProgrammables.ReadViewReadsAsync(connectionString, schema, cancellationToken, session);
             var dependents = ReadersOf(view.ObjectName, reads);
             var declaredNames = views.Select(v => v.ObjectName).ToHashSet(StringComparer.Ordinal);
             var blocked = await FirstUndroppableAsync(
@@ -304,7 +304,7 @@ internal static class ViewRedefinePlanner
     /// Every live view reading <paramref name="viewName"/>, directly or through another, in the
     /// order they can be dropped — a view that reads another ahead of the one it reads.
     /// </summary>
-    private static IReadOnlyList<string> ReadersOf(string viewName, IReadOnlyList<PgLiveProgrammables.ViewRead> reads)
+    private static IReadOnlyList<string> ReadersOf(string viewName, IReadOnlyList<PostgresLiveProgrammables.ViewRead> reads)
     {
         var readers = new HashSet<string>(StringComparer.Ordinal);
         var frontier = new Queue<string>([viewName]);
@@ -318,7 +318,7 @@ internal static class ViewRedefinePlanner
         }
         var edges = reads.Where(r => readers.Contains(r.View) && readers.Contains(r.Source))
             .Select(r => (r.View, r.Source)).Distinct().ToList();
-        return PgLiveProgrammables.ReadersFirst(readers, edges).ToList();
+        return PostgresLiveProgrammables.ReadersFirst(readers, edges).ToList();
     }
 
     /// <summary>
@@ -329,7 +329,7 @@ internal static class ViewRedefinePlanner
     /// otherwise the first one something else still depends on.
     /// </summary>
     private static Task<string?> FirstUndroppableAsync(
-        PgReadConnection live, string schema, IReadOnlyList<string> viewsInDropOrder,
+        PostgresReadConnection live, string schema, IReadOnlyList<string> viewsInDropOrder,
         CancellationToken cancellationToken)
         => live.ProbeAsync<string?>(async transaction =>
         {

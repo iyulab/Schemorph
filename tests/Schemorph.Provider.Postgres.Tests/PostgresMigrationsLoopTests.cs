@@ -6,14 +6,14 @@ namespace Schemorph.Provider.Postgres.Tests;
 
 /// <summary>
 /// P4 (strategy 3, ADR-0002) through the CORE orchestration (mirrors
-/// <see cref="PgCoreLoopTests"/> for strategy 1 and
-/// <see cref="PgProgrammablesLoopTests"/> for strategy 2): a versioned
+/// <see cref="PostgresCoreLoopTests"/> for strategy 1 and
+/// <see cref="PostgresProgrammablesLoopTests"/> for strategy 2): a versioned
 /// migration runs once, is recorded in the ledger, and is skipped — not
 /// re-run — on a second apply.
 /// </summary>
-public class PgMigrationsLoopTests : IAsyncLifetime
+public class PostgresMigrationsLoopTests : IAsyncLifetime
 {
-    private PgTestSchema _live = null!;
+    private PostgresTestSchema _live = null!;
     private string _url = null!;
     private string _schemaDir = null!;
     private string _migrationsDir = null!;
@@ -30,8 +30,8 @@ public class PgMigrationsLoopTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _live = await PgTestSchema.CreateAsync(LiveV1);
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _live.Name }
+        _live = await PostgresTestSchema.CreateAsync(LiveV1);
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _live.Name }
             .ConnectionString;
 
         _schemaDir = Path.Combine(Path.GetTempPath(), "schemorph-pg-mig-schema-" + Guid.NewGuid().ToString("n")[..8]);

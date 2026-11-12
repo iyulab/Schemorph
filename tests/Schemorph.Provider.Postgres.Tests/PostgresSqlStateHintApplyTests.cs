@@ -5,14 +5,14 @@ namespace Schemorph.Provider.Postgres.Tests;
 
 /// <summary>
 /// End-to-end regression for SQLSTATE hints on apply: a real <c>PostgresException</c> from a
-/// live apply, not just <see cref="PgSqlStateHints"/>'s lookup table in isolation — proving the
+/// live apply, not just <see cref="PostgresSqlStateHints"/>'s lookup table in isolation — proving the
 /// hint actually reaches <see cref="Schemorph.Core.Providers.ApplyResult"/> through
 /// <see cref="PostgresProvider.ApplyAsync"/>'s catch block, the same path the CLI and MCP
 /// surfaces both read <c>RawMessage.Text</c> from.
 /// </summary>
-public sealed class PgSqlStateHintApplyTests : IAsyncLifetime
+public sealed class PostgresSqlStateHintApplyTests : IAsyncLifetime
 {
-    private PgTestSchema _live = null!;
+    private PostgresTestSchema _live = null!;
     private string _url = null!;
     private string _schemaDir = null!;
     private readonly PostgresProvider _provider = new();
@@ -31,8 +31,8 @@ public sealed class PgSqlStateHintApplyTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _live = await PgTestSchema.CreateAsync(LiveV1);
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _live.Name }
+        _live = await PostgresTestSchema.CreateAsync(LiveV1);
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _live.Name }
             .ConnectionString;
         _schemaDir = Path.Combine(
             Path.GetTempPath(), "schemorph-pg-sqlstate-" + Guid.NewGuid().ToString("n")[..8]);
@@ -56,7 +56,7 @@ public sealed class PgSqlStateHintApplyTests : IAsyncLifetime
     [SkippableFact]
     public async Task Unique_violation_against_existing_duplicate_data_carries_the_curated_hint()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
         var outcome = await ApplyOperation.RunAsync(
             _provider, _ledger, new ApplyOperation.Request(_schemaDir, _url));

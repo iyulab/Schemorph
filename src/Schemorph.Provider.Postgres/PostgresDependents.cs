@@ -23,7 +23,7 @@ namespace Schemorph.Provider.Postgres;
 /// answer is best-effort — a failed lookup leaves the engine's message and hint as they were.
 /// </para>
 /// </remarks>
-internal static class PgDependents
+internal static class PostgresDependents
 {
     private const int MaxListed = 10;
 

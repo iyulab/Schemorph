@@ -5,14 +5,14 @@ using Schemorph.Core.Planning;
 namespace Schemorph.Provider.Postgres.Tests;
 
 /// <summary>
-/// P3 through the CORE orchestration (mirrors <see cref="PgCoreLoopTests"/>
+/// P3 through the CORE orchestration (mirrors <see cref="PostgresCoreLoopTests"/>
 /// for strategy 1): a view redefined idempotently, converging to an empty
 /// re-diff, and re-defined again — without its own file changing — when a
 /// table column it depends on changes shape.
 /// </summary>
-public class PgProgrammablesLoopTests : IAsyncLifetime
+public class PostgresProgrammablesLoopTests : IAsyncLifetime
 {
-    private PgTestSchema _live = null!;
+    private PostgresTestSchema _live = null!;
     private string _url = null!;
     private string _schemaDir = null!;
     private readonly PostgresProvider _provider = new();
@@ -29,8 +29,8 @@ public class PgProgrammablesLoopTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _live = await PgTestSchema.CreateAsync(LiveV1);
-        _url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _live.Name }
+        _live = await PostgresTestSchema.CreateAsync(LiveV1);
+        _url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _live.Name }
             .ConnectionString;
 
         _schemaDir = Path.Combine(Path.GetTempPath(), "schemorph-pg-prog-" + Guid.NewGuid().ToString("n")[..8]);

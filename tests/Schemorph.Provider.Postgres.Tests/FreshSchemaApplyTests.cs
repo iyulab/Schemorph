@@ -5,7 +5,7 @@ namespace Schemorph.Provider.Postgres.Tests;
 
 /// <summary>
 /// Final-review Critical regression: every other PG fixture's target schema
-/// already exists before the first execution call — <see cref="PgTestSchema.CreateAsync"/>
+/// already exists before the first execution call — <see cref="PostgresTestSchema.CreateAsync"/>
 /// pre-creates it — so nothing else here ever exercised
 /// <see cref="PostgresProvider.BeginApplySessionAsync"/> against a schema that
 /// genuinely does not exist yet. That structural blind spot is exactly what let
@@ -23,9 +23,9 @@ public sealed class FreshSchemaApplyTests : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (PgTestSchema.ServerUrl is not null)
+        if (PostgresTestSchema.ServerUrl is not null)
         {
-            await using var connection = new NpgsqlConnection(PgTestSchema.ServerUrl);
+            await using var connection = new NpgsqlConnection(PostgresTestSchema.ServerUrl);
             await connection.OpenAsync();
             await using var command = new NpgsqlCommand(
                 $"DROP SCHEMA IF EXISTS \"{_schemaName}\" CASCADE", connection);
@@ -44,7 +44,7 @@ public sealed class FreshSchemaApplyTests : IAsyncDisposable
     [SkippableFact]
     public async Task First_apply_into_a_schema_that_does_not_exist_yet_completes_quickly()
     {
-        Skip.If(PgTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
+        Skip.If(PostgresTestSchema.ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres tests need a live server.");
 
         Directory.CreateDirectory(Path.Combine(_schemaDir, "tables"));
         await File.WriteAllTextAsync(Path.Combine(_schemaDir, "tables", "Widgets.sql"), $"""
@@ -54,7 +54,7 @@ public sealed class FreshSchemaApplyTests : IAsyncDisposable
             );
             """);
 
-        var url = new NpgsqlConnectionStringBuilder(PgTestSchema.ServerUrl!) { SearchPath = _schemaName }
+        var url = new NpgsqlConnectionStringBuilder(PostgresTestSchema.ServerUrl!) { SearchPath = _schemaName }
             .ConnectionString;
         var provider = new PostgresProvider();
         var ledger = new PostgresLedgerStore();
@@ -71,7 +71,7 @@ public sealed class FreshSchemaApplyTests : IAsyncDisposable
         Assert.True(outcome.Success, string.Join("; ", outcome.Errors.Select(e => e.Text)));
         Assert.Single(outcome.Applied);
 
-        var live = await CatalogReader.ReadTablesAsync(PgTestSchema.ServerUrl!, _schemaName);
+        var live = await CatalogReader.ReadTablesAsync(PostgresTestSchema.ServerUrl!, _schemaName);
         Assert.Contains(live, t => t.Name == "Widgets");
     }
 }
