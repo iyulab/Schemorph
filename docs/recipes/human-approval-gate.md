@@ -8,18 +8,18 @@ Three commands:
 
 ```bash
 # 1. Produce the artifact. Read-only — nothing is touched.
-schemorph diff --schema ./schema --format sql > plan-2026-07-21.sql
+schemorph diff --desired ./schema --format sql > plan-2026-07-21.sql
 
 # 2. A person reads it and (however your process records approval) signs it.
 #    Archive the file: it is the record of what was approved.
 
 # 3. Apply, gated on the fingerprint printed in that file's header.
-schemorph apply --schema ./schema --expect-plan 4f1c9a2e…
+schemorph apply --desired ./schema --expect-plan 4f1c9a2e…
 ```
 
 If the apply runs versioned migrations, give `diff` the same directory:
-`schemorph diff --schema ./schema --migrations ./migrations --format sql`, then
-`schemorph apply --schema ./schema --migrations ./migrations --expect-plan …`. The
+`schemorph diff --desired ./schema --migrations ./migrations --format sql`, then
+`schemorph apply --desired ./schema --migrations ./migrations --expect-plan …`. The
 document then lists each pending migration by file name and checksum, and the
 fingerprint binds them — a migration edited or added after the review is refused
 like any other change to what runs.

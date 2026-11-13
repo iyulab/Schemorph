@@ -29,7 +29,7 @@ public sealed class ProviderHintCliTests : IDisposable
             "CREATE TABLE public.author (id uuid NOT NULL DEFAULT gen_random_uuid(), name varchar(80) NOT NULL, " +
             "CONSTRAINT pk_author PRIMARY KEY (id));\n");
 
-        var arguments = $"diff --schema \"{Path.Combine(_dir, "schema")}\"" + (urlEnvironment is null ? $" --url \"{url}\"" : "");
+        var arguments = $"diff --desired \"{Path.Combine(_dir, "schema")}\"" + (urlEnvironment is null ? $" --url \"{url}\"" : "");
         var psi = new ProcessStartInfo("dotnet", $"exec \"{CliDll}\" {arguments}")
         {
             RedirectStandardOutput = true,

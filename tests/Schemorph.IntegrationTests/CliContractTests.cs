@@ -122,7 +122,7 @@ public sealed class CliContractTests : IDisposable
     [Fact]
     public void An_unknown_option_is_refused_with_the_nearest_known_one()
     {
-        var result = Run("diff --format json --schema . --migration ./m", "Server=x");
+        var result = Run("diff --format json --desired . --migration ./m", "Server=x");
 
         Assert.Equal(1, result.ExitCode);
         var error = JsonDocument.Parse(result.StdErr).RootElement.GetProperty("error");
@@ -130,6 +130,25 @@ public sealed class CliContractTests : IDisposable
         Assert.Equal("usage", error.GetProperty("kind").GetString());
         Assert.Contains("--migration", error.GetProperty("message").GetString());
         Assert.Contains("Did you mean --migrations?", error.GetProperty("hint").GetString());
+    }
+
+    /// <summary>
+    /// The directory option was called <c>--schema</c>, a name readers took for the database namespace. It is
+    /// <c>--desired</c> now and the old name is not kept as an alias: it is refused, and the refusal says where it went.
+    /// </summary>
+    [Theory]
+    [InlineData("diff")]
+    [InlineData("apply")]
+    [InlineData("status")]
+    public void The_old_directory_option_name_is_refused_with_its_new_name(string verb)
+    {
+        var result = Run($"{verb} --format json --schema ./schema", "Server=x");
+
+        Assert.Equal(1, result.ExitCode);
+        var error = JsonDocument.Parse(result.StdErr).RootElement.GetProperty("error");
+        Assert.Equal("invalid_arguments", error.GetProperty("code").GetString());
+        Assert.Contains("--schema", error.GetProperty("message").GetString());
+        Assert.Contains("--schema was renamed --desired", error.GetProperty("hint").GetString());
     }
 
     /// <summary>The parser's list is the manifest's: every option a verb advertises is accepted.</summary>
@@ -155,7 +174,7 @@ public sealed class CliContractTests : IDisposable
     [Fact]
     public void A_missing_pre_stage_directory_is_named()
     {
-        var result = Run("diff --format json --schema . --pre ./no-such-pre-dir", "Server=x");
+        var result = Run("diff --format json --desired . --pre ./no-such-pre-dir", "Server=x");
 
         Assert.Equal(1, result.ExitCode);
         Assert.Contains("pre_dir_not_found", result.StdErr);
@@ -177,17 +196,17 @@ public sealed class CliContractTests : IDisposable
             "CREATE TABLE dbo.T (Id INT NOT NULL PRIMARY KEY, Remarks NVARCHAR(50) NULL);\nGO\n");
         File.WriteAllText(Path.Combine(pre, "V1__rename.sql"), "EXEC sp_rename 'dbo.T.Notes', 'Remarks', 'COLUMN';");
 
-        var diff = Run($"diff --schema \"{schema}\" --pre \"{pre}\"", db.Url);
+        var diff = Run($"diff --desired \"{schema}\" --pre \"{pre}\"", db.Url);
         Assert.Equal(2, diff.ExitCode);
         var hash = JsonDocument.Parse(diff.StdOut).RootElement.GetProperty("planHash").GetString();
 
-        var apply = Run($"apply --schema \"{schema}\" --pre \"{pre}\" --expect-plan {hash}", db.Url);
+        var apply = Run($"apply --desired \"{schema}\" --pre \"{pre}\" --expect-plan {hash}", db.Url);
         Assert.Equal(2, apply.ExitCode);
         var applied = JsonDocument.Parse(apply.StdOut).RootElement;
         Assert.True(applied.GetProperty("deferred").GetBoolean());
         Assert.Equal("V1__rename.sql", applied.GetProperty("pre").GetProperty("applied")[0].GetString());
 
-        var again = Run($"diff --schema \"{schema}\" --pre \"{pre}\"", db.Url);
+        var again = Run($"diff --desired \"{schema}\" --pre \"{pre}\"", db.Url);
         Assert.Equal(0, again.ExitCode);
         Assert.Equal("keep me", db.Scalar<string>("SELECT Remarks FROM dbo.T"));
     }
@@ -207,15 +226,15 @@ public sealed class CliContractTests : IDisposable
             "CREATE TABLE dbo.T (Id INT NOT NULL PRIMARY KEY, Remarks NVARCHAR(50) NULL);\nGO\n");
         File.WriteAllText(Path.Combine(pre, "V1__rename.sql"), "EXEC sp_rename 'dbo.T.Notes', 'Remarks', 'COLUMN';");
 
-        var waiting = Run($"status --schema \"{schema}\" --pre \"{pre}\"", db.Url);
+        var waiting = Run($"status --desired \"{schema}\" --pre \"{pre}\"", db.Url);
         Assert.Equal(2, waiting.ExitCode);
         Assert.Contains("V1__rename.sql", waiting.StdOut);
 
-        var diff = Run($"diff --schema \"{schema}\" --pre \"{pre}\"", db.Url);
+        var diff = Run($"diff --desired \"{schema}\" --pre \"{pre}\"", db.Url);
         var hash = JsonDocument.Parse(diff.StdOut).RootElement.GetProperty("planHash").GetString();
-        Assert.Equal(2, Run($"apply --schema \"{schema}\" --pre \"{pre}\" --expect-plan {hash}", db.Url).ExitCode);
+        Assert.Equal(2, Run($"apply --desired \"{schema}\" --pre \"{pre}\" --expect-plan {hash}", db.Url).ExitCode);
 
-        var settled = Run($"status --schema \"{schema}\" --pre \"{pre}\"", db.Url);
+        var settled = Run($"status --desired \"{schema}\" --pre \"{pre}\"", db.Url);
         Assert.Equal(0, settled.ExitCode);
         Assert.DoesNotContain("V1__rename.sql", JsonDocument.Parse(settled.StdOut).RootElement
             .GetProperty("plan").GetProperty("pre").ToString());
@@ -294,7 +313,7 @@ public sealed class CliContractTests : IDisposable
             "CREATE TABLE dbo.T (Id INT NOT NULL PRIMARY KEY);\nGO\n");
 
         // Pending change → exit 2, and the plan JSON lands on stdout.
-        var pending = Run($"diff --schema \"{schema}\"", db.Url);
+        var pending = Run($"diff --desired \"{schema}\"", db.Url);
         Assert.Equal(2, pending.ExitCode);
         var plan = JsonDocument.Parse(pending.StdOut).RootElement;
         Assert.True(plan.GetProperty("hasChanges").GetBoolean());
@@ -302,7 +321,7 @@ public sealed class CliContractTests : IDisposable
 
         // Converged → exit 0.
         db.Execute("CREATE TABLE dbo.T (Id INT NOT NULL PRIMARY KEY)");
-        var converged = Run($"diff --schema \"{schema}\"", db.Url);
+        var converged = Run($"diff --desired \"{schema}\"", db.Url);
         Assert.Equal(0, converged.ExitCode);
         Assert.False(JsonDocument.Parse(converged.StdOut).RootElement.GetProperty("hasChanges").GetBoolean());
     }

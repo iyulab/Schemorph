@@ -19,7 +19,7 @@ namespace Schemorph.Cli;
 ///
 /// Configuration follows the tools' env-confinement pattern: the database
 /// comes from SCHEMORPH_URL, and the plan resource's desired-state directory
-/// from SCHEMORPH_SCHEMA_DIR — neither ever flows through the conversation.
+/// from SCHEMORPH_DESIRED_DIR — neither ever flows through the conversation.
 /// Errors surface as MCP protocol errors (resources have no envelope channel),
 /// with the same redaction as every other sink.
 /// </summary>
@@ -67,15 +67,21 @@ internal sealed class SchemorphResources
 
     [McpServerResource(UriTemplate = "schemorph://plan", Name = "Current schema change plan", MimeType = "application/json")]
     [Description("The plan schemorph_diff would produce right now: desired-state SQL files " +
-                 "(SCHEMORPH_SCHEMA_DIR in the server environment) vs the live database (SCHEMORPH_URL). " +
+                 "(SCHEMORPH_DESIRED_DIR in the server environment) vs the live database (SCHEMORPH_URL). " +
                  "Versioned plan JSON including planHash — usable directly as schemorph_apply's expectedPlanHash.")]
     public static async Task<string> Plan(CancellationToken cancellationToken)
     {
         var url = RequireEnv("SCHEMORPH_URL");
-        var schemaDir = RequireEnv("SCHEMORPH_SCHEMA_DIR");
+        if (Environment.GetEnvironmentVariable("SCHEMORPH_SCHEMA_DIR") is not null
+            && Environment.GetEnvironmentVariable("SCHEMORPH_DESIRED_DIR") is null)
+        {
+            throw new McpException("SCHEMORPH_SCHEMA_DIR was renamed SCHEMORPH_DESIRED_DIR: it names the directory of " +
+                                   "desired-state .sql files, not a database schema. Rename it on the server entry.");
+        }
+        var schemaDir = RequireEnv("SCHEMORPH_DESIRED_DIR");
         if (!Directory.Exists(schemaDir))
         {
-            throw new McpException($"SCHEMORPH_SCHEMA_DIR does not exist: {schemaDir}. " +
+            throw new McpException($"SCHEMORPH_DESIRED_DIR does not exist: {schemaDir}. " +
                                    "Point it at the directory holding the desired-state .sql files.");
         }
 

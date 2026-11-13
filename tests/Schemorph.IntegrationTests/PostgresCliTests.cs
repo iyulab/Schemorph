@@ -84,21 +84,21 @@ public sealed class PostgresCliTests : IDisposable
         File.WriteAllText(migration, $"""INSERT INTO "{_schema}"."Notes" ("Id", "Body") VALUES (1, 'reviewed');""");
 
         var reviewed = JsonDocument.Parse(
-            Run($"diff --schema \"{schemaDir}\" --migrations \"{migrationsDir}\"", Url()).StdOut).RootElement;
+            Run($"diff --desired \"{schemaDir}\" --migrations \"{migrationsDir}\"", Url()).StdOut).RootElement;
         var planHash = reviewed.GetProperty("planHash").GetString()!;
         var pending = reviewed.GetProperty("migrations").EnumerateArray().Single();
         Assert.Equal("V1__seed.sql", pending.GetProperty("fileName").GetString());
 
         // Edited after review: the gate refuses, and nothing — table or migration — ran.
         File.WriteAllText(migration, $"""INSERT INTO "{_schema}"."Notes" ("Id", "Body") VALUES (1, 'changed after review');""");
-        var refused = Run($"apply --schema \"{schemaDir}\" --migrations \"{migrationsDir}\" --expect-plan {planHash}", Url());
+        var refused = Run($"apply --desired \"{schemaDir}\" --migrations \"{migrationsDir}\" --expect-plan {planHash}", Url());
         Assert.NotEqual(0, refused.ExitCode);
         Assert.Contains("plan_mismatch", refused.StdOut + refused.StdErr);
-        Assert.Equal(2, Run($"diff --schema \"{schemaDir}\"", Url()).ExitCode);
+        Assert.Equal(2, Run($"diff --desired \"{schemaDir}\"", Url()).ExitCode);
 
         // Back to the reviewed text: the same hash passes and the migration runs.
         File.WriteAllText(migration, $"""INSERT INTO "{_schema}"."Notes" ("Id", "Body") VALUES (1, 'reviewed');""");
-        var applied = Run($"apply --schema \"{schemaDir}\" --migrations \"{migrationsDir}\" --expect-plan {planHash}", Url());
+        var applied = Run($"apply --desired \"{schemaDir}\" --migrations \"{migrationsDir}\" --expect-plan {planHash}", Url());
         Assert.Equal(0, applied.ExitCode);
         Assert.Contains("V1__seed.sql", applied.StdOut);
     }
@@ -118,17 +118,17 @@ public sealed class PostgresCliTests : IDisposable
             """);
 
         // diff: pending changes, exit 2, plan format 1.3 with the earned guarantee.
-        var pending = Run($"diff --schema \"{_dir}\"", Url());
+        var pending = Run($"diff --desired \"{_dir}\"", Url());
         Assert.Equal(2, pending.ExitCode);
         var plan = JsonDocument.Parse(pending.StdOut).RootElement;
         Assert.Equal("transactional", plan.GetProperty("atomicity").GetString());
         var planHash = plan.GetProperty("planHash").GetString()!;
 
         // gated apply, then convergence — the same machine contract as SQL Server.
-        var applied = Run($"apply --schema \"{_dir}\" --expect-plan {planHash}", Url());
+        var applied = Run($"apply --desired \"{_dir}\" --expect-plan {planHash}", Url());
         Assert.Equal(0, applied.ExitCode);
 
-        var converged = Run($"diff --schema \"{_dir}\"", Url());
+        var converged = Run($"diff --desired \"{_dir}\"", Url());
         Assert.Equal(0, converged.ExitCode);
     }
 
@@ -144,14 +144,14 @@ public sealed class PostgresCliTests : IDisposable
             $"""CREATE TABLE "{_schema}"."Notes" ("Id" integer NOT NULL PRIMARY KEY, "Body" text NOT NULL);""");
         File.WriteAllText(Path.Combine(_dir, "views", "NoteBodies.sql"),
             """CREATE VIEW "NoteBodies" AS SELECT "Body" FROM "Notes";""");
-        Assert.Equal(0, Run($"apply --schema \"{_dir}\"", Url()).ExitCode);
+        Assert.Equal(0, Run($"apply --desired \"{_dir}\"", Url()).ExitCode);
 
         // The table stops declaring the column its view still reads: the desired state
         // contradicts itself, and the engine says so when the comparison probes the view.
         // That is the file's fault, so it is reported as one — naming the view and its file —
         // and the engine's code still rides in the envelope's machine-readable slot.
         File.WriteAllText(table, $"""CREATE TABLE "{_schema}"."Notes" ("Id" integer NOT NULL PRIMARY KEY);""");
-        var result = Run($"diff --schema \"{_dir}\" --format json", Url());
+        var result = Run($"diff --desired \"{_dir}\" --format json", Url());
 
         Assert.Equal(1, result.ExitCode);
         var error = JsonDocument.Parse(result.StdErr).RootElement.GetProperty("error");

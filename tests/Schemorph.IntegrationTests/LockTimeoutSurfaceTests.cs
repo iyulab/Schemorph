@@ -53,7 +53,7 @@ public sealed class LockTimeoutSurfaceTests : IDisposable
     [InlineData("soon")]
     public void The_cli_refuses_a_value_that_is_not_a_lock_timeout(string value)
     {
-        var (exit, error) = RunCli($"apply --schema \"{_dir}\" --lock-timeout {value}");
+        var (exit, error) = RunCli($"apply --desired \"{_dir}\" --lock-timeout {value}");
 
         Assert.Equal(1, exit);
         Assert.Equal("invalid_arguments", error.GetProperty("code").GetString());
@@ -63,7 +63,7 @@ public sealed class LockTimeoutSurfaceTests : IDisposable
     [Fact]
     public void The_cli_refuses_a_lock_timeout_on_a_provider_whose_apply_is_not_one_transaction()
     {
-        var (exit, error) = RunCli($"apply --schema \"{_dir}\" --lock-timeout 5s");
+        var (exit, error) = RunCli($"apply --desired \"{_dir}\" --lock-timeout 5s");
 
         Assert.Equal(1, exit);
         Assert.Equal("not_implemented", error.GetProperty("code").GetString());

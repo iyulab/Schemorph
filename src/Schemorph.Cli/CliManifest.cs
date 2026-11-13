@@ -54,7 +54,7 @@ internal static class CliManifest
             options = new object[]
             {
                 new { flag = "--url", value = "connection-string", required = false, description = "Target database; SCHEMORPH_URL is used when omitted." },
-                new { flag = "--schema", value = "dir", required = true, description = "Desired-state SQL directory; non-model .sql files (deploy scripts, seed DML) are skipped with a warning." },
+                new { flag = "--desired", value = "dir", required = true, description = "Desired-state SQL directory; non-model .sql files (deploy scripts, seed DML) are skipped with a warning." },
                 new { flag = "--allow-destructive", value = (string?)null, required = false, description = "Include destructive changes in the plan." },
                 new { flag = "--migrations", value = "dir", required = false, description = "Versioned migration scripts; the pending ones join the plan (name + checksum) and its planHash. Pass the same directory to apply." },
                 new { flag = "--pre", value = "dir", required = false, description = "Pre-stage scripts (V####__description.sql), run once before the declarative stage; the plan is computed as of after the pending ones, which join it (pre[]) and its planHash. Pass the same directory to apply." },
@@ -70,7 +70,7 @@ internal static class CliManifest
             options = new object[]
             {
                 new { flag = "--url", value = "connection-string", required = false, description = "Target database; SCHEMORPH_URL is used when omitted." },
-                new { flag = "--schema", value = "dir", required = true, description = "Desired-state SQL directory." },
+                new { flag = "--desired", value = "dir", required = true, description = "Desired-state SQL directory." },
                 new { flag = "--migrations", value = "dir", required = false, description = "Versioned migration scripts (V####__description.sql), run once each, tamper-checked." },
                 new { flag = "--pre", value = "dir", required = false, description = "Pre-stage scripts, run first and recorded once each; where the provider cannot plan past them, only they run and the exit code is 2." },
                 new { flag = "--allow-destructive", value = (string?)null, required = false, description = "Apply destructive changes too." },
@@ -88,7 +88,7 @@ internal static class CliManifest
             options = new object[]
             {
                 new { flag = "--url", value = "connection-string", required = false, description = "Target database; SCHEMORPH_URL is used when omitted." },
-                new { flag = "--schema", value = "dir", required = true, description = "Desired-state SQL directory." },
+                new { flag = "--desired", value = "dir", required = true, description = "Desired-state SQL directory." },
                 new { flag = "--migrations", value = "dir", required = false, description = "Also report pending migration scripts." },
                 new { flag = "--pre", value = "dir", required = false, description = "Pre-stage scripts: drift is planned as of after the pending ones, which are listed." },
                 new { flag = "--format", value = "json|text", required = false, description = "Output form." },
@@ -105,7 +105,7 @@ internal static class CliManifest
         new
         {
             name = "mcp",
-            summary = "Run as an MCP server over stdio. Tools: schemorph_diff, schemorph_inspect, schemorph_status (read-only) and schemorph_apply (gated: requires the reviewed plan's expectedPlanHash). Resources: schemorph://schema, schemorph://schema/{kind}/{name}, schemorph://plan (needs SCHEMORPH_SCHEMA_DIR). SCHEMORPH_URL must be set in the server's environment — credentials never flow through the conversation.",
+            summary = "Run as an MCP server over stdio. Tools: schemorph_diff, schemorph_inspect, schemorph_status (read-only) and schemorph_apply (gated: requires the reviewed plan's expectedPlanHash). Resources: schemorph://schema, schemorph://schema/{kind}/{name}, schemorph://plan (needs SCHEMORPH_DESIRED_DIR). SCHEMORPH_URL must be set in the server's environment — credentials never flow through the conversation.",
             options = Array.Empty<object>(),
             exitCodes = new[] { 0 },
         },

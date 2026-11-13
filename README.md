@@ -17,13 +17,13 @@ No ORM. No Visual Studio. No proprietary DSL. Just SQL, a single command, and ou
 schemorph inspect --url "Server=...;Database=app" --out ./schema
 
 # Preview what would change (never applies anything) — prints the plan and its fingerprint
-schemorph diff --url "..." --schema ./schema
+schemorph diff --url "..." --desired ./schema
 
 # Apply exactly the reviewed plan, or refuse if anything changed since the diff
-schemorph apply --url "..." --schema ./schema --expect-plan <hash>
+schemorph apply --url "..." --desired ./schema --expect-plan <hash>
 
 # Drift, ledger summary, pending migrations
-schemorph status --url "..." --schema ./schema --migrations ./migrations
+schemorph status --url "..." --desired ./schema --migrations ./migrations
 
 # Run as an MCP server (read-only tools + gated apply)
 schemorph mcp
@@ -101,7 +101,7 @@ The same commands speak a stable machine contract, so scripts, CI jobs, and AI c
 - `schemorph schema` prints a JSON manifest of the whole CLI surface (verbs, options, exit codes), so a caller discovers it without parsing help text
 - Credentials come from the `SCHEMORPH_URL` environment variable (preferred over `--url`), and password material is redacted from every output channel — safe to pipe into logs and PR comments
 - **`schemorph mcp`** runs the same operations as an MCP server over stdio — read-only tools (`schemorph_diff`, `schemorph_inspect`, `schemorph_status`) plus `schemorph_apply` gated behind a required plan fingerprint; the connection string stays in the server's environment, never in the conversation
-- **Schema as context** — the MCP server also exposes *resources*: `schemorph://schema` (the live database as desired-state SQL, or one object via `schemorph://schema/{kind}/{name}`) and `schemorph://plan` (the current plan with its `planHash`, ready for the apply gate; set `SCHEMORPH_SCHEMA_DIR` in the server environment), so hosts attach schema state directly instead of round-tripping tool calls
+- **Schema as context** — the MCP server also exposes *resources*: `schemorph://schema` (the live database as desired-state SQL, or one object via `schemorph://schema/{kind}/{name}`) and `schemorph://plan` (the current plan with its `planHash`, ready for the apply gate; set `SCHEMORPH_DESIRED_DIR` in the server environment), so hosts attach schema state directly instead of round-tripping tool calls
 - **Agent Skill** — [`skills/schemorph/SKILL.md`](./skills/schemorph/SKILL.md) packages the procedural knowledge (the edit → diff → review → gated apply → converge loop, error-contract branching, migration immutability) in the [Agent Skills](https://agentskills.io) format; drop it into your agent's skills directory
 
 Nothing here is a separate mode: the JSON, the review document, and the MCP tools are renderings of one plan, so an automated run and a human review never disagree about what will happen.
@@ -116,11 +116,11 @@ Schemorph is multi-target by design: one command set, one plan format, one ledge
 **Which PostgreSQL schema is the target** comes from the connection string's `Search Path`, and defaults to `public` when it is absent. Everything the run touches lands there — the compared objects, the DDL, and the history ledger alike — so several schemas can live on one server and be managed independently, one connection string each:
 
 ```bash
-schemorph diff --url "Host=...;Database=app;Search Path=tenant_a" --schema ./schema
-schemorph diff --url "Host=...;Database=app;Search Path=tenant_b" --schema ./schema
+schemorph diff --url "Host=...;Database=app;Search Path=tenant_a" --desired ./schema
+schemorph diff --url "Host=...;Database=app;Search Path=tenant_b" --desired ./schema
 ```
 
-Note the two different senses of the word: **`--schema` is the directory of desired-state `.sql` files**, never a database namespace. The namespace is chosen by the connection string alone.
+`--desired` is the directory of desired-state `.sql` files; the database namespace is chosen by the connection string alone. (Earlier versions called this option `--schema`, which was read as the namespace more than once — it is `--desired` now, and `--schema` is refused with a pointer to the new name.)
 
 ## Installation
 

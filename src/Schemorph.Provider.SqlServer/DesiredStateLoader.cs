@@ -63,7 +63,7 @@ internal static class DesiredStateLoader
                 {
                     warnings.Add(new RawMessage("Warning", "SCHEMORPH005",
                         $"Skipped {file}: SQLCMD syntax (:r / :setvar / $(var)) marks a deploy script, " +
-                        "not desired state. Keep deploy scripts outside the --schema directory."));
+                        "not desired state. Keep deploy scripts outside the --desired directory."));
                 }
                 else
                 {
@@ -80,7 +80,7 @@ internal static class DesiredStateLoader
             {
                 warnings.Add(new RawMessage("Warning", "SCHEMORPH005",
                     $"Skipped {file}: SQLCMD variable substitution ($(var)) marks a deploy script, " +
-                    "not desired state. Keep deploy scripts outside the --schema directory."));
+                    "not desired state. Keep deploy scripts outside the --desired directory."));
                 continue;
             }
 
@@ -90,7 +90,7 @@ internal static class DesiredStateLoader
                 warnings.Add(new RawMessage("Warning", "SCHEMORPH006",
                     $"Skipped {file}: contains an imperative statement ({FriendlyName(imperative)}) — " +
                     "desired state files hold only declarative DDL. Move deploy/seed logic out of " +
-                    "--schema, or split it into a versioned migration."));
+                    "--desired, or split it into a versioned migration."));
                 continue;
             }
 

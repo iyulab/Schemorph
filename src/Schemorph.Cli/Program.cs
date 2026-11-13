@@ -50,6 +50,9 @@ if (verb is not null && CliManifest.UnknownOption(verb, args) is { } unknown)
         .FirstOrDefault();
     return Fail(format, "invalid_arguments",
         $"Unknown option '{unknown.Unknown}' for {verb}.",
+        (unknown.Unknown == "--schema"
+            ? "--schema was renamed --desired: it names the directory of desired-state .sql files, not a database schema. "
+            : "") +
         (suggestion is null ? "" : $"Did you mean {suggestion}? ") +
         (unknown.Known.Count == 0 ? $"{verb} takes no options." : $"{verb} takes: {string.Join(", ", unknown.Known)}."));
 }
@@ -87,14 +90,14 @@ switch (verb)
               apply     execute the change plan and record it in the history ledger
               schema    print a JSON manifest of this CLI (verbs, options, exit codes)
               mcp       run as an MCP server over stdio: tools + schema/plan
-                        resources (set SCHEMORPH_URL — and SCHEMORPH_SCHEMA_DIR
+                        resources (set SCHEMORPH_URL — and SCHEMORPH_DESIRED_DIR
                         for the plan resource — in the server environment)
               status    show drift, ledger summary, and pending migrations
               version   print the tool version
 
             status options:
               --url <connection-string>   target database (required)
-              --schema <dir>              desired-state SQL directory (required)
+              --desired <dir>             desired-state SQL directory (required)
               --migrations <dir>          also report pending migration scripts
               --pre <dir>                 pre-stage scripts: drift is planned as of after
                                           the pending ones, which are listed
@@ -107,7 +110,7 @@ switch (verb)
 
             diff options:
               --url <connection-string>   target database (required)
-              --schema <dir>              desired-state SQL directory (required)
+              --desired <dir>             desired-state SQL directory (required)
               --allow-destructive         include destructive changes in the plan
               --migrations <dir>          versioned migration scripts — the pending ones join
                                           the plan (name + checksum) and its planHash; pass
@@ -131,7 +134,7 @@ switch (verb)
 
             apply options:
               --url <connection-string>   target database (required)
-              --schema <dir>              desired-state SQL directory (required)
+              --desired <dir>             desired-state SQL directory (required)
               --migrations <dir>          versioned migration scripts (V####__description.sql)
               --pre <dir>                 pre-stage scripts, run first; where they cannot be
                                           planned past (SQL Server), the apply runs only them
@@ -192,17 +195,17 @@ async Task<int> RunMcp()
 async Task<int> RunApply(string[] args, string format)
 {
     var url = ResolveUrl(args);
-    var schemaDir = ParseOption(args, "--schema");
+    var desiredDir = ParseOption(args, "--desired");
     var allowDestructive = args.Contains("--allow-destructive");
 
-    if (url is null || schemaDir is null)
+    if (url is null || desiredDir is null)
     {
-        return Fail(format, "invalid_arguments", "apply requires --url (or SCHEMORPH_URL) and --schema.",
-            "schemorph apply --url \"<connection-string>\" --schema ./schema");
+        return Fail(format, "invalid_arguments", "apply requires --url (or SCHEMORPH_URL) and --desired.",
+            "schemorph apply --url \"<connection-string>\" --desired ./schema");
     }
-    if (!Directory.Exists(schemaDir))
+    if (!Directory.Exists(desiredDir))
     {
-        return Fail(format, "schema_dir_not_found", $"Schema directory not found: {schemaDir}",
+        return Fail(format, "schema_dir_not_found", $"Schema directory not found: {desiredDir}",
             "Pass the directory that holds the desired-state .sql files.");
     }
 
@@ -239,7 +242,7 @@ async Task<int> RunApply(string[] args, string format)
         var (provider, ledger) = ProviderSelection.Current;
         var outcome = await ApplyOperation.RunAsync(
             provider, ledger,
-            new ApplyOperation.Request(schemaDir, url, allowDestructive, migrationsDir,
+            new ApplyOperation.Request(desiredDir, url, allowDestructive, migrationsDir,
                 ParseOption(args, "--expect-plan"), preDir, lockTimeout, online),
             onPlan: plan =>
             {
@@ -391,16 +394,16 @@ async Task<int> RunApply(string[] args, string format)
 async Task<int> RunStatus(string[] args, string format)
 {
     var url = ResolveUrl(args);
-    var schemaDir = ParseOption(args, "--schema");
+    var desiredDir = ParseOption(args, "--desired");
 
-    if (url is null || schemaDir is null)
+    if (url is null || desiredDir is null)
     {
-        return Fail(format, "invalid_arguments", "status requires --url (or SCHEMORPH_URL) and --schema.",
-            "schemorph status --url \"<connection-string>\" --schema ./schema [--migrations ./migrations] [--pre ./pre]");
+        return Fail(format, "invalid_arguments", "status requires --url (or SCHEMORPH_URL) and --desired.",
+            "schemorph status --url \"<connection-string>\" --desired ./schema [--migrations ./migrations] [--pre ./pre]");
     }
-    if (!Directory.Exists(schemaDir))
+    if (!Directory.Exists(desiredDir))
     {
-        return Fail(format, "schema_dir_not_found", $"Schema directory not found: {schemaDir}",
+        return Fail(format, "schema_dir_not_found", $"Schema directory not found: {desiredDir}",
             "Pass the directory that holds the desired-state .sql files.");
     }
     var migrationsDir = ParseOption(args, "--migrations");
@@ -422,7 +425,7 @@ async Task<int> RunStatus(string[] args, string format)
         var (provider, ledger) = ProviderSelection.Current;
         var result = await StatusOperation.RunAsync(
             provider, ledger,
-            new StatusOperation.Request(schemaDir, url, migrationsDir, preDir));
+            new StatusOperation.Request(desiredDir, url, migrationsDir, preDir));
 
         if (!result.Success)
         {
@@ -545,17 +548,17 @@ async Task<int> RunInspect(string[] args, string format)
 async Task<int> RunDiff(string[] args, string format)
 {
     var url = ResolveUrl(args);
-    var schemaDir = ParseOption(args, "--schema");
+    var desiredDir = ParseOption(args, "--desired");
     var allowDestructive = args.Contains("--allow-destructive");
 
-    if (url is null || schemaDir is null)
+    if (url is null || desiredDir is null)
     {
-        return Fail(format, "invalid_arguments", "diff requires --url (or SCHEMORPH_URL) and --schema.",
-            "schemorph diff --url \"<connection-string>\" --schema ./schema");
+        return Fail(format, "invalid_arguments", "diff requires --url (or SCHEMORPH_URL) and --desired.",
+            "schemorph diff --url \"<connection-string>\" --desired ./schema");
     }
-    if (!Directory.Exists(schemaDir))
+    if (!Directory.Exists(desiredDir))
     {
-        return Fail(format, "schema_dir_not_found", $"Schema directory not found: {schemaDir}",
+        return Fail(format, "schema_dir_not_found", $"Schema directory not found: {desiredDir}",
             "Pass the directory that holds the desired-state .sql files.");
     }
 
@@ -581,7 +584,7 @@ async Task<int> RunDiff(string[] args, string format)
         // surface render the same operation; this method only renders and maps errors.
         var (provider, ledger) = ProviderSelection.Current;
         var result = await DiffOperation.RunAsync(
-            provider, ledger, schemaDir, url, allowDestructive, migrationsDir: migrationsDir, preDir: preDir, online: online);
+            provider, ledger, desiredDir, url, allowDestructive, migrationsDir: migrationsDir, preDir: preDir, online: online);
 
         if (!result.Success)
         {

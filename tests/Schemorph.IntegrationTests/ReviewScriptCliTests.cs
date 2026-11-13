@@ -64,7 +64,7 @@ public sealed class ReviewScriptCliTests : IDisposable
     public void A_ledger_from_an_earlier_apply_is_named_as_not_executed_and_survives_the_gated_apply()
     {
         SeedSchema();
-        Assert.Equal(0, Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\"").ExitCode);
+        Assert.Equal(0, Run($"apply --url \"{_db.Url}\" --desired \"{SchemaDir}\"").ExitCode);
         var historyRows = _db.Scalar<int>("SELECT COUNT(*) FROM dbo.__SchemorphHistory");
         Assert.True(historyRows > 0);
 
@@ -73,20 +73,20 @@ public sealed class ReviewScriptCliTests : IDisposable
             "CREATE TABLE dbo.Orders (Id INT NOT NULL PRIMARY KEY, Total DECIMAL(18,2) NOT NULL, Note NVARCHAR(50) NULL);");
 
         var json = JsonDocument.Parse(
-            Run($"diff --url \"{_db.Url}\" --schema \"{SchemaDir}\" --format json").StdOut).RootElement;
+            Run($"diff --url \"{_db.Url}\" --desired \"{SchemaDir}\" --format json").StdOut).RootElement;
         var planHash = json.GetProperty("planHash").GetString()!;
         Assert.Contains(json.GetProperty("excluded").EnumerateArray(),
             e => e.GetProperty("objectName").GetString() == "dbo.__SchemorphHistory");
         Assert.DoesNotContain(json.GetProperty("changes").EnumerateArray(),
             c => c.GetProperty("objectName").GetString() == "dbo.__SchemorphHistory");
 
-        var document = Run($"diff --url \"{_db.Url}\" --schema \"{SchemaDir}\" --format sql").StdOut;
+        var document = Run($"diff --url \"{_db.Url}\" --desired \"{SchemaDir}\" --format sql").StdOut;
         var notExecuted = document.IndexOf("NOT EXECUTED", StringComparison.Ordinal);
         Assert.True(notExecuted >= 0, "the document must say what it contains but will not run");
         Assert.True(document.IndexOf("__SchemorphHistory", notExecuted, StringComparison.Ordinal) > notExecuted);
         Assert.Contains($"planHash:  {planHash}", document);
 
-        Assert.Equal(0, Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\" --expect-plan {planHash}").ExitCode);
+        Assert.Equal(0, Run($"apply --url \"{_db.Url}\" --desired \"{SchemaDir}\" --expect-plan {planHash}").ExitCode);
         Assert.True(_db.Scalar<int>("SELECT COUNT(*) FROM dbo.__SchemorphHistory") > historyRows,
             "the ledger survives the apply and records it");
         Assert.Equal(1, _db.Scalar<int>(
@@ -98,7 +98,7 @@ public sealed class ReviewScriptCliTests : IDisposable
     {
         SeedSchema();
 
-        var sql = Run($"diff --url \"{_db.Url}\" --schema \"{SchemaDir}\" --format sql");
+        var sql = Run($"diff --url \"{_db.Url}\" --desired \"{SchemaDir}\" --format sql");
         Assert.Equal(2, sql.ExitCode);   // changes pending
 
         // Both stages present: a document holding only part of the plan is
@@ -109,13 +109,13 @@ public sealed class ReviewScriptCliTests : IDisposable
 
         // The header's hash is the JSON plan's planHash — the reviewed paper and
         // the enforced fingerprint are one artifact.
-        var json = Run($"diff --url \"{_db.Url}\" --schema \"{SchemaDir}\" --format json");
+        var json = Run($"diff --url \"{_db.Url}\" --desired \"{SchemaDir}\" --format json");
         var planHash = JsonDocument.Parse(json.StdOut).RootElement.GetProperty("planHash").GetString()!;
         Assert.Contains($"planHash:  {planHash}", sql.StdOut);
         Assert.Contains($"--expect-plan {planHash}", sql.StdOut);
 
         // And that hash is accepted by the gate it advertises.
-        var applied = Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\" --expect-plan {planHash}");
+        var applied = Run($"apply --url \"{_db.Url}\" --desired \"{SchemaDir}\" --expect-plan {planHash}");
         Assert.Equal(0, applied.ExitCode);
     }
 
@@ -127,7 +127,7 @@ public sealed class ReviewScriptCliTests : IDisposable
             ? _db.Url
             : _db.Url + ";Password=hunter2";
 
-        var sql = Run($"diff --url \"{url}\" --schema \"{SchemaDir}\" --format sql");
+        var sql = Run($"diff --url \"{url}\" --desired \"{SchemaDir}\" --format sql");
 
         // The document is meant to be archived and circulated for signature.
         Assert.DoesNotContain("hunter2", sql.StdOut);
@@ -137,9 +137,9 @@ public sealed class ReviewScriptCliTests : IDisposable
     public void A_converged_database_renders_a_document_that_says_nothing_to_do()
     {
         SeedSchema();
-        Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\"");
+        Run($"apply --url \"{_db.Url}\" --desired \"{SchemaDir}\"");
 
-        var sql = Run($"diff --url \"{_db.Url}\" --schema \"{SchemaDir}\" --format sql");
+        var sql = Run($"diff --url \"{_db.Url}\" --desired \"{SchemaDir}\" --format sql");
 
         Assert.Equal(0, sql.ExitCode);
         Assert.Contains("No changes.", sql.StdOut);
@@ -152,7 +152,7 @@ public sealed class ReviewScriptCliTests : IDisposable
 
         foreach (var verb in new[] { "apply", "status", "inspect" })
         {
-            var result = Run($"{verb} --url \"{_db.Url}\" --schema \"{SchemaDir}\" " +
+            var result = Run($"{verb} --url \"{_db.Url}\" --desired \"{SchemaDir}\" " +
                              $"--out \"{Path.Combine(_dir, "o")}\" --format sql");
 
             // Accepting the flag and silently rendering text would advertise an

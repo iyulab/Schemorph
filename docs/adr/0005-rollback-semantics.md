@@ -26,8 +26,8 @@ The desired state lives in git. Undoing a structural or programmable change is:
 
 ```
 git revert <commit>        # or checkout the previous state of schema/
-schemorph diff  --url ... --schema ./schema     # review the reverse plan
-schemorph apply --url ... --schema ./schema
+schemorph diff  --url ... --desired ./schema     # review the reverse plan
+schemorph apply --url ... --desired ./schema
 ```
 
 The engine needs **no new capability**: the diff of "current database vs. previous

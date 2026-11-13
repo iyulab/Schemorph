@@ -108,7 +108,7 @@ migrations/
 ```
 
 The layout above is the default convention; paths are passed as arguments
-(`--schema`, `--migrations`) and the tree is not hard-coded. A project
+(`--desired`, `--migrations`) and the tree is not hard-coded. A project
 configuration file (target, paths, safety policy) is a *designed-for*, not a
 shipped, surface: introducing it is demand-driven and tied to the multi-environment
 work ([ADR-0006](adr/0006-security-principals-out-of-declarative-model.md)).

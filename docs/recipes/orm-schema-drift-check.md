@@ -10,25 +10,25 @@ The check itself is one command. Nothing new to learn — it is `schemorph diff`
 pointed at whatever directory your ORM's model corresponds to:
 
 ```bash
-schemorph diff --schema ./schema --format json
+schemorph diff --desired ./schema --format json
 # exit 0, hasChanges:false  → the deployed schema matches ./schema
 # exit 2, hasChanges:true   → it does not — read the plan for what moved
 ```
 
-Which `--schema` directory to point it at depends on how your model gets to SQL.
+Which `--desired` directory to point it at depends on how your model gets to SQL.
 
 ## If your generator already emits desired-state SQL
 
 The simplest case, and the one this recipe is really about: something in your
 pipeline — a code generator, a migration-authoring step, a hand-maintained
-directory — already produces a Schemorph-shaped `--schema` tree alongside (or
+directory — already produces a Schemorph-shaped `--desired` tree alongside (or
 instead of) the ORM's own model. Run the command above against it, in CI, on a
 schedule or on every deploy. Empty diff is the whole contract. This is the setup
 [the plan-on-PR](github-actions-plan-comment.md) and
 [approval-gate](human-approval-gate.md) recipes already assume — drift-checking is
 the read-only half of the same loop, `diff` without ever reaching `apply`.
 
-## If you only have the ORM's model, not a `--schema` tree
+## If you only have the ORM's model, not a `--desired` tree
 
 When nothing in your pipeline renders the ORM's model as desired-state SQL, inspect
 the *live* database instead and compare that against what your ORM asserts:
@@ -61,14 +61,14 @@ tell you *why*, or whether the difference is destructive. `schemorph diff` compu
 an actual plan — with `risk`, `explanation`, and the exact `sql` — because it
 compares parsed models under [the plan format](../plan-format.md), not text. Reach
 for the `inspect`-and-compare path in the previous section only when a proper
-`--schema` tree genuinely is not available; prefer `diff` whenever it is.
+`--desired` tree genuinely is not available; prefer `diff` whenever it is.
 
 ## Pairing it with CI
 
 | Stage | Command | Purpose |
 |---|---|---|
-| Every PR touching the ORM model | regenerate `--schema` (if generated) or refresh the reference `inspect` copy | keep the comparison target current |
-| Scheduled / pre-deploy | `schemorph diff --schema ./schema --format json` (or the `inspect`-and-compare path) | catch drift before a request does |
+| Every PR touching the ORM model | regenerate `--desired` (if generated) or refresh the reference `inspect` copy | keep the comparison target current |
+| Scheduled / pre-deploy | `schemorph diff --desired ./schema --format json` (or the `inspect`-and-compare path) | catch drift before a request does |
 | On a `desiredStateFormatVersion` bump | re-baseline the reference copy, note it in the change that bumps the Schemorph dependency | avoids a false "drift" report from a Schemorph upgrade alone |
 
 If `diff` reports real drift, the fix is a normal `apply` (see

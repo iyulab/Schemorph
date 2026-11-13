@@ -14,7 +14,7 @@ directly against a schema directory your ORM's model produces), and a difference
 means the schema drifted. That comparison is only trustworthy if the *rendering
 rules* — not just the schema — are pinned, which is what this document versions.
 
-**Scope**: this governs `inspect`/`schemorph://schema` **output** only. A `--schema`
+**Scope**: this governs `inspect`/`schemorph://schema` **output** only. A `--desired`
 directory you hand-author or generate yourself (`diff`/`apply`'s input) is not bound
 by it — [architecture.md](architecture.md#repository-layout-users-project) already
 says that layout is convention, not enforcement, and stays that way.
@@ -99,7 +99,7 @@ without needing to normalize through a parser first.
 ## Relationship to `schemorph diff`
 
 `inspect --out` and `schemorph://schema` are conveniences for reading the live
-schema as text — `schemorph diff --schema <dir>` is the actual consistency check
+schema as text — `schemorph diff --desired <dir>` is the actual consistency check
 itself, and does not require literally re-writing an ORM's model as `.sql` files
 first: it compares the desired-state directory you already maintain against the
 live database's current definitions and reports a plan, empty when nothing has

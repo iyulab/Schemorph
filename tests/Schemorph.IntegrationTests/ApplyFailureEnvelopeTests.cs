@@ -66,7 +66,7 @@ public sealed class ApplyFailureEnvelopeTests : IDisposable
     {
         SeedFailingMigration();
 
-        var result = Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\" " +
+        var result = Run($"apply --url \"{_db.Url}\" --desired \"{SchemaDir}\" " +
                          $"--migrations \"{MigrationsDir}\" --format json");
 
         Assert.Equal(1, result.ExitCode);
@@ -93,7 +93,7 @@ public sealed class ApplyFailureEnvelopeTests : IDisposable
     {
         SeedFailingMigration();
 
-        Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\" " +
+        Run($"apply --url \"{_db.Url}\" --desired \"{SchemaDir}\" " +
             $"--migrations \"{MigrationsDir}\" --format json");
 
         // The envelope's claim is checked against the database itself — an
@@ -122,7 +122,7 @@ public sealed class ApplyFailureEnvelopeTests : IDisposable
     {
         SeedFailingMigration();
 
-        var result = Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\" " +
+        var result = Run($"apply --url \"{_db.Url}\" --desired \"{SchemaDir}\" " +
                          $"--migrations \"{MigrationsDir}\" --format json");
 
         var error = JsonDocument.Parse(result.StdErr).RootElement.GetProperty("error");
@@ -144,7 +144,7 @@ public sealed class ApplyFailureEnvelopeTests : IDisposable
         File.WriteAllText(Path.Combine(MigrationsDir, "V1__broken.sql"),
             "THROW 50001, 'refused by the migration itself', 1;");
 
-        var result = Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\" " +
+        var result = Run($"apply --url \"{_db.Url}\" --desired \"{SchemaDir}\" " +
                          $"--migrations \"{MigrationsDir}\" --format json");
 
         var error = JsonDocument.Parse(result.StdErr).RootElement.GetProperty("error");
@@ -162,13 +162,13 @@ public sealed class ApplyFailureEnvelopeTests : IDisposable
         Directory.CreateDirectory(Path.Combine(SchemaDir, "tables"));
         var table = Path.Combine(SchemaDir, "tables", "dbo.Orders.sql");
         File.WriteAllText(table, "CREATE TABLE dbo.Orders (Id INT NOT NULL PRIMARY KEY, Code INT NOT NULL);");
-        Assert.Equal(0, Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\" --format json").ExitCode);
+        Assert.Equal(0, Run($"apply --url \"{_db.Url}\" --desired \"{SchemaDir}\" --format json").ExitCode);
         _db.Execute("INSERT INTO dbo.Orders (Id, Code) VALUES (1, 7), (2, 7);");
 
         // A unique constraint the existing rows violate: the server refuses it mid-publish.
         File.WriteAllText(table,
             "CREATE TABLE dbo.Orders (Id INT NOT NULL PRIMARY KEY, Code INT NOT NULL CONSTRAINT UQ_Orders_Code UNIQUE);");
-        var result = Run($"apply --url \"{_db.Url}\" --schema \"{SchemaDir}\" --format json");
+        var result = Run($"apply --url \"{_db.Url}\" --desired \"{SchemaDir}\" --format json");
 
         Assert.Equal(1, result.ExitCode);
         var error = JsonDocument.Parse(result.StdErr).RootElement.GetProperty("error");

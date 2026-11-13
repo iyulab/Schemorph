@@ -38,7 +38,7 @@ public sealed class AgentSurfaceTests : IDisposable
             EnvironmentVariables = new Dictionary<string, string?>
             {
                 ["SCHEMORPH_URL"] = _db.Url,
-                ["SCHEMORPH_SCHEMA_DIR"] = schemaDirEnv,
+                ["SCHEMORPH_DESIRED_DIR"] = schemaDirEnv,
             },
         });
         return await McpClient.CreateAsync(transport);
@@ -214,7 +214,7 @@ public sealed class AgentSurfaceTests : IDisposable
         var error = await Assert.ThrowsAsync<ModelContextProtocol.McpProtocolException>(
             async () => await client.ReadResourceAsync("schemorph://plan"));
 
-        Assert.Contains("SCHEMORPH_SCHEMA_DIR", error.Message);
+        Assert.Contains("SCHEMORPH_DESIRED_DIR", error.Message);
     }
 
     [SkippableFact]

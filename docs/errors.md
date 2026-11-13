@@ -145,7 +145,7 @@ only points at the variable.
 | Code | Kind | Emitted when |
 |---|---|---|
 | `invalid_arguments` | `usage` | Required options missing — over MCP, a tool call that leaves out a required argument (the message names each one) |
-| `schema_dir_not_found` | `usage` | `--schema` directory does not exist |
+| `schema_dir_not_found` | `usage` | `--desired` directory does not exist |
 | `migrations_dir_not_found` | `usage` | `--migrations` directory does not exist |
 | `pre_dir_not_found` | `usage` | `--pre` directory does not exist |
 | `temp_workspace_unavailable` | `usage` | Schemorph could not create the directory it keeps its own intermediate files in (`<TMP>/schemorph`). Point `TMP`/`TEMP` at a writable directory — these files are the tool's, not yours, and it never names them in an error |

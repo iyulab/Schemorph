@@ -58,6 +58,17 @@ change **additively**: consumers must ignore properties they do not know.
   declared constraint is otherwise identical, the plan is now `ALTER TABLE … VALIDATE CONSTRAINT`, which checks the
   existing rows under a weaker lock and keeps the constraint where it stands.
 
+### Changed
+
+- **Breaking: the directory option is `--desired`, not `--schema`** (`diff`, `apply`, `status`), and the MCP server reads the directory
+  from `SCHEMORPH_DESIRED_DIR`, not `SCHEMORPH_SCHEMA_DIR`. The directory holds the desired-state `.sql` files; on PostgreSQL the
+  word "schema" also names the namespace the run targets (chosen by the connection string's `Search Path`), and the old name was read
+  as that namespace more than once. There is no alias: the old option is refused as an unknown option with a hint that names the new
+  one, and the MCP resource `schemorph://plan` answers a set `SCHEMORPH_SCHEMA_DIR` with the same pointer instead of ignoring it.
+  **To migrate:** replace `--schema` with `--desired` in scripts and CI, and rename the environment variable on the MCP server entry.
+  The CLI manifest (`schemorph schema`) lists the new flag; error codes are unchanged (`schema_dir_not_found` keeps its name, as
+  error codes are part of the machine contract).
+
 ## 0.22.0 — 2026-11-09
 
 ### Changed

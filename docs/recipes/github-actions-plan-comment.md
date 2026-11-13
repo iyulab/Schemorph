@@ -50,7 +50,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
       - name: Apply the base branch schema
-        run: schemorph apply --schema ./schema
+        run: schemorph apply --desired ./schema
 
       # The PR's desired state, diffed against that baseline.
       - uses: actions/checkout@v4
@@ -58,9 +58,9 @@ jobs:
         id: plan
         run: |
           set +e
-          schemorph diff --schema ./schema --format text > plan.txt
+          schemorph diff --desired ./schema --format text > plan.txt
           code=$?
-          schemorph diff --schema ./schema --format json > plan.json
+          schemorph diff --desired ./schema --format json > plan.json
           set -e
           # diff exits 0 = no changes, 2 = changes pending, 1 = error
           if [ "$code" -eq 1 ]; then cat plan.txt; exit 1; fi

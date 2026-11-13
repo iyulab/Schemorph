@@ -173,8 +173,8 @@ SQL files back and applying them — the desired state *is* the rollback target
 
 ```bash
 git revert <commit>            # or: git checkout <good-ref> -- schema/
-schemorph diff  --url "$SCHEMORPH_URL" --schema ./schema   # read the plan first
-schemorph apply --url "$SCHEMORPH_URL" --schema ./schema --expect-plan <planHash>
+schemorph diff  --url "$SCHEMORPH_URL" --desired ./schema   # read the plan first
+schemorph apply --url "$SCHEMORPH_URL" --desired ./schema --expect-plan <planHash>
 ```
 
 Two things this does not do. It **cannot bring back data**: a reverse structural diff

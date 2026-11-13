@@ -96,7 +96,7 @@ public static class ReviewScriptRenderer
         sb.AppendLine(" * with the tool, gated on the fingerprint above — the apply refuses to");
         sb.AppendLine(" * deviate from the plan this document renders:");
         sb.AppendLine(" *");
-        sb.AppendLine($" *   schemorph apply --schema <dir> --expect-plan {hash}");
+        sb.AppendLine($" *   schemorph apply --desired <dir> --expect-plan {hash}");
         sb.AppendLine(" *");
         sb.AppendLine(" * Migrations and pre-stage scripts are not part of this document's text: they are run-once scripts");
         sb.AppendLine(" * reviewed as files in the repository, not regenerated per plan.");

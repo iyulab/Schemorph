@@ -60,7 +60,7 @@ public sealed class OnlineSurfaceTests : IDisposable
     [InlineData("apply")]
     public void The_cli_turns_the_option_down_on_a_provider_that_cannot_plan_the_stage(string verb)
     {
-        var result = Run($"{verb} --schema \"{_dir}\" --online", NeverOpened);
+        var result = Run($"{verb} --desired \"{_dir}\" --online", NeverOpened);
 
         Assert.Equal(1, result.ExitCode);
         var error = ErrorOf(result);
@@ -161,11 +161,11 @@ public sealed class OnlineSurfaceTests : IDisposable
 
         // The table and two rows that share a name, applied the ordinary way.
         WriteNotes(withUniqueName: false);
-        Assert.Equal(0, Run($"apply --schema \"{_dir}\" --migrations \"{migrations}\"", Url(), "postgres").ExitCode);
+        Assert.Equal(0, Run($"apply --desired \"{_dir}\" --migrations \"{migrations}\"", Url(), "postgres").ExitCode);
 
         // Review: the unique index is an online statement, and the plan says so.
         WriteNotes(withUniqueName: true);
-        var diff = Run($"diff --schema \"{_dir}\" --migrations \"{migrations}\" --online --format json", Url(), "postgres");
+        var diff = Run($"diff --desired \"{_dir}\" --migrations \"{migrations}\" --online --format json", Url(), "postgres");
         Assert.Equal(2, diff.ExitCode);
         var plan = JsonDocument.Parse(diff.StdOut).RootElement;
         Assert.Equal("1.12", plan.GetProperty("formatVersion").GetString());
@@ -175,15 +175,15 @@ public sealed class OnlineSurfaceTests : IDisposable
 
         // The review without the option is a different plan: its hash does not open an --online apply.
         var plainHash = JsonDocument.Parse(
-            Run($"diff --schema \"{_dir}\" --migrations \"{migrations}\" --format json", Url(), "postgres").StdOut)
+            Run($"diff --desired \"{_dir}\" --migrations \"{migrations}\" --format json", Url(), "postgres").StdOut)
             .RootElement.GetProperty("planHash").GetString();
         Assert.NotEqual(hash, plainHash);
-        var refused = Run($"apply --schema \"{_dir}\" --migrations \"{migrations}\" --online --expect-plan {plainHash}", Url(), "postgres");
+        var refused = Run($"apply --desired \"{_dir}\" --migrations \"{migrations}\" --online --expect-plan {plainHash}", Url(), "postgres");
         Assert.Contains("plan_mismatch", refused.StdOut + refused.StdErr);
 
         // The stage fails the way a real one does: the rows share a name. The error names the stage, says the
         // transactional stages are committed, and points at re-running the same apply.
-        var failed = Run($"apply --schema \"{_dir}\" --migrations \"{migrations}\" --online --expect-plan {hash} --format json",
+        var failed = Run($"apply --desired \"{_dir}\" --migrations \"{migrations}\" --online --expect-plan {hash} --format json",
             Url(), "postgres");
         Assert.Equal(1, failed.ExitCode);
         var error = ErrorOf(failed);
@@ -198,9 +198,9 @@ public sealed class OnlineSurfaceTests : IDisposable
         // Fix the data with a migration and run the same command line again: it converges.
         File.WriteAllText(Path.Combine(migrations, "V2__dedupe.sql"), $"""DELETE FROM "{_schema}"."Notes" WHERE "Id" = 2;""");
         var reviewed = JsonDocument.Parse(
-            Run($"diff --schema \"{_dir}\" --migrations \"{migrations}\" --online --format json", Url(), "postgres").StdOut)
+            Run($"diff --desired \"{_dir}\" --migrations \"{migrations}\" --online --format json", Url(), "postgres").StdOut)
             .RootElement.GetProperty("planHash").GetString();
-        var applied = Run($"apply --schema \"{_dir}\" --migrations \"{migrations}\" --online --expect-plan {reviewed} --format json",
+        var applied = Run($"apply --desired \"{_dir}\" --migrations \"{migrations}\" --online --expect-plan {reviewed} --format json",
             Url(), "postgres");
         Assert.Equal(0, applied.ExitCode);
         var online = JsonDocument.Parse(applied.StdOut).RootElement.GetProperty("online");
@@ -208,7 +208,7 @@ public sealed class OnlineSurfaceTests : IDisposable
         Assert.Equal(online.GetProperty("total").GetInt32(), online.GetProperty("completed").GetInt32());
 
         // And nothing is left to plan.
-        Assert.Equal(0, Run($"diff --schema \"{_dir}\" --migrations \"{migrations}\" --online", Url(), "postgres").ExitCode);
+        Assert.Equal(0, Run($"diff --desired \"{_dir}\" --migrations \"{migrations}\" --online", Url(), "postgres").ExitCode);
     }
 
     [SkippableFact]
@@ -217,10 +217,10 @@ public sealed class OnlineSurfaceTests : IDisposable
         Skip.If(ServerUrl is null, "SCHEMORPH_PG_TEST_URL is not set; Postgres CLI tests need a live server.");
 
         WriteNotes(withUniqueName: false);
-        Assert.Equal(0, Run($"apply --schema \"{_dir}\"", Url(), "postgres").ExitCode);
+        Assert.Equal(0, Run($"apply --desired \"{_dir}\"", Url(), "postgres").ExitCode);
         WriteNotes(withUniqueName: true);
 
-        var script = Run($"diff --schema \"{_dir}\" --online --format sql", Url(), "postgres");
+        var script = Run($"diff --desired \"{_dir}\" --online --format sql", Url(), "postgres");
 
         Assert.Equal(2, script.ExitCode);
         Assert.Contains("Stage 2 of 2: online (1 statement(s))", script.StdOut);

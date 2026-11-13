@@ -44,7 +44,7 @@ migrations/        # versioned, run-once data events
    To drop an object, delete its file. Programmable objects (views, procedures,
    functions, triggers) are re-defined idempotently from their file — same edit
    model.
-2. **Plan**: `schemorph diff --schema ./schema` (JSON on redirected stdout).
+2. **Plan**: `schemorph diff --desired ./schema` (JSON on redirected stdout).
    Exit `0` = nothing to do, `2` = changes pending, `1` = error.
 3. **Review the plan JSON** (contract: `docs/plan-format.md`):
    - `changes[]` — each with `actions`, `risk` (`safe`/`warning`/`destructive`),
@@ -54,11 +54,11 @@ migrations/        # versioned, run-once data events
      Take them seriously; they never block by themselves.
    - `planHash` — the fingerprint of exactly what would execute.
 4. **Apply the reviewed plan and nothing else**:
-   `schemorph apply --schema ./schema --expect-plan <planHash>`.
+   `schemorph apply --desired ./schema --expect-plan <planHash>`.
    If anything drifted since review, apply refuses with error code
    `plan_mismatch` and nothing has executed — re-run diff, re-review, retry
    with the new hash. Do not retry a mismatch with the old hash.
-5. **Converge**: `schemorph status --schema ./schema` — exit `0` and
+5. **Converge**: `schemorph status --desired ./schema` — exit `0` and
    `hasPendingWork: false` confirm the database matches the files.
 
 If step 5 does not converge — the *same* change reappears after a successful
@@ -104,7 +104,7 @@ Tools mirror the CLI: `schemorph_diff`, `schemorph_status`,
 `expectedPlanHash` — same gate as `--expect-plan`). Resources give context
 without tool calls: `schemorph://schema` (live schema as desired-state SQL),
 `schemorph://schema/{kind}/{name}` (one object), `schemorph://plan` (current
-plan incl. `planHash`; needs `SCHEMORPH_SCHEMA_DIR` in the server env).
+plan incl. `planHash`; needs `SCHEMORPH_DESIRED_DIR` in the server env).
 
 A failed tool call returns the same `{error: {kind, code, message, hint}}` envelope as its text with `isError: true` —
 branch on `isError` first, then on `kind`. A call that leaves out a required argument gets `invalid_arguments` naming it.
