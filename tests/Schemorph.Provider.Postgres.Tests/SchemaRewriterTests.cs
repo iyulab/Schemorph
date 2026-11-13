@@ -108,6 +108,74 @@ public class SchemaRewriterTests
     }
 
     [Fact]
+    public void Tables_that_reference_each_other_get_the_key_that_closes_the_cycle_added_after_the_tables()
+    {
+        // A department points at its head, an employee at the department: no order of the two CREATE TABLEs satisfies
+        // both inline keys. One key (the one that closes the cycle) is re-added by ALTER TABLE after both tables exist.
+        var dept = """CREATE TABLE "Src"."Dept" ("Id" uuid PRIMARY KEY, "HeadId" uuid REFERENCES "Src"."Emp" ("Id"));""";
+        var emp = """CREATE TABLE "Src"."Emp" ("Id" uuid PRIMARY KEY, "DeptId" uuid REFERENCES "Src"."Dept" ("Id"));""";
+
+        var sql = SchemaRewriter.RetargetSet([dept, emp], "Src", "shadow_x");
+
+        int Position(string marker) => sql.IndexOf(marker, StringComparison.Ordinal);
+        Assert.Equal(1, CountOf(sql, "ALTER TABLE"));
+        Assert.True(Position("CREATE TABLE shadow_x.\"Emp\"") < Position("CREATE TABLE shadow_x.\"Dept\""));
+        Assert.True(Position("CREATE TABLE shadow_x.\"Dept\"") < Position("ALTER TABLE"));
+        // The key that did not close the cycle stays where the user wrote it; the one that did is now an ALTER.
+        var emptyCreate = sql[Position("CREATE TABLE shadow_x.\"Emp\"")..Position("CREATE TABLE shadow_x.\"Dept\"")];
+        Assert.DoesNotContain("REFERENCES", emptyCreate);
+        Assert.Contains("FOREIGN KEY (\"DeptId\")", sql[Position("ALTER TABLE")..]);
+    }
+
+    [Fact]
+    public void A_named_table_level_key_that_closes_a_cycle_keeps_its_name()
+    {
+        var a = """CREATE TABLE "Src"."A" ("Id" uuid PRIMARY KEY, "BId" uuid, CONSTRAINT "FK_A_B" FOREIGN KEY ("BId") REFERENCES "Src"."B" ("Id"));""";
+        var b = """CREATE TABLE "Src"."B" ("Id" uuid PRIMARY KEY, "AId" uuid, CONSTRAINT "FK_B_A" FOREIGN KEY ("AId") REFERENCES "Src"."A" ("Id"));""";
+
+        var sql = SchemaRewriter.RetargetSet([a, b], "Src", "shadow_x");
+
+        Assert.Equal(1, CountOf(sql, "ALTER TABLE"));
+        Assert.Contains("\"FK_A_B\"", sql);
+        Assert.Contains("\"FK_B_A\"", sql);
+        Assert.True(sql.IndexOf("ALTER TABLE", StringComparison.Ordinal) > sql.LastIndexOf("CREATE TABLE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_longer_cycle_is_broken_at_one_key_and_a_self_reference_stays_inline()
+    {
+        var a = """CREATE TABLE "Src"."A" ("Id" uuid PRIMARY KEY, "BId" uuid REFERENCES "Src"."B" ("Id"));""";
+        var b = """CREATE TABLE "Src"."B" ("Id" uuid PRIMARY KEY, "CId" uuid REFERENCES "Src"."C" ("Id"));""";
+        var c = """CREATE TABLE "Src"."C" ("Id" uuid PRIMARY KEY, "AId" uuid REFERENCES "Src"."A" ("Id"), "ParentId" uuid REFERENCES "Src"."C" ("Id"));""";
+
+        var sql = SchemaRewriter.RetargetSet([a, b, c], "Src", "shadow_x");
+
+        var alterAt = sql.IndexOf("ALTER TABLE", StringComparison.Ordinal);
+        Assert.Equal(1, CountOf(sql, "ALTER TABLE"));
+        // Before the ALTER: the cycle's two keys that stay inline and the self-reference; after it: the one key it re-adds.
+        Assert.Equal(3, CountOf(sql[..alterAt], "REFERENCES"));
+        Assert.Equal(1, CountOf(sql[alterAt..], "REFERENCES"));
+    }
+
+    [Fact]
+    public void A_set_without_a_cycle_gets_no_alter()
+    {
+        var members = """CREATE TABLE "Src"."Members" ("Id" uuid PRIMARY KEY, "W" uuid REFERENCES "Src"."Workspaces" ("Id"));""";
+        var workspaces = """CREATE TABLE "Src"."Workspaces" ("Id" uuid PRIMARY KEY);""";
+
+        var sql = SchemaRewriter.RetargetSet([members, workspaces], "Src", "shadow_x");
+
+        Assert.Equal(0, CountOf(sql, "ALTER TABLE"));
+    }
+
+    private static int CountOf(string text, string needle)
+    {
+        var count = 0;
+        for (var i = text.IndexOf(needle, StringComparison.Ordinal); i >= 0; i = text.IndexOf(needle, i + needle.Length, StringComparison.Ordinal)) count++;
+        return count;
+    }
+
+    [Fact]
     public void A_create_table_qualified_to_a_different_schema_than_the_connection_is_refused()
     {
         // The connection resolves the target schema as "public" (the default

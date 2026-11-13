@@ -62,9 +62,10 @@ internal static class SchemaRewriter
     /// alphabetically and the FK arrived before the table it references.
     /// The classes mirror pg_dump's pre-data/post-data split; ordering
     /// *within* a class is preserved. A cross-table FK declared inline in a
-    /// later CREATE TABLE is out of this slice's reach (statement-level
-    /// reordering cannot split a statement) and surfaces as the engine's own
-    /// error rather than being silently reshuffled.
+    /// later CREATE TABLE is ordered by those references; tables that reference
+    /// each other in a cycle cannot be ordered, so the foreign keys that close
+    /// the cycle are taken out of their CREATE TABLE and added after all the
+    /// tables exist (see <see cref="OrderCreatesByInlineForeignKeys"/>).
     /// </summary>
     public static string RetargetSet(
         IReadOnlyList<string> sqlTexts, string sourceSchema, string shadowSchema)
@@ -189,9 +190,18 @@ internal static class SchemaRewriter
     /// a CREATE TABLE with its FOREIGN KEY declared INLINE references a table
     /// that must already exist. The creates are therefore topologically sorted
     /// by those inline references (self-references are fine; a reference to a
-    /// table this set does not create is left to the engine). Mutual foreign
-    /// keys cannot be solved by ordering whole statements — that shape needs
-    /// ALTER-separated constraints, and the error says so.
+    /// table this set does not create is left to the engine).
+    ///
+    /// Tables that reference each other (A -> B -> A) have no order in which
+    /// both inline keys can be created. The keys that close such a cycle — the
+    /// back edges of the depth-first walk — are taken out of their CREATE TABLE
+    /// and re-added as <c>ALTER TABLE ... ADD FOREIGN KEY</c>, which the class
+    /// ordering then places after every table. The desired state the user wrote
+    /// is not changed and the constraint ends up identical: an unnamed key gets
+    /// the same generated name either way, and a named one keeps its name. This
+    /// is only the shadow's construction order — both comparison sides are read
+    /// back from the catalog, so the shadow ends up with the same keys the
+    /// user's text declares.
     /// </summary>
     private static List<RawStmt> OrderCreatesByInlineForeignKeys(List<RawStmt> statements)
     {
@@ -202,23 +212,22 @@ internal static class SchemaRewriter
         var sorted = new List<RawStmt>();
         var visiting = new HashSet<string>(StringComparer.Ordinal);
         var done = new HashSet<string>(StringComparer.Ordinal);
+        var cycleClosing = new List<(RawStmt Create, string Target)>();
 
         void Visit(RawStmt statement)
         {
             var name = statement.Stmt.CreateStmt.Relation.Relname;
             if (done.Contains(name)) return;
-            if (!visiting.Add(name))
-            {
-                throw new SchemaRewriteException(
-                    $"Tables reference each other in a cycle around {name}; mutual foreign keys " +
-                    "must be declared as separate ALTER TABLE ... ADD CONSTRAINT statements.", 0);
-            }
+            visiting.Add(name);
             foreach (var referenced in InlineForeignKeyTargets(statement))
             {
-                if (referenced != name && byName.TryGetValue(referenced, out var dependency))
+                if (referenced == name || !byName.TryGetValue(referenced, out var dependency)) continue;
+                if (visiting.Contains(referenced))
                 {
-                    Visit(dependency);
+                    cycleClosing.Add((statement, referenced));   // a back edge: the table it points at is still being placed
+                    continue;
                 }
+                Visit(dependency);
             }
             visiting.Remove(name);
             done.Add(name);
@@ -230,7 +239,59 @@ internal static class SchemaRewriter
         // Splice the sorted creates back over the original create positions;
         // everything else keeps its place.
         var queue = new Queue<RawStmt>(sorted);
-        return statements.Select(s => s.Stmt?.CreateStmt is null ? s : queue.Dequeue()).ToList();
+        var result = statements.Select(s => s.Stmt?.CreateStmt is null ? s : queue.Dequeue()).ToList();
+        if (cycleClosing.Count == 0) return result;
+
+        foreach (var (create, target) in cycleClosing)
+            result.AddRange(ExtractForeignKeys(create.Stmt.CreateStmt, target));
+        return result.OrderBy(OrderClass).ToList();   // OrderBy is stable: the new keys follow the existing ones in their class
+    }
+
+    /// <summary>
+    /// Remove every inline foreign key of <paramref name="create"/> that points at <paramref name="target"/> and return the
+    /// <c>ALTER TABLE ... ADD FOREIGN KEY</c> statements that re-add them. A column-level <c>REFERENCES</c> carries no column list
+    /// of its own, so the owning column becomes the key's column; the key's name is kept as written (none means the engine
+    /// generates it, as it does for the inline form).
+    /// </summary>
+    private static List<RawStmt> ExtractForeignKeys(CreateStmt create, string target)
+    {
+        var extracted = new List<RawStmt>();
+
+        // Table-level: FOREIGN KEY (...) REFERENCES target (...)
+        foreach (var element in create.TableElts.ToList())
+        {
+            if (element.Constraint is { Contype: ConstrType.ConstrForeign } constraint && constraint.Pktable?.Relname == target)
+            {
+                create.TableElts.Remove(element);
+                extracted.Add(AddForeignKeyStatement(create, constraint.Clone()));
+            }
+        }
+
+        // Column-level: "col" type REFERENCES target (...)
+        foreach (var element in create.TableElts)
+        {
+            if (element.ColumnDef is not { } column) continue;
+            foreach (var node in column.Constraints.ToList())
+            {
+                if (node.Constraint is not { Contype: ConstrType.ConstrForeign } constraint || constraint.Pktable?.Relname != target) continue;
+                column.Constraints.Remove(node);
+                var key = constraint.Clone();
+                if (key.FkAttrs.Count == 0)
+                    key.FkAttrs.Add(new Node { String = new PgSqlParser.String { Sval = column.Colname } });
+                extracted.Add(AddForeignKeyStatement(create, key));
+            }
+        }
+        return extracted;
+    }
+
+    private static RawStmt AddForeignKeyStatement(CreateStmt create, Constraint key)
+    {
+        // A statement the parser itself produced, so every field the deparser expects is already in its shape.
+        var template = Parser.Parse("ALTER TABLE t ADD FOREIGN KEY (a) REFERENCES r (b);").Value!.Stmts[0];
+        var alter = template.Stmt.AlterTableStmt;
+        alter.Relation = create.Relation.Clone();
+        alter.Cmds[0].AlterTableCmd.Def = new Node { Constraint = key };
+        return template;
     }
 
     private static IEnumerable<string> InlineForeignKeyTargets(RawStmt statement)
