@@ -31,7 +31,7 @@ public sealed class CircularForeignKeyTests : IDisposable
         File.WriteAllText(path, body);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Tables_that_reference_each_other_apply_and_the_next_run_has_nothing_to_do()
     {
         Write("Dept", """
