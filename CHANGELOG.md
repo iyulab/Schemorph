@@ -5,6 +5,31 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Fixed
+
+- **PostgreSQL: tables that reference each other no longer stop `diff` and `apply`.** A department that points at its head and an
+  employee that points at the department could not be compared: the scratch schema the desired state is built in needs one of
+  the two tables first, and the run ended in `compare_failed` with advice to write the keys as separate `ALTER TABLE`
+  statements - advice a model generator's output does not follow. The keys that close a cycle are now added after both tables
+  exist, in the scratch schema only; the desired state is applied as you wrote it, an unnamed key gets the engine's own name
+  and a named key keeps its name, and the next run finds nothing to change. Keys already written as separate `ALTER TABLE`
+  statements in the desired state worked before and still do. SQL Server compares through the engine's own deployment model and
+  already handled the shape; a test now keeps it that way.
+
+
+### Changed
+
+- **Breaking: the directory option is `--desired`, not `--schema`** (`diff`, `apply`, `status`), and the MCP server reads the directory
+  from `SCHEMORPH_DESIRED_DIR`, not `SCHEMORPH_SCHEMA_DIR`. The directory holds the desired-state `.sql` files; on PostgreSQL the
+  word "schema" also names the namespace the run targets (chosen by the connection string's `Search Path`), and the old name was read
+  as that namespace more than once. There is no alias: the old option is refused as an unknown option with a hint that names the new
+  one, and the MCP resource `schemorph://plan` answers a set `SCHEMORPH_SCHEMA_DIR` with the same pointer instead of ignoring it.
+  **To migrate:** replace `--schema` with `--desired` in scripts and CI, and rename the environment variable on the MCP server entry.
+  The CLI manifest (`schemorph schema`) lists the new flag; error codes are unchanged (`schema_dir_not_found` keeps its name, as
+  error codes are part of the machine contract).
+
 ## 0.23.0 — 2026-11-15
 
 ### Added
@@ -37,15 +62,6 @@ change **additively**: consumers must ignore properties they do not know.
 
 ### Fixed
 
-- **PostgreSQL: tables that reference each other no longer stop `diff` and `apply`.** A department that points at its head and an
-  employee that points at the department could not be compared: the scratch schema the desired state is built in needs one of
-  the two tables first, and the run ended in `compare_failed` with advice to write the keys as separate `ALTER TABLE`
-  statements - advice a model generator's output does not follow. The keys that close a cycle are now added after both tables
-  exist, in the scratch schema only; the desired state is applied as you wrote it, an unnamed key gets the engine's own name
-  and a named key keeps its name, and the next run finds nothing to change. Keys already written as separate `ALTER TABLE`
-  statements in the desired state worked before and still do. SQL Server compares through the engine's own deployment model and
-  already handled the shape; a test now keeps it that way.
-
 - **PostgreSQL: an index a failed `CREATE INDEX CONCURRENTLY` left invalid was reported as in sync.** Such a build
   leaves its index behind with the right definition but marked invalid in the catalog: the engine does not use it for
   queries and, for a unique index, does not enforce it. The comparison read only the definition, so a desired state
@@ -57,17 +73,6 @@ change **additively**: consumers must ignore properties they do not know.
   `NOT VALID`, so the comparison already saw a difference; the plan dropped the constraint and added it again. When the
   declared constraint is otherwise identical, the plan is now `ALTER TABLE … VALIDATE CONSTRAINT`, which checks the
   existing rows under a weaker lock and keeps the constraint where it stands.
-
-### Changed
-
-- **Breaking: the directory option is `--desired`, not `--schema`** (`diff`, `apply`, `status`), and the MCP server reads the directory
-  from `SCHEMORPH_DESIRED_DIR`, not `SCHEMORPH_SCHEMA_DIR`. The directory holds the desired-state `.sql` files; on PostgreSQL the
-  word "schema" also names the namespace the run targets (chosen by the connection string's `Search Path`), and the old name was read
-  as that namespace more than once. There is no alias: the old option is refused as an unknown option with a hint that names the new
-  one, and the MCP resource `schemorph://plan` answers a set `SCHEMORPH_SCHEMA_DIR` with the same pointer instead of ignoring it.
-  **To migrate:** replace `--schema` with `--desired` in scripts and CI, and rename the environment variable on the MCP server entry.
-  The CLI manifest (`schemorph schema`) lists the new flag; error codes are unchanged (`schema_dir_not_found` keeps its name, as
-  error codes are part of the machine contract).
 
 ## 0.22.0 — 2026-11-09
 
