@@ -7,6 +7,14 @@ change **additively**: consumers must ignore properties they do not know.
 
 ## Unreleased
 
+### Added
+
+- **A newer release is announced to a person at a terminal.** After `diff`, `inspect`, `apply` and `status`, one line on stderr says a
+  later release is out and how to update (`dotnet tool update -g schemorph`). The registry is asked at most once a day with a
+  two-second limit and the answer is cached; a failed lookup says nothing and is tried again next time. It is silent when stderr is
+  redirected (scripts, CI, agents reading the structured output), never writes to stdout and never changes the exit code, and a
+  pre-release is never offered. `SCHEMORPH_NO_UPDATE_CHECK` turns it off. A host that runs `schemorph` offline pays nothing for it.
+
 ### Fixed
 
 - **PostgreSQL: tables that reference each other no longer stop `diff` and `apply`.** A department that points at its head and an
