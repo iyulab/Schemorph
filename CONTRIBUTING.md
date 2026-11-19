@@ -8,6 +8,19 @@ Thanks for your interest. Schemorph is in early design; right now the highest-va
 - **ADR-driven decisions.** Anything that constrains future work — provider boundary changes, plan-format changes, ledger semantics, new user-facing concepts — gets an Architecture Decision Record in [`docs/adr/`](./docs/adr/) before or alongside the implementation PR. Small implementation choices do not; use judgment, and when unsure, ask in an issue first.
 - **Discuss before large PRs.** Open an issue describing the problem and intended approach. This protects your time more than ours.
 
+## Asking for help or requesting something
+
+Open an [issue](https://github.com/iyulab/Schemorph/issues) on this repository — questions, bug reports
+and feature requests all go there. Look through the open ones first.
+
+- **A bug or a question:** give the smallest set of SQL files that shows it, the command you ran, the
+  database engine and version, what you expected and what you got, and the Schemorph version.
+- **A request:** describe the problem you are trying to solve before the change you would like. It
+  is weighed against the design principles above, and a request that conflicts with an anchor is
+  discussed as a change to the anchor.
+
+Do not put credentials or connection strings in an issue.
+
 ## Writing an ADR
 
 Copy the structure of an existing ADR: Status, Date, Context (the forces at play), Decision (what and why), Consequences (positive *and* negative — an ADR without accepted risks is usually incomplete), Alternatives considered.
