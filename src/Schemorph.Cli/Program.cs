@@ -57,6 +57,14 @@ if (verb is not null && CliManifest.UnknownOption(verb, args) is { } unknown)
         (unknown.Known.Count == 0 ? $"{verb} takes no options." : $"{verb} takes: {string.Join(", ", unknown.Known)}."));
 }
 
+var exitCode = await Dispatch();
+// A person at a terminal is told about a newer release after the work verbs; help, version, schema and mcp stay clean.
+if (verb is "diff" or "inspect" or "apply" or "status")
+    UpdateNotifier.CheckAndNotify(InformationalVersion());
+return exitCode;
+
+async Task<int> Dispatch()
+{
 switch (verb)
 {
     case "diff":
@@ -170,6 +178,7 @@ switch (verb)
             Errors are a typed envelope on stderr (docs/errors.md).
             """);
         return requested ? ExitNoChanges : ExitError;
+}
 }
 
 // MCP server over stdio: read-only/plan-only tools, apply

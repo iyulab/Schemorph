@@ -128,6 +128,13 @@ schemorph diff --url "Host=...;Database=app;Search Path=tenant_b" --desired ./sc
 dotnet tool install -g Schemorph
 ```
 
+A person at a terminal is told when a newer release exists: after `diff`, `inspect`, `apply` and `status`, one line on stderr
+(`A new version of schemorph is available: 0.24.0 -> 0.25.0`, with `dotnet tool update -g schemorph`). The registry is asked
+at most once a day, with a two-second limit, and the answer is cached under the user's local application data; a failure says
+nothing. It is silent whenever stderr is redirected — scripts, CI, and agents reading the structured output, which find the
+version in `schemorph version` and the manifest — and it never touches stdout or the exit code. Set `SCHEMORPH_NO_UPDATE_CHECK`
+to any value to turn it off.
+
 Standalone self-contained binaries (win-x64, linux-x64, osx-arm64) are attached to each
 [GitHub release](https://github.com/iyulab/Schemorph/releases) — no .NET runtime required.
 
