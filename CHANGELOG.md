@@ -5,7 +5,7 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
-## 0.24.0 — 2026-11-22
+## Unreleased
 
 ### Added
 
@@ -14,6 +14,8 @@ change **additively**: consumers must ignore properties they do not know.
   two-second limit and the answer is cached; a failed lookup says nothing and is tried again next time. It is silent when stderr is
   redirected (scripts, CI, agents reading the structured output), never writes to stdout and never changes the exit code, and a
   pre-release is never offered. `SCHEMORPH_NO_UPDATE_CHECK` turns it off. A host that runs `schemorph` offline pays nothing for it.
+
+## 0.24.0 — 2026-11-22
 
 ### Fixed
 
