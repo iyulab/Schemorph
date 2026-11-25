@@ -55,6 +55,11 @@ internal sealed class ShadowSchema : IAsyncDisposable
     /// table re-plans as an alter. One extra round-trip reaches the engine's
     /// fixed point (measured on PG 16); text-typed CHECKs are unaffected
     /// (already stable — no relabeling to erase).
+    ///
+    /// A partial index's predicate is the same kind of expression with the same
+    /// instability — a varchar IN-list is stored as <c>= ANY ((ARRAY[…])::text[])</c>
+    /// first and with per-element casts once re-parsed — so every partial index is
+    /// re-created from its own catalog rendering in the same pass.
     /// </summary>
     public async Task ApplyAsync(
         IReadOnlyList<string> sqlTexts, string sourceSchema, CancellationToken cancellationToken = default)
@@ -73,6 +78,7 @@ internal sealed class ShadowSchema : IAsyncDisposable
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
         await NormalizeCheckConstraintsAsync(connection, transaction, cancellationToken);
+        await NormalizePartialIndexesAsync(connection, transaction, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -107,6 +113,38 @@ internal sealed class ShadowSchema : IAsyncDisposable
 
         await using var normalize = new NpgsqlCommand(
             string.Join("\n", readds), connection, transaction);
+        await normalize.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private async Task NormalizePartialIndexesAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken cancellationToken)
+    {
+        // Only indexes with a predicate: an index without one renders parse-stably, and an index that backs a
+        // constraint has none (a constraint takes no WHERE).
+        const string readPartialIndexes = """
+            SELECT ic.relname, pg_get_indexdef(i.indexrelid)
+            FROM pg_index i
+            JOIN pg_class ic ON ic.oid = i.indexrelid
+            JOIN pg_namespace n ON n.oid = ic.relnamespace
+            WHERE n.nspname = @schema AND i.indpred IS NOT NULL
+            ORDER BY ic.relname
+            """;
+
+        var recreates = new List<string>();
+        await using (var read = new NpgsqlCommand(readPartialIndexes, connection, transaction))
+        {
+            read.Parameters.AddWithValue("schema", Name);
+            await using var reader = await read.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var index = $"{DesiredStateRenderer.Quote(Name)}.{DesiredStateRenderer.Quote(reader.GetString(0))}";
+                recreates.Add($"DROP INDEX {index};\n{reader.GetString(1)};");
+            }
+        }
+        if (recreates.Count == 0) return;
+
+        await using var normalize = new NpgsqlCommand(
+            string.Join("\n", recreates), connection, transaction);
         await normalize.ExecuteNonQueryAsync(cancellationToken);
     }
 

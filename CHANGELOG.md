@@ -15,6 +15,14 @@ change **additively**: consumers must ignore properties they do not know.
   redirected (scripts, CI, agents reading the structured output), never writes to stdout and never changes the exit code, and a
   pre-release is never offered. `SCHEMORPH_NO_UPDATE_CHECK` turns it off. A host that runs `schemorph` offline pays nothing for it.
 
+### Fixed
+
+- **PostgreSQL: a partial index whose predicate is a varchar `IN` list no longer re-plans on every run.** PostgreSQL stores such a
+  predicate as `= ANY ((ARRAY[…])::text[])` when it first parses it, and with a cast on each element when that text is parsed again —
+  which is what the database holds after `apply`. The desired side was compared in the first form, so every `diff` planned a drop and
+  re-create of the index. Partial indexes now take the same normalising pass CHECK constraints already took, and `diff` after `apply`
+  is empty.
+
 ## 0.24.0 — 2026-11-22
 
 ### Fixed
