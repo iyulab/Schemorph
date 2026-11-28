@@ -341,7 +341,10 @@ public static class DesiredStateFormat
     // functions/triggers), one file per object, DesiredStateFile.SafeSegment name
     // sanitization, every identifier quoted, constraints/indexes folded into their
     // table's file, statements end with ";\n".
-    public const string CurrentVersion = "1.0";
+    // 1.1: PostgreSQL also writes views, functions, procedures and triggers, each as the
+    // engine's own reconstruction; a routine name with several overloads gets a file per
+    // overload, named {name}({identity arguments}).
+    public const string CurrentVersion = "1.1";
 }
 
 /// <param name="Session">

@@ -40,17 +40,17 @@ internal static class PostgresLiveProgrammables
         var views = await ReadNamesAsync(connection, ViewsSql, schema, cancellationToken);
         var routines = await ReadRoutinesAsync(connection, schema, cancellationToken);
         var triggers = await ReadNamesAsync(connection, TriggersSql, schema, cancellationToken);
-        var signatures = await DeclaredSignatures.ResolveAsync(lease, schema,
-            objects.Where(o => IsRoutine(o.ObjectType))
-                .ToDictionary(o => o.ObjectName, o => PostgresProgrammables.SignatureTypes(o.FileText), StringComparer.Ordinal),
-            cancellationToken);
+        var declaredRoutines = PostgresProgrammables.DeclaredRoutinesOf(objects)
+            .ToDictionary(r => r.ObjectName, StringComparer.Ordinal);
+        var signatures = await DeclaredSignatures.ResolveAsync(lease, schema, declaredRoutines.Values.ToList(), cancellationToken);
 
         return objects
             .Where(o => o.ObjectType switch
             {
                 "View" => views.Contains(o.ObjectName),
                 "ScalarFunction" or "TableValuedFunction" or "Procedure" =>
-                    routines.Any(r => r.Name == o.ObjectName && signatures.Declares(r.Name, r.ArgumentTypes)),
+                    routines.Any(r => r.Name == declaredRoutines[o.ObjectName].Name
+                                      && signatures.DeclaresAs(o.ObjectName, r.ArgumentTypes)),
                 "DmlTrigger" => triggers.Contains(o.ObjectName),
                 _ => false,   // a kind this provider does not manage cannot be vouched for
             })
@@ -224,8 +224,6 @@ internal static class PostgresLiveProgrammables
         return routines;
     }
 
-    private static bool IsRoutine(string objectType) => objectType is "ScalarFunction" or "TableValuedFunction" or "Procedure";
-
     /// <summary>
     /// The argument types each declared routine's file names, resolved by the engine the way
     /// re-definition will resolve them — <c>to_regtype</c> on the target schema's search path —
@@ -233,25 +231,39 @@ internal static class PostgresLiveProgrammables
     /// </summary>
     internal sealed class DeclaredSignatures
     {
-        private readonly IReadOnlyDictionary<string, uint[]?> _byName;
+        private readonly IReadOnlyList<(string ObjectName, string Name, uint[]? Types)> _declared;
 
-        private DeclaredSignatures(IReadOnlyDictionary<string, uint[]?> byName) => _byName = byName;
+        private DeclaredSignatures(IReadOnlyList<(string ObjectName, string Name, uint[]? Types)> declared) => _declared = declared;
 
         /// <summary>
-        /// Whether the files declare the live overload <paramref name="name"/>(<paramref name="argumentTypes"/>).
-        /// A name whose types could not be settled before apply (<c>%TYPE</c>, or a type that does not
-        /// exist yet) declares every overload of it — what cannot be told apart is not dropped.
+        /// Whether the files declare the live overload <paramref name="name"/>(<paramref name="argumentTypes"/>) -
+        /// whether any file declaring that name declares those types. A name one of whose files has types that
+        /// could not be settled before apply (<c>%TYPE</c>, or a type that does not exist yet) declares every
+        /// overload of it: what cannot be told apart is not dropped.
         /// </summary>
         public bool Declares(string name, IReadOnlyList<uint> argumentTypes)
-            => _byName.TryGetValue(name, out var declared)
-               && (declared is null || declared.SequenceEqual(argumentTypes));
+            => _declared.Any(d => d.Name == name && (d.Types is null || d.Types.SequenceEqual(argumentTypes)));
 
-        /// <param name="routines">Each declared routine's <see cref="PostgresProgrammables.SignatureTypes"/>.</param>
+        /// <summary>Whether the one declared routine <paramref name="objectName"/> is the live overload with <paramref name="argumentTypes"/>.</summary>
+        public bool DeclaresAs(string objectName, IReadOnlyList<uint> argumentTypes)
+            => _declared.Any(d => d.ObjectName == objectName && (d.Types is null || d.Types.SequenceEqual(argumentTypes)));
+
+        /// <summary>
+        /// Files that declare one overload twice, in spellings the parser keeps apart but the engine does not
+        /// (a type with and without its schema): each group is the object names of one overload.
+        /// </summary>
+        public IReadOnlyList<IReadOnlyList<string>> SameOverload()
+            => _declared.Where(d => d.Types is not null)
+                .GroupBy(d => (d.Name, Key: string.Join(",", d.Types!)))
+                .Where(g => g.Count() > 1)
+                .Select(g => (IReadOnlyList<string>)g.Select(d => d.ObjectName).OrderBy(n => n, StringComparer.Ordinal).ToList())
+                .ToList();
+
         public static async Task<DeclaredSignatures> ResolveAsync(
             PostgresReadConnection lease, string schema,
-            IReadOnlyDictionary<string, IReadOnlyList<string>?> routines, CancellationToken cancellationToken)
+            IReadOnlyList<PostgresProgrammables.DeclaredRoutine> routines, CancellationToken cancellationToken)
         {
-            var names = routines.Values.Where(t => t is not null).SelectMany(t => t!)
+            var names = routines.Where(r => r.Types is not null).SelectMany(r => r.Types!)
                 .Distinct(StringComparer.Ordinal).ToArray();
             var resolved = new Dictionary<string, uint?>(StringComparer.Ordinal);
             if (names.Length > 0)
@@ -277,12 +289,10 @@ internal static class PostgresLiveProgrammables
                 }, cancellationToken);
             }
 
-            return new DeclaredSignatures(routines.ToDictionary(
-                r => r.Key,
-                r => r.Value is { } types && types.All(t => resolved.GetValueOrDefault(t) is not null)
+            return new DeclaredSignatures(routines.Select(r => (r.ObjectName, r.Name,
+                r.Types is { } types && types.All(t => resolved.GetValueOrDefault(t) is not null)
                     ? types.Select(t => resolved[t]!.Value).ToArray()
-                    : null,
-                StringComparer.Ordinal));
+                    : null)).ToList());
         }
     }
 
@@ -302,7 +312,7 @@ internal static class PostgresLiveProgrammables
     /// </remarks>
     public static async Task<UndeclaredRead> ReadUndeclaredAsync(
         string connectionString, string schema, IReadOnlySet<string> declaredNames,
-        IReadOnlyDictionary<string, IReadOnlyList<string>?> declaredRoutines,
+        IReadOnlyList<PostgresProgrammables.DeclaredRoutine> declaredRoutines,
         CancellationToken cancellationToken, IApplySession? session = null)
     {
         await using var lease = await PostgresReadConnection.OpenAsync(connectionString, session, cancellationToken);
@@ -328,13 +338,14 @@ internal static class PostgresLiveProgrammables
 
         var routines = (await ReadRoutinesAsync(connection, schema, cancellationToken))
             .Where(r => !r.ExtensionMember).ToList();
-        foreach (var group in routines.Where(r => !declaredNames.Contains(r.Name)).GroupBy(r => r.Name))
+        var routineNames = declaredRoutines.Select(r => r.Name).ToHashSet(StringComparer.Ordinal);
+        foreach (var group in routines.Where(r => !routineNames.Contains(r.Name)).GroupBy(r => r.Name))
         {
             result.Add(new Undeclared(group.Key, group.First().Type,
                 group.Select(r => r.Drop).ToList(), group.Select(r => r.Signature).ToList()));
         }
         var signatures = await DeclaredSignatures.ResolveAsync(lease, schema, declaredRoutines, cancellationToken);
-        var leftBehind = routines.Where(r => declaredNames.Contains(r.Name)
+        var leftBehind = routines.Where(r => routineNames.Contains(r.Name)
                                              && !signatures.Declares(r.Name, r.ArgumentTypes)).ToList();
         var kept = new List<KeptOverload>();
         if (leftBehind.Count > 0)
@@ -354,11 +365,15 @@ internal static class PostgresLiveProgrammables
             }
         }
 
-        return new UndeclaredRead(result, kept);
+        return new UndeclaredRead(result, kept, signatures.SameOverload());
     }
 
-    /// <summary>What <see cref="ReadUndeclaredAsync"/> found: the objects to drop, and the overloads it would not.</summary>
-    public sealed record UndeclaredRead(IReadOnlyList<Undeclared> Objects, IReadOnlyList<KeptOverload> Kept);
+    /// <summary>
+    /// What <see cref="ReadUndeclaredAsync"/> found: the objects to drop, the overloads it would not, and the
+    /// declared routines that turned out to be one overload written twice.
+    /// </summary>
+    public sealed record UndeclaredRead(
+        IReadOnlyList<Undeclared> Objects, IReadOnlyList<KeptOverload> Kept, IReadOnlyList<IReadOnlyList<string>> SameOverload);
 
     /// <summary>
     /// An overload of a declared routine name that the files no longer declare, kept because something other

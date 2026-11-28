@@ -253,7 +253,7 @@ public sealed class CliContractTests : IDisposable
         var manifest = JsonDocument.Parse(Run("schema").StdOut).RootElement;
 
         Assert.Equal("1.8", manifest.GetProperty("manifestVersion").GetString());
-        Assert.Equal("1.0", manifest.GetProperty("desiredStateFormatVersion").GetString());
+        Assert.Equal("1.1", manifest.GetProperty("desiredStateFormatVersion").GetString());
         Assert.Equal("docs/desired-state-format.md", manifest.GetProperty("docs").GetProperty("desiredStateFormat").GetString());
     }
 

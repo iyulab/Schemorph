@@ -290,11 +290,10 @@ statement — it is not the desired state's to drop.
 The target schema is the desired state's to describe, programmable objects included: a
 view, function, procedure or trigger no file declares is planned as a `Drop` — as the
 SQL Server provider's engine does for every object not in source. Adopting an existing
-database therefore needs a file for every one of them to keep. **`inspect` does not write
-them on PostgreSQL** — it writes the tables only — so before the first `apply` against an
-existing database, write each view, function, procedure and trigger out as its own file
-(`pg_get_viewdef`, `pg_get_functiondef` and `pg_get_triggerdef` give the text) and read the
-first `diff`: every programmable object it lists as a `Drop` is one no file declares yet.
+database therefore needs a file for every one of them to keep — `inspect` writes one for
+each view, function, procedure and trigger, as the engine itself reconstructs it. Read the
+first `diff` before the first `apply` all the same: every programmable object it lists as a
+`Drop` is one no file declares.
 Two kinds are left alone rather than guessed at: objects that belong to an extension
 (they are the extension's, not the files'), and materialized views, which hold rows.
 A routine file declares one signature — its name and argument types — so a live overload of that name
@@ -310,8 +309,14 @@ expression, a trigger, …) is kept too and named in a warning (`SCHEMORPH018`):
 refused. A declared view whose file still calls the old signature is a desired state that does not
 apply to an empty database either: the apply fails on that view and rolls back whole, leaving the
 old overload and the view as they were — change the view's call, then apply. One file declares one
-signature and one name is declared by one file, so two overloads of the same name cannot both be
-declared yet.
+signature, so declaring two overloads of a name takes two files; each is then named by its argument
+types in the plan and the history (`to_label(int4)`, `to_label(text)` — the parser's spelling of the
+type, so `int` and `integer` are one), and a name declared by one file keeps its bare name. Two files
+that turn out to declare one overload are refused (`SCHEMORPH004`) — by the parser when the types are
+spelled alike, by `diff` when only the engine can tell (a type with and without its schema). An
+overloaded name whose file writes an argument as `%TYPE` is refused too: the overloads cannot be told
+apart before apply. Adding a second file for a name renames the first one's object, so that routine
+is redefined once (the same `CREATE OR REPLACE`, which changes nothing).
 
 ## A PostgreSQL programmable object is always redefined once on adoption
 

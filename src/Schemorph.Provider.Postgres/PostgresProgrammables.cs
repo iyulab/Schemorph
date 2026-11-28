@@ -90,6 +90,27 @@ internal static class PostgresProgrammables
             parsedObjects.Add((name, objectType, file.Path, file.Text, deparsed.Value, referenced));
         }
 
+        // A name several routine files declare is several overloads: each file's object is then named by its
+        // argument types too, so the ledger and the plan tell them apart. A name declared once keeps its bare name.
+        var overloaded = parsedObjects.Where(o => IsRoutine(o.ObjectType))
+            .GroupBy(o => o.ObjectName, StringComparer.Ordinal)
+            .Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet(StringComparer.Ordinal);
+        for (var i = 0; i < parsedObjects.Count; i++)
+        {
+            var o = parsedObjects[i];
+            if (!IsRoutine(o.ObjectType) || !overloaded.Contains(o.ObjectName)) continue;
+            if (SignatureLabel(o.Text) is { } label)
+            {
+                parsedObjects[i] = o with { ObjectName = $"{o.ObjectName}({label})" };
+            }
+            else
+            {
+                messages.Add(new RawMessage("Error", "SCHEMORPH004",
+                    $"{o.Path}: {o.ObjectName} is declared by more than one file, so each file has to name its argument " +
+                    "types — a type written as table.column%TYPE cannot be told apart from the other overloads before apply."));
+            }
+        }
+
         foreach (var duplicate in parsedObjects.GroupBy(o => o.ObjectName, StringComparer.Ordinal)
                      .Where(g => g.Count() > 1))
         {
@@ -190,6 +211,57 @@ internal static class PostgresProgrammables
                       + (type.ArrayBounds.Count > 0 ? "[]" : ""));
         }
         return types;
+    }
+
+    internal static bool IsRoutine(string objectType) => objectType is "ScalarFunction" or "TableValuedFunction" or "Procedure";
+
+    /// <summary>
+    /// A declared routine: its object name (the bare name, or <c>name(types)</c> when several files declare the
+    /// name), the bare name the catalog knows it by, and its <see cref="SignatureTypes"/>.
+    /// </summary>
+    internal sealed record DeclaredRoutine(string ObjectName, string Name, IReadOnlyList<string>? Types);
+
+    /// <summary>The routines among <paramref name="objects"/>, each as <see cref="DeclaredRoutine"/>.</summary>
+    internal static IReadOnlyList<DeclaredRoutine> DeclaredRoutinesOf(IEnumerable<ProgrammableObjectInfo> objects)
+        => objects.Where(o => IsRoutine(o.ObjectType))
+            .Select(o => new DeclaredRoutine(o.ObjectName, RoutineName(o.FileText) ?? o.ObjectName, SignatureTypes(o.FileText)))
+            .ToList();
+
+    private static string? RoutineName(string text)
+    {
+        var parsed = Parser.Parse(text);
+        return parsed.Value is { Stmts.Count: 1 } value && value.Stmts[0].Stmt.CreateFunctionStmt is { } func
+            ? LastPart(func.Funcname)
+            : null;
+    }
+
+    /// <summary>
+    /// The argument types as an overloaded routine's object name carries them — <c>int4, text[]</c>: the
+    /// parser's normal spelling (so <c>int</c> and <c>integer</c> are the same label), without the
+    /// <c>pg_catalog</c> qualifier. Null when <see cref="SignatureTypes"/> is.
+    /// </summary>
+    private static string? SignatureLabel(string text)
+    {
+        var parsed = Parser.Parse(text);
+        if (parsed.Value is not { Stmts.Count: 1 } value || value.Stmts[0].Stmt.CreateFunctionStmt is not { } func) return null;
+        if (SignatureTypes(text) is null) return null;
+
+        var labels = new List<string>();
+        foreach (var node in func.Parameters)
+        {
+            var parameter = node.FunctionParameter!;
+            var counts = parameter.Mode switch
+            {
+                FunctionParameterMode.FuncParamIn or FunctionParameterMode.FuncParamInout
+                    or FunctionParameterMode.FuncParamVariadic or FunctionParameterMode.FuncParamDefault => true,
+                FunctionParameterMode.FuncParamOut => func.IsProcedure,
+                _ => false,
+            };
+            if (!counts) continue;
+            var parts = parameter.ArgType.Names.Select(n => n.String.Sval).SkipWhile(p => p == "pg_catalog");
+            labels.Add(string.Join(".", parts) + (parameter.ArgType.ArrayBounds.Count > 0 ? "[]" : ""));
+        }
+        return string.Join(", ", labels);
     }
 
     /// <summary>

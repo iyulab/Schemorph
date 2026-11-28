@@ -175,7 +175,7 @@ Warnings never change the exit code.
 | `SCHEMORPH001` | Warning | Destructive change excluded from the plan (pass `--allow-destructive` to include) |
 | `SCHEMORPH002` | Warning | Update-script generation failed (plan is still valid) |
 | `SCHEMORPH003` | Error | A programmable object has no source file in the desired state |
-| `SCHEMORPH004` | Error | One file defines more than one programmable object (ADR-0002: one per file) |
+| `SCHEMORPH004` | Error | One file defines more than one programmable object (ADR-0002: one per file), or two files define the same one. On PostgreSQL two routine files with one name are two overloads, and refused only when their argument types are the same — or cannot be told apart before apply (`%TYPE`) |
 | `SCHEMORPH005` | Warning | File skipped: SQLCMD syntax marks it as a deploy script, not desired state |
 | `SCHEMORPH006` | Warning | File skipped: contains imperative statements (EXEC / DML) — not declarative DDL |
 | `SCHEMORPH007` | Error | A `.sql` file failed to parse (file, line, and column are named) |

@@ -193,6 +193,62 @@ public sealed class RoutineOverloadIdentityTests : IAsyncLifetime
         Assert.False(outcome.Success);
         Assert.Equal(["x integer"], await OverloadsAsync("f"));
     }
+    [SkippableFact]
+    public async Task Two_files_of_one_name_are_two_overloads_each_kept_and_dropped_on_its_own()
+    {
+        await WriteAsync("functions/label_int.sql", "CREATE FUNCTION to_label(x integer) RETURNS text LANGUAGE sql AS $$ SELECT x::text $$;");
+        await WriteAsync("functions/label_text.sql", "CREATE FUNCTION to_label(x text) RETURNS text LANGUAGE sql AS $$ SELECT x $$;");
+        await ApplyAsync();
+
+        Assert.Equal(["x integer", "x text"], await OverloadsAsync("to_label"));
+        Assert.Empty((await DiffAsync()).Actions);
+
+        // The name is declared once again, so the kept overload is the bare `to_label` — a name the
+        // history has not seen, redefined once with the same statement.
+        File.Delete(Path.Combine(_dir, "functions/label_text.sql"));
+        var actions = (await DiffAsync()).Actions;
+        var drop = Assert.Single(actions, a => a.Operation == PlanOperation.Drop);
+        Assert.Equal("to_label(x text)", drop.ObjectName);
+        Assert.All(actions.Where(a => a != drop), a => Assert.Equal(("to_label", PlanOperation.Redefine), (a.ObjectName, a.Operation)));
+
+        await ApplyAsync();
+        Assert.Equal(["x integer"], await OverloadsAsync("to_label"));
+        Assert.Empty((await DiffAsync()).Actions);
+    }
+
+    [SkippableFact]
+    public async Task A_second_file_for_a_name_adds_its_overload_and_leaves_the_first_in_place()
+    {
+        await WriteAsync("functions/label_int.sql", "CREATE FUNCTION to_label(x integer) RETURNS text LANGUAGE sql AS $$ SELECT x::text $$;");
+        await ApplyAsync();
+        await WriteAsync("functions/label_text.sql", "CREATE FUNCTION to_label(x text) RETURNS text LANGUAGE sql AS $$ SELECT x $$;");
+
+        var actions = (await DiffAsync()).Actions;
+        Assert.DoesNotContain(actions, a => a.Operation == PlanOperation.Drop);
+        Assert.Contains(actions, a => a.ObjectName == "to_label(text)");
+
+        await ApplyAsync();
+        Assert.Equal(["x integer", "x text"], await OverloadsAsync("to_label"));
+        Assert.Empty((await DiffAsync()).Actions);
+    }
+
+    [SkippableFact]
+    public async Task Two_files_spelling_one_overload_differently_are_refused()
+    {
+        // int and integer the parser already reads as one type; a type with and without its schema only the engine can.
+        await WriteAsync("functions/a.sql", "CREATE FUNCTION to_label(x int) RETURNS text LANGUAGE sql AS $$ SELECT x::text $$;");
+        await WriteAsync("functions/b.sql", "CREATE FUNCTION to_label(x integer) RETURNS text LANGUAGE sql AS $$ SELECT x::text $$;");
+        var parsed = await DiffOperation.RunAsync(_provider, _ledger, _dir, _url, allowDestructive: false);
+        Assert.False(parsed.Success);
+        Assert.Contains(parsed.Errors, e => e.Code == "SCHEMORPH004");
+
+        await AddByHandAsync("CREATE DOMAIN code AS text;");
+        await WriteAsync("functions/a.sql", "CREATE FUNCTION to_label(x code) RETURNS text LANGUAGE sql AS $$ SELECT x $$;");
+        await WriteAsync("functions/b.sql", $"CREATE FUNCTION to_label(x \"{_live.Name}\".code) RETURNS text LANGUAGE sql AS $$ SELECT x $$;");
+        var resolved = await DiffOperation.RunAsync(_provider, _ledger, _dir, _url, allowDestructive: false);
+        Assert.False(resolved.Success);
+        Assert.Contains(resolved.Errors, e => e.Code == "SCHEMORPH004" && e.Text.Contains("one overload"));
+    }
 }
 
 /// <summary>

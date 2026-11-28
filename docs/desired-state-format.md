@@ -35,11 +35,12 @@ convention as the plan format:
 Independent of the product version and of `planFormatVersion` — a release can change
 one contract without touching the other.
 
-Current version: **`1.0`**.
+Current version: **`1.1`**.
 
 | Version | Change |
 |---|---|
 | `1.0` | Initial documented contract (below) |
+| `1.1` | PostgreSQL writes views, functions, procedures and triggers too (it wrote tables only); a routine name with several overloads gets a file per overload |
 
 ## Layout
 
@@ -80,6 +81,17 @@ An already-clean name passes through verbatim.
   separator (SQL Server's `GO`) appears in Postgres output, or vice versa.
 - Defaults and nullability are rendered verbatim from the catalog — the file is a
   direct transcription, not a normalized or reformatted one.
+- PostgreSQL programmable objects are the engine's own reconstruction, transcribed:
+  `CREATE VIEW "schema"."name" [WITH (options)] AS` followed by `pg_get_viewdef`'s query,
+  `pg_get_functiondef`'s `CREATE OR REPLACE FUNCTION` / `PROCEDURE` statement, and
+  `pg_get_triggerdef`'s `CREATE TRIGGER` statement. Inside them identifiers are quoted the
+  way the engine quotes them (only where needed), and a name is schema-qualified only where
+  the connection's search path would not find it. Each ends with `;` and a newline. A
+  trigger's file is `triggers/{schema}.{table}.{trigger}.sql`; a function or procedure
+  name with several overloads gets one file per overload,
+  `functions/{schema}.{name}({identity arguments}).sql` (`f(x integer)`).
+- What is never written, because the comparison never treats it as declarable: an
+  extension's members, materialized views, aggregates and window functions.
 
 ## Stability
 

@@ -50,10 +50,12 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     public async Task<InspectResult> InspectAsync(InspectRequest request, CancellationToken cancellationToken = default)
     {
+        var schema = TargetSchemaOf(request.ConnectionString);
         var tables = await CatalogReader.ReadTablesAsync(
-            request.ConnectionString, TargetSchemaOf(request.ConnectionString),
-            cancellationToken: cancellationToken);
-        return new InspectResult(DesiredStateRenderer.Render(tables));
+            request.ConnectionString, schema, cancellationToken: cancellationToken);
+        var programmables = DesiredStateRenderer.RenderProgrammables(
+            await LiveDefinitionReader.ReadAsync(request.ConnectionString, schema, cancellationToken));
+        return new InspectResult([.. DesiredStateRenderer.Render(tables), .. programmables]);
     }
 
     /// <summary>
@@ -464,10 +466,8 @@ public sealed class PostgresProvider : IDatabaseProvider
         // every object not in source), so each one becomes a Delete, dropped first.
         var declaredObjects = PostgresProgrammables.Analyze(state.ProgrammableFiles).Objects;
         var declared = declaredObjects.Select(o => o.ObjectName).ToHashSet(StringComparer.Ordinal);
-        var declaredRoutines = declaredObjects
-            .Where(o => o.ObjectType is "ScalarFunction" or "TableValuedFunction" or "Procedure")
-            .ToDictionary(o => o.ObjectName, o => PostgresProgrammables.SignatureTypes(o.FileText), StringComparer.Ordinal);
-        var (undeclared, keptOverloads) = await PostgresLiveProgrammables.ReadUndeclaredAsync(
+        var declaredRoutines = PostgresProgrammables.DeclaredRoutinesOf(declaredObjects);
+        var (undeclared, keptOverloads, sameOverload) = await PostgresLiveProgrammables.ReadUndeclaredAsync(
             connectionString, schema, declared, declaredRoutines, cancellationToken, session);
 
         // A declared view that reads what this change removes — a table, a column, a view
@@ -498,6 +498,9 @@ public sealed class PostgresProvider : IDatabaseProvider
         // than handing anyone a plan the provider cannot carry out.
         var messages = (SynthesisGap(changes, statements) is { } gap ? new[] { gap } : Array.Empty<RawMessage>())
             .Concat(keptOverloads.Select(KeptOverloadWarning))
+            .Concat(sameOverload.Select(names => new RawMessage("Error", "SCHEMORPH004",
+                $"{string.Join(" and ", names)} are one overload: the engine resolves their argument types to the " +
+                "same types, so two files define it. Keep one.")))
             .ToList();
 
         return new Compared(changes, new Snapshots(desired, live), updateScript,

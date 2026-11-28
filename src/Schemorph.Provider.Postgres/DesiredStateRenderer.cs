@@ -23,6 +23,53 @@ internal static class DesiredStateRenderer
     }
 
     /// <summary>
+    /// The programmable objects as desired-state files, one per object, each the engine's own
+    /// reconstruction of it — a definition is transcribed, never re-spelled, so what is applied
+    /// back is what the engine itself said the object is.
+    /// </summary>
+    /// <remarks>
+    /// A file declares one routine signature, so a name with several overloads gets a file per
+    /// overload, named by its identity arguments: <c>functions/{schema}.{name}({arguments}).sql</c>.
+    /// </remarks>
+    public static IReadOnlyList<DesiredStateFile> RenderProgrammables(PostgresProgrammableDefinitions definitions)
+    {
+        var files = new List<DesiredStateFile>();
+
+        foreach (var view in definitions.Views)
+        {
+            var options = view.Options is null ? "" : $" WITH ({view.Options})";
+            files.Add(new DesiredStateFile(
+                $"views/{DesiredStateFile.SafeSegment($"{view.Schema}.{view.Name}")}.sql",
+                $"CREATE VIEW {Quote(view.Schema)}.{Quote(view.Name)}{options} AS\n{Statement(view.Query)}"));
+        }
+
+        foreach (var overloads in definitions.Routines.GroupBy(r => r.Name, StringComparer.Ordinal))
+        {
+            var several = overloads.Count() > 1;
+            foreach (var routine in overloads)
+            {
+                var name = several ? $"{routine.Name}({routine.IdentityArguments})" : routine.Name;
+                files.Add(new DesiredStateFile(
+                    $"{(routine.IsProcedure ? "procedures" : "functions")}/{DesiredStateFile.SafeSegment($"{routine.Schema}.{name}")}.sql",
+                    Statement(routine.Definition)));
+            }
+        }
+
+        foreach (var trigger in definitions.Triggers)
+        {
+            files.Add(new DesiredStateFile(
+                $"triggers/{DesiredStateFile.SafeSegment($"{trigger.Schema}.{trigger.Table}.{trigger.Name}")}.sql",
+                Statement(trigger.Definition)));
+        }
+
+        return files;
+    }
+
+    /// <summary>A catalog rendering as one statement: trimmed, ending with <c>;</c> and a newline.</summary>
+    private static string Statement(string rendering)
+        => rendering.Trim().TrimEnd(';').TrimEnd() + ";\n";
+
+    /// <summary>
     /// Always quote. Postgres folds unquoted identifiers to lower case, so an
     /// unquoted rendering of a mixed-case schema does not survive a round trip.
     /// </summary>

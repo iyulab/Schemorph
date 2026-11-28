@@ -5,6 +5,21 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Added
+
+- **PostgreSQL: several overloads of one function or procedure name can be declared** — one file each. Since 0.26.0 an
+  overload no file declares is dropped, which left a schema with `to_label(integer)` beside `to_label(text)` able to keep only
+  one. Two routine files with one name are now two overloads; each is named by its argument types in the plan and the history
+  (`to_label(int4)`), and a name declared once keeps its bare name. Two files that declare one overload are refused
+  (`SCHEMORPH004`), whether the types are spelled alike or only the engine can tell they are the same.
+- **PostgreSQL: `inspect` writes views, functions, procedures and triggers.** It wrote the tables only, so adopting an existing
+  database with `inspect` and then `apply` planned every view and routine as a drop. Each object is now written as the engine
+  reconstructs it (`pg_get_viewdef`, `pg_get_functiondef`, `pg_get_triggerdef`), under `views/`, `functions/`, `procedures/` and
+  `triggers/`, one file per overload (`functions/{schema}.{name}({arguments}).sql` when a name has several); an extension's
+  members and materialized views are left out, as the comparison leaves them alone. The desired-state format is `1.1`.
+
 ## 0.26.0 — 2026-11-28
 
 ### Fixed
