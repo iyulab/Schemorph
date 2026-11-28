@@ -193,7 +193,14 @@ public sealed class RoutineOverloadIdentityTests : IAsyncLifetime
         Assert.False(outcome.Success);
         Assert.Equal(["x integer"], await OverloadsAsync("f"));
     }
+}
 
+/// <summary>
+/// The pure part of the same rule, needing no server: a view goes first only when it calls the overload being dropped.
+/// Kept out of the class above, whose every test opens a live schema first.
+/// </summary>
+public sealed class RoutineOverloadViewOrderTests
+{
     [Fact]
     public void Only_a_declared_view_calling_the_dropped_overload_goes_first()
     {
