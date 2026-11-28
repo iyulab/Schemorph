@@ -158,6 +158,42 @@ public sealed class RoutineOverloadIdentityTests : IAsyncLifetime
         Assert.Equal(["x integer", "x integer, y integer"], await OverloadsAsync("f"));
     }
 
+    [SkippableFact]
+    public async Task A_declared_signature_missing_live_is_re_created_though_its_name_has_another_overload()
+    {
+        // The file is unchanged, so the ledger has nothing to re-apply; what is live is another overload of the name.
+        await WriteAsync("functions/g.sql", "CREATE FUNCTION g(a integer) RETURNS integer LANGUAGE sql AS $$ SELECT a $$;");
+        await ApplyAsync();
+        await AddByHandAsync("DROP FUNCTION g(integer); CREATE FUNCTION g(a text) RETURNS text LANGUAGE sql AS $$ SELECT a $$;");
+
+        var plan = await DiffAsync();
+        Assert.Contains(plan.Actions, a => a.Operation == PlanOperation.Drop && a.ObjectName == "g(a text)");
+        Assert.Contains(plan.Actions, a => a.ObjectName == "g" && a.Operation != PlanOperation.Drop);
+
+        await ApplyAsync();
+        Assert.Equal(["a integer"], await OverloadsAsync("g"));
+        Assert.Empty((await DiffAsync()).Actions);
+    }
+
+    [SkippableFact]
+    public async Task An_unchanged_view_still_calling_the_old_signature_fails_the_apply_whole()
+    {
+        // The desired state calls f(integer) from a view and no longer declares it — it would not apply to an empty
+        // database either. The apply is one transaction: it fails, and the old overload and the view are still there.
+        await WriteAsync("tables/t.sql", "CREATE TABLE t (id integer NOT NULL, CONSTRAINT pk_t PRIMARY KEY (id));");
+        await WriteAsync("functions/f.sql", "CREATE FUNCTION f(x integer) RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT x > 0 $$;");
+        Directory.CreateDirectory(Path.Combine(_dir, "views"));
+        await WriteAsync("views/v.sql", "CREATE VIEW v AS SELECT t.id FROM t WHERE f(t.id);");
+        await ApplyAsync();
+
+        await WriteAsync("functions/f.sql",
+            "CREATE FUNCTION f(x integer, y integer) RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT x > y $$;");
+
+        var outcome = await ApplyOperation.RunAsync(_provider, _ledger, new ApplyOperation.Request(_dir, _url));
+        Assert.False(outcome.Success);
+        Assert.Equal(["x integer"], await OverloadsAsync("f"));
+    }
+
     [Fact]
     public void Only_a_declared_view_calling_the_dropped_overload_goes_first()
     {

@@ -290,7 +290,11 @@ statement — it is not the desired state's to drop.
 The target schema is the desired state's to describe, programmable objects included: a
 view, function, procedure or trigger no file declares is planned as a `Drop` — as the
 SQL Server provider's engine does for every object not in source. Adopting an existing
-database therefore starts with `inspect`, which writes every such object out as a file.
+database therefore needs a file for every one of them to keep. **`inspect` does not write
+them on PostgreSQL** — it writes the tables only — so before the first `apply` against an
+existing database, write each view, function, procedure and trigger out as its own file
+(`pg_get_viewdef`, `pg_get_functiondef` and `pg_get_triggerdef` give the text) and read the
+first `diff`: every programmable object it lists as a `Drop` is one no file declares yet.
 Two kinds are left alone rather than guessed at: objects that belong to an extension
 (they are the extension's, not the files'), and materialized views, which hold rows.
 A routine file declares one signature — its name and argument types — so a live overload of that name
@@ -303,8 +307,11 @@ which overload the file means, and keeps every overload of that name; for a type
 creates, the `diff` after that apply plans the old overload's drop. An old overload that something
 other than a view in the target schema still uses (a CHECK constraint, a default, an index
 expression, a trigger, …) is kept too and named in a warning (`SCHEMORPH018`): its drop would be
-refused. One file declares one signature and one name is declared by one file, so two overloads of
-the same name cannot both be declared yet.
+refused. A declared view whose file still calls the old signature is a desired state that does not
+apply to an empty database either: the apply fails on that view and rolls back whole, leaving the
+old overload and the view as they were — change the view's call, then apply. One file declares one
+signature and one name is declared by one file, so two overloads of the same name cannot both be
+declared yet.
 
 ## A PostgreSQL programmable object is always redefined once on adoption
 

@@ -19,7 +19,15 @@ change **additively**: consumers must ignore properties they do not know.
   any overload of its name counted as present. When an argument type cannot be settled before apply — `%TYPE`, or a type the same
   change creates — no overload of that name is dropped. An old overload that something other than a view still uses (a CHECK
   constraint, a default, an index expression, a trigger, …) is kept and named in a new warning, `SCHEMORPH018`, rather than
-  planned as a drop the apply would fail on.
+  planned as a drop the apply would fail on. A declared view whose file still calls the old signature now fails the apply, which
+  rolls back whole — that desired state does not apply to an empty database either; before, the old overload kept it working.
+
+### Documentation
+
+- **PostgreSQL: `inspect` writes the tables, not the views, functions, procedures and triggers.** The limitations page said
+  adopting an existing database starts with `inspect`, which writes every programmable object out as a file, and the README said
+  Schemorph inspects all of them. Neither was true: an adoption that relied on it planned every view and routine as a drop on the
+  first `diff`. Both now say what `inspect` writes, and how to write the rest before the first `apply`.
 
 ### Changed
 
