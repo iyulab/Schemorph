@@ -101,6 +101,40 @@ internal static class PostgresLiveProgrammables
         return reads;
     }
 
+    /// <summary>A live view in the target schema that calls a routine in the target schema.</summary>
+    public sealed record ViewCall(string View, string Routine);
+
+    // A view's rewrite rule depends on each function it calls; both ends in the target schema.
+    private const string ViewCallsSql = """
+        SELECT DISTINCT dependent.relname, p.proname
+        FROM pg_depend d
+        JOIN pg_rewrite r ON r.oid = d.objid
+        JOIN pg_class dependent ON dependent.oid = r.ev_class
+        JOIN pg_proc p ON p.oid = d.refobjid
+        JOIN pg_namespace dn ON dn.oid = dependent.relnamespace
+        JOIN pg_namespace pn ON pn.oid = p.pronamespace
+        WHERE d.classid = 'pg_rewrite'::regclass AND d.refclassid = 'pg_proc'::regclass
+          AND dependent.relkind = 'v'
+          AND dn.nspname = @schema AND pn.nspname = @schema
+        ORDER BY 1, 2
+        """;
+
+    /// <summary>Every routine in the target schema each live view there calls.</summary>
+    public static async Task<IReadOnlyList<ViewCall>> ReadViewCallsAsync(
+        string connectionString, string schema, CancellationToken cancellationToken, IApplySession? session = null)
+    {
+        await using var lease = await PostgresReadConnection.OpenAsync(connectionString, session, cancellationToken);
+        await using var command = new NpgsqlCommand(ViewCallsSql, lease.Connection);
+        command.Parameters.AddWithValue("schema", schema);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var calls = new List<ViewCall>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            calls.Add(new ViewCall(reader.GetString(0), reader.GetString(1)));
+        }
+        return calls;
+    }
+
     /// <summary>A live programmable object the desired state does not declare, and how to drop it.</summary>
     /// <param name="DropStatements">One per overload for a routine; one otherwise.</param>
     public sealed record Undeclared(string ObjectName, string ObjectType, IReadOnlyList<string> DropStatements);

@@ -449,7 +449,8 @@ public sealed class PostgresProvider : IDatabaseProvider
         {
             await shadow.ApplyAsync(state.ModelTexts, sourceSchema: schema, cancellationToken);
             desired = await CatalogReader.ReadTablesAsync(
-                connectionString, shadow.Name, normalizeSameSchemaReferences: true, cancellationToken);
+                connectionString, shadow.Name, normalizeSameSchemaReferences: true, cancellationToken,
+                resolvedAlsoIn: schema);
         }
         // The live side reads through the session when there is one; the shadow above is its own,
         // committed schema and stays on its own connection.
@@ -471,10 +472,11 @@ public sealed class PostgresProvider : IDatabaseProvider
         // (2BP01 / 0A000) for as long as it exists, and re-definition only runs after the
         // declarative stage. So it goes first too, and the redefine stage re-creates it.
         var viewReads = await PostgresLiveProgrammables.ReadViewReadsAsync(connectionString, schema, cancellationToken, session);
+        var viewCalls = await PostgresLiveProgrammables.ReadViewCallsAsync(connectionString, schema, cancellationToken, session);
         var viewsDroppedFirst = ViewsDroppedFirst(
             desired, live,
             declaredObjects.Where(o => o.ObjectType == "View").Select(o => o.ObjectName).ToHashSet(StringComparer.Ordinal),
-            undeclared, viewReads);
+            undeclared, viewReads, viewCalls);
 
         IReadOnlyList<RawChange> changes =
             [.. undeclared.Select(u => new RawChange("Delete", u.ObjectType, u.ObjectName)),
@@ -515,7 +517,8 @@ public sealed class PostgresProvider : IDatabaseProvider
         IReadOnlyList<PostgresTable> desired, IReadOnlyList<PostgresTable> live,
         IReadOnlySet<string> declaredViews,
         IReadOnlyList<PostgresLiveProgrammables.Undeclared> undeclared,
-        IReadOnlyList<PostgresLiveProgrammables.ViewRead> reads)
+        IReadOnlyList<PostgresLiveProgrammables.ViewRead> reads,
+        IReadOnlyList<PostgresLiveProgrammables.ViewCall>? calls = null)
     {
         var desiredByName = desired.ToDictionary(t => t.Name, StringComparer.Ordinal);
         var liveByName = live.ToDictionary(t => t.Name, StringComparer.Ordinal);
@@ -536,8 +539,17 @@ public sealed class PostgresProvider : IDatabaseProvider
                        || wantColumn.GeneratedAs is not null && wantColumn.GeneratedKind != haveColumn.GeneratedKind);
         }
 
+        // A declared view that calls a routine no file declares any more blocks that routine's drop
+        // (2BP01) the same way: it goes first, and the redefine stage re-creates it calling what
+        // the desired state now has.
+        var undeclaredRoutines = undeclared
+            .Where(u => u.ObjectType is "ScalarFunction" or "TableValuedFunction" or "Procedure")
+            .Select(u => u.ObjectName).ToHashSet(StringComparer.Ordinal);
         var dropped = reads.Where(r => declaredViews.Contains(r.View) && Removed(r))
-            .Select(r => r.View).ToHashSet(StringComparer.Ordinal);
+            .Select(r => r.View)
+            .Concat((calls ?? []).Where(c => declaredViews.Contains(c.View) && undeclaredRoutines.Contains(c.Routine))
+                .Select(c => c.View))
+            .ToHashSet(StringComparer.Ordinal);
         bool grew;
         do
         {

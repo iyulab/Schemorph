@@ -5,6 +5,23 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Fixed
+
+- **PostgreSQL: a view changed to call a function the same plan creates is planned and applied.** When a view's file was changed
+  to call a new function — or the same function with other arguments — and the call named the schema (`public.f_new(…)`), `diff`
+  stopped with `SCHEMORPH013` (`42883: function … does not exist`), although the same desired state applied to an empty database:
+  the view was checked against the target schema, where the function did not exist yet. A call to a function the desired state
+  declares now resolves to the declared one during the check, however it is qualified; any other function still resolves in the
+  target schema. When the old function's file was deleted, the plan now drops the view ahead of that function and re-creates it
+  afterwards, instead of failing the apply on `2BP01`.
+- **PostgreSQL: a column of a type an extension installed converges.** A column such as `v vector` (pgvector), `citext`, or any
+  type from the target schema that no file declares, was read back as `vector` from the database and as `public.vector` from
+  the desired state, so every `diff` planned the same `ALTER COLUMN … TYPE` again — and an index on it (an `hnsw` index, an
+  operator class) was dropped and re-created by every apply. Written with the schema (`public.vector`), the comparison failed with
+  `42704`. Both spellings now compare equal to the live column, and `diff` after `apply` reports no change.
+
 ## 0.25.0 — 2026-11-26
 
 ### Added

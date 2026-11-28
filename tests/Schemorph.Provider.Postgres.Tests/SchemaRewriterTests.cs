@@ -38,12 +38,16 @@ public class SchemaRewriterTests
 
         var rewritten = SchemaRewriter.Retarget(sql, "Src", "shadow_x");
 
-        Assert.DoesNotContain("\"Src\"", rewritten);
-        // Table, FK target, qualified type, qualified function — all retargeted.
+        // The table and the FK target are desired tables — retargeted.
         Assert.Contains("shadow_x.\"Members\"", rewritten);
         Assert.Contains("shadow_x.\"Workspaces\"", rewritten);
-        Assert.Contains("shadow_x.\"MemberRole\"", rewritten);
-        Assert.Contains("shadow_x.make_slug()", rewritten);
+        // A qualified type and a qualified function are not: the shadow holds the desired tables
+        // only, so they keep resolving in the source schema, where apply will find them. Moved
+        // into the shadow they named nothing (42704 / 42883 when the shadow was built).
+        Assert.Contains("\"Src\".\"MemberRole\"", rewritten);
+        Assert.Contains("\"Src\".make_slug()", rewritten);
+        Assert.DoesNotContain("shadow_x.\"MemberRole\"", rewritten);
+        Assert.DoesNotContain("shadow_x.make_slug", rewritten);
     }
 
     [Fact]

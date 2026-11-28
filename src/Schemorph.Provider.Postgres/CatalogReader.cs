@@ -26,11 +26,20 @@ internal static class CatalogReader
     /// One rendering does not obey search_path and is normalized by hand
     /// instead: an index's ON clause (see <see cref="UnqualifyTable"/>).
     /// </param>
+    /// <param name="resolvedAlsoIn">
+    /// Comparison mode, shadow side: the target schema the shadow stands in for. It goes on the
+    /// search_path after <paramref name="schema"/>, so a name the shadow does not hold but the
+    /// target schema does — a type or function an extension installed there, an operator class —
+    /// renders bare, as it does when the target schema itself is read. Without it the same column
+    /// reads <c>public.vector</c> on one side and <c>vector</c> on the other, and every comparison
+    /// plans a change that apply cannot make go away.
+    /// </param>
     public static async Task<IReadOnlyList<PostgresTable>> ReadTablesAsync(
         string connectionString, string schema,
         bool normalizeSameSchemaReferences = false,
         CancellationToken cancellationToken = default,
-        IApplySession? session = null)
+        IApplySession? session = null,
+        string? resolvedAlsoIn = null)
     {
         await using var lease = await PostgresReadConnection.OpenAsync(connectionString, session, cancellationToken);
         var connection = lease.Connection;
@@ -39,7 +48,8 @@ internal static class CatalogReader
         {
             // Not parameterizable (SET takes no parameters); the identifier is
             // quoted with the same rule the renderer uses everywhere.
-            await lease.SetSearchPathAsync(cancellationToken, schema);
+            await lease.SetSearchPathAsync(
+                cancellationToken, resolvedAlsoIn is null ? [schema] : [schema, resolvedAlsoIn]);
         }
 
         var columns = await ReadColumnsAsync(connection, schema, cancellationToken);

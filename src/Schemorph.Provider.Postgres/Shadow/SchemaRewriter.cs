@@ -44,15 +44,20 @@ internal static class SchemaRewriter
     /// <paramref name="sourceSchema"/> moves to the shadow. An unqualified
     /// <c>RangeVar</c> is left alone, because in a query it may name a CTE
     /// rather than a table — the probe connection's search_path resolves a
-    /// bare table into the shadow anyway. Function and type qualifiers are
-    /// left alone too: routines and types are not materialized in the shadow
-    /// (only the desired tables are), so they must keep resolving live, as
-    /// they did before the probe existed. No target-schema validation here:
-    /// that check exists because a mis-qualified CREATE TABLE would execute
-    /// for real, and this caller executes inside a rolled-back transaction.
+    /// bare table into the shadow anyway. Type qualifiers are left alone: the
+    /// desired state declares no types, so they keep resolving in the source
+    /// schema. A function qualified to the source schema moves only when it is
+    /// one of <paramref name="routinesInShadow"/> — a routine the caller has
+    /// created in the shadow in its desired shape (a new function, or one whose
+    /// arguments change, does not exist in the source schema yet); any other
+    /// keeps resolving in the source schema, as it will when apply runs. No
+    /// target-schema validation here: that check exists because a
+    /// mis-qualified CREATE TABLE would execute for real, and this caller
+    /// executes inside a rolled-back transaction.
     /// </summary>
-    public static void RetargetQueryReferences(ParseResult parsed, string sourceSchema, string shadowSchema)
-        => Walk(parsed, sourceSchema, shadowSchema, queryBody: true);
+    public static void RetargetQueryReferences(
+        ParseResult parsed, string sourceSchema, string shadowSchema, IReadOnlySet<string>? routinesInShadow = null)
+        => Walk(parsed, sourceSchema, shadowSchema, queryBody: true, routinesInShadow);
 
     /// <summary>
     /// Retarget a whole desired-state set and put its statements into a
@@ -337,7 +342,9 @@ internal static class SchemaRewriter
         ("ColumnRef", "fields"),
     };
 
-    private static void Walk(IMessage message, string source, string shadow, bool queryBody = false)
+    private static void Walk(
+        IMessage message, string source, string shadow, bool queryBody = false,
+        IReadOnlySet<string>? routinesInShadow = null)
     {
         var typeName = message.Descriptor.Name;
 
@@ -370,21 +377,58 @@ internal static class SchemaRewriter
             {
                 var items = ((System.Collections.IEnumerable)value).OfType<IMessage>().ToList();
 
-                // A query body retargets only column references (their head is a
-                // table); routines and types are not in the shadow.
-                var rewritable = queryBody ? typeName == "ColumnRef" : QualifiedNameLists.Contains((typeName, field.Name));
-                if (rewritable && QualifiedNameLists.Contains((typeName, field.Name))
-                    && IsQualified(items, field.Name, typeName))
+                if (QualifiedNameLists.Contains((typeName, field.Name))
+                    && IsQualified(items, field.Name, typeName)
+                    && Retargets(typeName, items, queryBody, routinesInShadow))
                 {
                     RewriteFirstString(items[0], source, shadow);
                 }
 
-                foreach (var item in items) Walk(item, source, shadow, queryBody);
+                foreach (var item in items) Walk(item, source, shadow, queryBody, routinesInShadow);
             }
             else if (value is IMessage child)
             {
-                Walk(child, source, shadow, queryBody);
+                Walk(child, source, shadow, queryBody, routinesInShadow);
             }
+        }
+    }
+
+    /// <summary>
+    /// Whether a qualified name moves into the shadow. It moves only when what it names is there:
+    /// a column reference's table (the desired tables are), a function the caller materialized in
+    /// the shadow (<paramref name="routinesInShadow"/>), and in table DDL the remaining qualified
+    /// lists. A type never moves — the desired state declares no types, so a type qualified to the
+    /// source schema is one that exists there (an extension's, say) and must keep resolving there,
+    /// as it will when apply runs. A function call in a table's DDL stays too unless the caller put
+    /// that function in the shadow: the tables are created before any routine is.
+    /// </summary>
+    private static bool Retargets(
+        string typeName, IReadOnlyList<IMessage> items, bool queryBody, IReadOnlySet<string>? routinesInShadow)
+        => typeName switch
+        {
+            "ColumnRef" => true,
+            "TypeName" => false,
+            "FuncCall" => routinesInShadow is not null && LastName(items) is { } name && routinesInShadow.Contains(name),
+            _ => !queryBody,
+        };
+
+    private static string? LastName(IReadOnlyList<IMessage> items)
+    {
+        var current = items[^1];
+        while (true)
+        {
+            if (current.Descriptor.Name == "String")
+            {
+                return current.Descriptor.Fields.InDeclarationOrder()
+                    .FirstOrDefault(f => f.Name == "sval")?.Accessor.GetValue(current) as string;
+            }
+            var inner = current.Descriptor.Fields.InDeclarationOrder()
+                .Where(f => f.FieldType == FieldType.Message && !f.IsRepeated)
+                .Select(f => f.Accessor.GetValue(current))
+                .OfType<IMessage>()
+                .FirstOrDefault();
+            if (inner is null) return null;
+            current = inner;
         }
     }
 

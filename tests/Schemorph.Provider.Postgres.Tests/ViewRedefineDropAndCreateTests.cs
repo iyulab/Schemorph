@@ -233,6 +233,26 @@ public class ViewRedefineDropAndCreateTests
     }
 
     /// <summary>
+    /// A function the desired state declares is created in the shadow before any view is probed,
+    /// in its desired shape — so a call to it follows into the shadow, however the file qualified
+    /// it. Any other function stays where it resolves now.
+    /// </summary>
+    [Fact]
+    public void The_probe_moves_a_call_to_a_declared_function_into_the_shadow_and_leaves_others()
+    {
+        const string script = """
+            CREATE OR REPLACE VIEW public.v AS
+            SELECT t.a, public.fn(t.b) AS f FROM public.t t WHERE public.f_new(t.a);
+            """;
+
+        var probe = ViewRedefinePlanner.RetargetForProbe(
+            script, "probe_1", "public", "shadow_x", new HashSet<string>(StringComparer.Ordinal) { "f_new" });
+
+        Assert.Contains("shadow_x.f_new(", probe);
+        Assert.Contains("public.fn(", probe);
+    }
+
+    /// <summary>
     /// The shape generated desired-state files usually take: the body names its
     /// schema explicitly, and the table changing in the same plan is the one
     /// the view selects from. At <c>diff</c> time the live table lacks the new

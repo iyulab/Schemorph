@@ -88,7 +88,11 @@ internal static class ViewRedefinePlanner
         // an extension installed there, say — resolves exactly as it will when apply runs (apply's
         // search_path is the target schema alone). Unqualified CREATEs land in the first entry.
         await SetSearchPathAsync(shadowConnection, cancellationToken, shadow.Name, schema);
-        await MaterializeAsync(shadowConnection, schema, shadow.Name, analysis.Objects, cancellationToken);
+        // A call qualified to the target schema means the desired routine when the desired state
+        // declares one by that name — it is created in the shadow below; anything else stays where
+        // it resolves now.
+        var routinesInShadow = RoutineNames(analysis.Objects);
+        await MaterializeAsync(shadowConnection, schema, shadow.Name, analysis.Objects, routinesInShadow, cancellationToken);
 
         foreach (var view in views)
         {
@@ -97,7 +101,7 @@ internal static class ViewRedefinePlanner
             List<(string Name, string Type)> desired;
             try
             {
-                desired = await ProbeColumnsAsync(shadowConnection, schema, shadow.Name, view, cancellationToken);
+                desired = await ProbeColumnsAsync(shadowConnection, schema, shadow.Name, view, routinesInShadow, cancellationToken);
             }
             catch (PostgresException ex)
             {
@@ -182,7 +186,8 @@ internal static class ViewRedefinePlanner
     /// </summary>
     private static async Task MaterializeAsync(
         NpgsqlConnection shadowConnection, string sourceSchema, string shadowSchema,
-        IReadOnlyList<ProgrammableObjectInfo> objects, CancellationToken cancellationToken)
+        IReadOnlyList<ProgrammableObjectInfo> objects, IReadOnlySet<string> routinesInShadow,
+        CancellationToken cancellationToken)
     {
         var candidates = objects.Where(o => o.ObjectType != "DmlTrigger").ToList();
         if (candidates.Count == 0) return;
@@ -209,8 +214,8 @@ internal static class ViewRedefinePlanner
                 remaining.Remove(name);
                 var obj = byName[name];
                 var sql = obj.ObjectType == "View"
-                    ? RetargetForProbe(obj.ApplyScript, name, sourceSchema, shadowSchema)
-                    : RetargetRoutineForShadow(obj.ApplyScript, sourceSchema, shadowSchema);
+                    ? RetargetForProbe(obj.ApplyScript, name, sourceSchema, shadowSchema, routinesInShadow)
+                    : RetargetRoutineForShadow(obj.ApplyScript, sourceSchema, shadowSchema, routinesInShadow);
                 try
                 {
                     await using var create = new NpgsqlCommand(sql, shadowConnection);
@@ -223,6 +228,11 @@ internal static class ViewRedefinePlanner
             }
         }
     }
+
+    private static IReadOnlySet<string> RoutineNames(IReadOnlyList<ProgrammableObjectInfo> objects)
+        => objects.Where(o => o.ObjectType is "ScalarFunction" or "TableValuedFunction" or "Procedure")
+            .Select(o => o.ObjectName)
+            .ToHashSet(StringComparer.Ordinal);
 
     private static async Task SetSearchPathAsync(
         NpgsqlConnection connection, CancellationToken cancellationToken, params string[] schemas)
@@ -266,10 +276,10 @@ internal static class ViewRedefinePlanner
     /// </summary>
     private static async Task<List<(string Name, string Type)>> ProbeColumnsAsync(
         NpgsqlConnection shadowConnection, string sourceSchema, string shadowSchema,
-        ProgrammableObjectInfo view, CancellationToken cancellationToken)
+        ProgrammableObjectInfo view, IReadOnlySet<string> routinesInShadow, CancellationToken cancellationToken)
     {
         var probeName = $"__schemorph_probe_{Guid.NewGuid():N}"[..40];
-        var probeSql = RetargetForProbe(view.ApplyScript, probeName, sourceSchema, shadowSchema);
+        var probeSql = RetargetForProbe(view.ApplyScript, probeName, sourceSchema, shadowSchema, routinesInShadow);
 
         await using var transaction = await shadowConnection.BeginTransactionAsync(cancellationToken);
         try
@@ -389,17 +399,20 @@ internal static class ViewRedefinePlanner
     /// explicitly and would otherwise resolve past the shadow to the live
     /// table — which at <c>diff</c> time does not yet carry the column the
     /// desired view depends on. Both forms are ordinary desired-state SQL; a
-    /// schema-qualified body is the usual shape of generated files. Function
-    /// and type qualifiers, and references to some other schema, pass through
-    /// untouched: routines and types are not in the shadow, and cross-schema
-    /// scope is a later slice (ADR-0007).
+    /// schema-qualified body is the usual shape of generated files. A function
+    /// qualified to the source schema follows into the shadow when the desired
+    /// state declares it (<paramref name="routinesInShadow"/> — materialized there
+    /// first); type qualifiers, other functions, and references to some other
+    /// schema pass through untouched: they resolve where apply will find them,
+    /// and cross-schema scope is a later slice (ADR-0007).
     /// </summary>
     /// <summary>
     /// A function or procedure's idempotent script, re-aimed at the shadow: its own name lands
     /// in the shadow however the file qualified it, and references to the source schema inside
     /// it (defaults, a SQL-standard body) follow.
     /// </summary>
-    internal static string RetargetRoutineForShadow(string createRoutineSql, string sourceSchema, string shadowSchema)
+    internal static string RetargetRoutineForShadow(
+        string createRoutineSql, string sourceSchema, string shadowSchema, IReadOnlySet<string>? routinesInShadow = null)
     {
         var parsed = Parser.Parse(createRoutineSql);
         if (parsed.Error is not null || parsed.Value is null
@@ -419,7 +432,7 @@ internal static class ViewRedefinePlanner
         {
             qualifier.Sval = shadowSchema;
         }
-        SchemaRewriter.RetargetQueryReferences(parsed.Value, sourceSchema, shadowSchema);
+        SchemaRewriter.RetargetQueryReferences(parsed.Value, sourceSchema, shadowSchema, routinesInShadow);
 
         var deparsed = Parser.Deparse(parsed.Value);
         if (deparsed.Error is not null || deparsed.Value is null)
@@ -432,7 +445,8 @@ internal static class ViewRedefinePlanner
     }
 
     internal static string RetargetForProbe(
-        string createViewSql, string probeName, string sourceSchema, string shadowSchema)
+        string createViewSql, string probeName, string sourceSchema, string shadowSchema,
+        IReadOnlySet<string>? routinesInShadow = null)
     {
         var parsed = Parser.Parse(createViewSql);
         if (parsed.Error is not null || parsed.Value is null
@@ -446,7 +460,7 @@ internal static class ViewRedefinePlanner
         view.View.Relname = probeName;
         view.View.Schemaname = shadowSchema;   // the probe lands in the shadow, however the file qualified it
         view.Replace = false;                  // the probe name never pre-exists
-        SchemaRewriter.RetargetQueryReferences(parsed.Value, sourceSchema, shadowSchema);
+        SchemaRewriter.RetargetQueryReferences(parsed.Value, sourceSchema, shadowSchema, routinesInShadow);
 
         var deparsed = Parser.Deparse(parsed.Value);
         if (deparsed.Error is not null || deparsed.Value is null)
