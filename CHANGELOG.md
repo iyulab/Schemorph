@@ -5,6 +5,29 @@ minor versions may adjust behaviour where it was wrong. Machine contracts (the p
 format, the error envelope, exit codes, the CLI manifest) are versioned separately and
 change **additively**: consumers must ignore properties they do not know.
 
+## Unreleased
+
+### Fixed
+
+- **PostgreSQL: a function whose arguments change no longer leaves the old overload behind.** A routine file declares one
+  signature, but routines were matched to the database by name: when a file changed `f(x integer)` to `f(x integer, y integer)`,
+  apply created the new overload beside the old one, and every later `diff` reported no change while `f(integer)` stayed live. An
+  overload of a declared name whose argument types differ from the file's is now planned as a drop under its own signature
+  (`Drop f(x integer)`), and a declared view that calls it is dropped ahead of it and re-created. Types are compared by the
+  engine, so a type spelled another way (`int`, `int4`, `integer`) is the same type; a procedure's `OUT` arguments count, as they
+  do in its identity. A declared routine whose file is unchanged but whose signature is missing live is re-created, where before
+  any overload of its name counted as present. When an argument type cannot be settled before apply — `%TYPE`, or a type the same
+  change creates — no overload of that name is dropped. An old overload that something other than a view still uses (a CHECK
+  constraint, a default, an index expression, a trigger, …) is kept and named in a new warning, `SCHEMORPH018`, rather than
+  planned as a drop the apply would fail on.
+
+### Changed
+
+- **PostgreSQL: an overload no file declares is dropped even when its name is declared.** Undeclared routines were already
+  dropped, but only when no file declared their name — an overload added by hand beside a declared routine survived every
+  apply. It is now planned as a drop like any other undeclared object. A file declares one signature, and one name is declared by
+  one file (`SCHEMORPH004`), so two overloads of the same name cannot both be declared yet; keep such a routine under its own name.
+
 ## 0.25.1 — 2026-11-28
 
 ### Fixed

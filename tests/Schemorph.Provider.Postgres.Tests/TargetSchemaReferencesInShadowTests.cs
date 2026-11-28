@@ -104,6 +104,16 @@ public sealed class TargetSchemaReferencesInShadowTests
         Assert.True(await HasChangesAsync(dir.Path, url));
         await ApplyAsync(dir.Path, url);
         Assert.False(await HasChangesAsync(dir.Path, url));
+
+        // No file declares f_old(integer) any more — under either new signature it is gone, not
+        // left behind beside the overload that replaced it.
+        await using var connection = new NpgsqlConnection(url);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = '{s}' AND p.proname = 'f_old' AND p.proargtypes = '23'::oidvector
+            """, connection);
+        Assert.Equal(0L, (long)(await command.ExecuteScalarAsync())!);
     }
 
     [SkippableTheory]

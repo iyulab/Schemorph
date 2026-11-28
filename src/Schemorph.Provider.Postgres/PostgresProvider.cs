@@ -464,8 +464,11 @@ public sealed class PostgresProvider : IDatabaseProvider
         // every object not in source), so each one becomes a Delete, dropped first.
         var declaredObjects = PostgresProgrammables.Analyze(state.ProgrammableFiles).Objects;
         var declared = declaredObjects.Select(o => o.ObjectName).ToHashSet(StringComparer.Ordinal);
-        var undeclared = await PostgresLiveProgrammables.ReadUndeclaredAsync(
-            connectionString, schema, declared, cancellationToken, session);
+        var declaredRoutines = declaredObjects
+            .Where(o => o.ObjectType is "ScalarFunction" or "TableValuedFunction" or "Procedure")
+            .ToDictionary(o => o.ObjectName, o => PostgresProgrammables.SignatureTypes(o.FileText), StringComparer.Ordinal);
+        var (undeclared, keptOverloads) = await PostgresLiveProgrammables.ReadUndeclaredAsync(
+            connectionString, schema, declared, declaredRoutines, cancellationToken, session);
 
         // A declared view that reads what this change removes — a table, a column, a view
         // no file declares — or a column whose type changes blocks that statement
@@ -493,9 +496,9 @@ public sealed class PostgresProvider : IDatabaseProvider
         // missing explanation — it is a change that cannot happen. Reported as an
         // Error on the comparison, which fails every verb that reads it rather
         // than handing anyone a plan the provider cannot carry out.
-        var messages = SynthesisGap(changes, statements) is { } gap
-            ? new[] { gap }
-            : Array.Empty<RawMessage>();
+        var messages = (SynthesisGap(changes, statements) is { } gap ? new[] { gap } : Array.Empty<RawMessage>())
+            .Concat(keptOverloads.Select(KeptOverloadWarning))
+            .ToList();
 
         return new Compared(changes, new Snapshots(desired, live), updateScript,
             AttributeStatements(statements, desired, live), messages,
@@ -539,15 +542,13 @@ public sealed class PostgresProvider : IDatabaseProvider
                        || wantColumn.GeneratedAs is not null && wantColumn.GeneratedKind != haveColumn.GeneratedKind);
         }
 
-        // A declared view that calls a routine no file declares any more blocks that routine's drop
-        // (2BP01) the same way: it goes first, and the redefine stage re-creates it calling what
-        // the desired state now has.
-        var undeclaredRoutines = undeclared
-            .Where(u => u.ObjectType is "ScalarFunction" or "TableValuedFunction" or "Procedure")
-            .Select(u => u.ObjectName).ToHashSet(StringComparer.Ordinal);
+        // A declared view that calls a routine overload no file declares any more blocks that
+        // overload's drop (2BP01) the same way: it goes first, and the redefine stage re-creates it
+        // calling what the desired state now has. A view calling an overload that stays is not touched.
+        var undeclaredOverloads = undeclared.SelectMany(u => u.Signatures).ToHashSet(StringComparer.Ordinal);
         var dropped = reads.Where(r => declaredViews.Contains(r.View) && Removed(r))
             .Select(r => r.View)
-            .Concat((calls ?? []).Where(c => declaredViews.Contains(c.View) && undeclaredRoutines.Contains(c.Routine))
+            .Concat((calls ?? []).Where(c => declaredViews.Contains(c.View) && undeclaredOverloads.Contains(c.Signature))
                 .Select(c => c.View))
             .ToHashSet(StringComparer.Ordinal);
         bool grew;
@@ -789,6 +790,15 @@ public sealed class PostgresProvider : IDatabaseProvider
     /// audit trail for work that never happened; the plan would then come back
     /// unchanged on the next diff, forever.
     /// </summary>
+    /// <summary>
+    /// An overload the files no longer declare stays in the database because something other than a view
+    /// in the target schema still uses it — the diff no longer describes the schema exactly, so it says so.
+    /// </summary>
+    private static RawMessage KeptOverloadWarning(PostgresLiveProgrammables.KeptOverload kept) => new("Warning", "SCHEMORPH018",
+        $"{kept.Signature} is no longer declared — its file declares other arguments — but is kept, because " +
+        $"{string.Join(", ", kept.Dependents)} still uses it and would refuse the drop (2BP01). " +
+        "Change what uses it to call the declared signature, apply, then diff again: the old overload is then planned as a drop.");
+
     internal static RawMessage? SynthesisGap(
         IReadOnlyList<RawChange> changes, IReadOnlyList<DdlSynthesizer.Statement> statements)
     {

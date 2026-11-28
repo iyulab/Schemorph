@@ -151,6 +151,48 @@ internal static class PostgresProgrammables
     }
 
     /// <summary>
+    /// The argument types a routine file's identity is made of — what the engine's
+    /// <c>pg_get_function_identity_arguments</c> counts: IN, INOUT and VARIADIC parameters, and a procedure's
+    /// OUT parameters too — each as a type name the engine resolves with <c>to_regtype</c>.
+    /// Null when the file is not a routine, or when a type cannot be named before the routine
+    /// exists (<c>%TYPE</c>, which the engine resolves only at creation).
+    /// </summary>
+    /// <remarks>
+    /// The parser has already normalized spelling (<c>int</c> and <c>integer</c> are both
+    /// <c>pg_catalog.int4</c>); what it cannot know — which schema an unqualified name means —
+    /// is the engine's to answer, so no alias table lives here. A type modifier
+    /// (<c>varchar(10)</c>) is not part of a routine's identity and is not rendered.
+    /// </remarks>
+    public static IReadOnlyList<string>? SignatureTypes(string text)
+    {
+        var parsed = Parser.Parse(text);
+        if (parsed.Error is not null || parsed.Value is null || parsed.Value.Stmts.Count != 1) return null;
+        if (parsed.Value.Stmts[0].Stmt.CreateFunctionStmt is not { } func) return null;
+
+        var types = new List<string>();
+        foreach (var node in func.Parameters)
+        {
+            if (node.FunctionParameter is not { } parameter) return null;
+            var counts = parameter.Mode switch
+            {
+                FunctionParameterMode.FuncParamIn or FunctionParameterMode.FuncParamInout
+                    or FunctionParameterMode.FuncParamVariadic or FunctionParameterMode.FuncParamDefault => true,
+                FunctionParameterMode.FuncParamOut => func.IsProcedure,
+                _ => false,   // TABLE columns are results, not arguments
+            };
+            if (!counts) continue;
+
+            var type = parameter.ArgType;
+            if (type is null || type.PctType || type.Names.Count == 0) return null;
+            var parts = type.Names.Select(n => n.String?.Sval).ToList();
+            if (parts.Any(p => p is null)) return null;
+            types.Add(string.Join(".", parts.Select(p => DesiredStateRenderer.Quote(p!)))
+                      + (type.ArrayBounds.Count > 0 ? "[]" : ""));
+        }
+        return types;
+    }
+
+    /// <summary>
     /// The bare name from a possibly schema-qualified identifier list
     /// (<c>CreateFunctionStmt.Funcname</c>) — its last element, mirroring the
     /// single-schema, bare-name convention this whole analysis uses.

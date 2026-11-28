@@ -241,8 +241,10 @@ one provider-owned session
 ([ADR-0004's 2026-08-20 addendum](adr/0004-failure-semantics-and-resume.md#addendum-2026-08-20-postgresql-earns-transactional))
 covers the whole apply — and the engine's own error (its SQLSTATE and message)
 is what you see. **What to do:** change the file to something shape-compatible
-— adding a new function overload, for instance, rather than changing an
-existing one's signature — or, if the shape change is genuinely wanted, drop
+— other argument types make a new overload, which `OR REPLACE` creates while the
+old one is dropped ([below](#a-postgresql-programmable-object-the-files-do-not-declare-is-dropped)),
+so it is a changed return type or parameter name on the same argument types that
+is refused — or, if the shape change is genuinely wanted, drop
 the object yourself first (`DROP FUNCTION "f"(...);`) so `OR REPLACE` lands as
 a fresh create next time. Either way, the fix is: change the file (and the
 live object, if you took the drop route) and re-run `apply` — the same
@@ -291,7 +293,18 @@ SQL Server provider's engine does for every object not in source. Adopting an ex
 database therefore starts with `inspect`, which writes every such object out as a file.
 Two kinds are left alone rather than guessed at: objects that belong to an extension
 (they are the extension's, not the files'), and materialized views, which hold rows.
-Routines are matched by name, so a file that declares one overload keeps every overload.
+A routine file declares one signature — its name and argument types — so a live overload of that name
+with other argument types is planned as a drop under its own signature (`f(x integer)`), which is
+what changing a function's arguments leaves behind. The argument types are compared by the engine
+(`to_regtype` on the target schema's search path, the same lookup the redefinition uses), so
+`int` and `integer` are the same type. Where a type cannot be settled before apply — an argument
+written as `table.column%TYPE`, or a type the same change creates — the comparison cannot tell
+which overload the file means, and keeps every overload of that name; for a type the change
+creates, the `diff` after that apply plans the old overload's drop. An old overload that something
+other than a view in the target schema still uses (a CHECK constraint, a default, an index
+expression, a trigger, …) is kept too and named in a warning (`SCHEMORPH018`): its drop would be
+refused. One file declares one signature and one name is declared by one file, so two overloads of
+the same name cannot both be declared yet.
 
 ## A PostgreSQL programmable object is always redefined once on adoption
 
